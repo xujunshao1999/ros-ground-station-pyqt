@@ -1,0 +1,348 @@
+from __future__ import annotations
+
+"""
+消息协议定义 - 地面站与机器人之间的通信消息格式
+
+所有跨网络消息必须符合此模块定义的格式，确保 Agent 与地面站解耦。
+"""
+
+import json
+import time
+import uuid
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+
+# ---------------------------------------------------------------------------
+# 协议版本
+# ---------------------------------------------------------------------------
+PROTOCOL_VERSION = "1.0"
+
+
+# ---------------------------------------------------------------------------
+# 枚举类型
+# ---------------------------------------------------------------------------
+class MessageType(str, Enum):
+    """消息类型"""
+    STATUS = "status"                # 机器人状态上报
+    CMD = "cmd"                      # 控制指令
+    CMD_ACK = "cmd_ack"              # 指令确认
+    EVENT = "event"                  # 告警/异常事件
+    DISCOVER = "discover"            # 发现请求
+    DISCOVER_RESPONSE = "discover_resp"  # 发现响应
+    TOPIC_REQUEST = "topic_request"  # Topic 订阅/取消请求
+    TOPIC_RESPONSE = "topic_resp"    # Topic 请求响应
+    SENSOR_DATA = "sensor_data"      # 传感器数据
+    SENSOR_META = "sensor_meta"      # 重量话题元信息
+    FLEET_DATA = "fleet_data"        # 机器人间数据
+
+
+class TopicAction(str, Enum):
+    """Topic 订阅动作"""
+    SUBSCRIBE = "subscribe"
+    UNSUBSCRIBE = "unsubscribe"
+
+
+class TransportType(str, Enum):
+    """传输方式"""
+    MQTT_JSON = "mqtt_json"          # 轻量话题: MQTT + JSON
+    MQTT_BINARY = "mqtt_binary"      # 中等话题: MQTT + 二进制
+    HTTP_STREAM = "http_stream"      # 重量话题: HTTP 流
+    AUTO = "auto"                    # 自动选择
+
+
+class RobotMode(str, Enum):
+    """机器人运行模式"""
+    AUTO = "auto"
+    MANUAL = "manual"
+    STOP = "stop"
+    ERROR = "error"
+
+
+class CmdAction(str, Enum):
+    """控制指令动作"""
+    VELOCITY = "velocity"            # 速度控制
+    MODE = "mode"                    # 模式切换
+    NAV_GOAL = "nav_goal"            # 导航目标
+    CUSTOM = "custom"                # 自定义指令
+
+
+class EventLevel(str, Enum):
+    """事件等级"""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+class TopicResponseResult(str, Enum):
+    """Topic 请求结果"""
+    OK = "ok"
+    FAILED = "failed"
+    NOT_FOUND = "not_found"
+    UNSUPPORTED = "unsupported"
+
+
+# ---------------------------------------------------------------------------
+# 数据类 - 消息各部分的 data 结构
+# ---------------------------------------------------------------------------
+@dataclass
+class Position:
+    """2D 位置"""
+    x: float = 0.0
+    y: float = 0.0
+    theta: float = 0.0
+
+
+@dataclass
+class Velocity:
+    """速度"""
+    linear: float = 0.0
+    angular: float = 0.0
+
+
+@dataclass
+class StatusData:
+    """状态上报数据"""
+    battery: float = 0.0
+    position: Position = field(default_factory=Position)
+    velocity: Velocity = field(default_factory=Velocity)
+    mode: str = RobotMode.STOP
+    ros_version: str = ""
+    uptime: int = 0
+    ip: str = ""
+
+
+@dataclass
+class CmdParams:
+    """控制指令参数（通用 key-value）"""
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CmdData:
+    """控制指令数据"""
+    action: str = CmdAction.VELOCITY
+    params: Dict[str, Any] = field(default_factory=dict)
+    exec_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+
+
+@dataclass
+class CmdAckData:
+    """指令确认数据"""
+    exec_id: str = ""
+    result: str = "ok"
+    message: str = ""
+
+
+@dataclass
+class EventData:
+    """告警/异常事件数据"""
+    level: str = EventLevel.INFO
+    code: str = ""
+    message: str = ""
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DiscoverData:
+    """发现请求数据"""
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+
+
+@dataclass
+class DiscoverResponseData:
+    """发现响应数据"""
+    request_id: str = ""
+    robot_id: str = ""
+    ros_version: str = ""
+    topics: List[Dict[str, str]] = field(default_factory=list)  # [{"topic": "/odom", "msg_type": "nav_msgs/Odometry"}]
+    ip: str = ""
+    uptime: int = 0
+
+
+@dataclass
+class CompressionOptions:
+    """压缩/降采样选项"""
+    quality: Optional[int] = None       # JPEG 质量 (1-100)
+    resize: Optional[List[int]] = None  # 图像缩放 [width, height]
+    voxel_size: Optional[float] = None  # 点云体素降采样大小
+
+
+@dataclass
+class TopicRequestData:
+    """Topic 订阅/取消请求数据"""
+    action: str = TopicAction.SUBSCRIBE
+    topic: str = ""                  # ROS topic 名称
+    msg_type: str = ""               # ROS 消息类型
+    freq_limit: Optional[float] = None  # 频率限制 (Hz)
+    transport: str = TransportType.AUTO
+    compression: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TopicResponseData:
+    """Topic 请求响应数据"""
+    request_id: str = ""
+    action: str = ""                   # "subscribe" | "unsubscribe"
+    topic: str = ""                    # ROS 话题名
+    msg_type: str = ""                 # ROS 消息类型
+    freq_limit: float = 0.0           # 转发频率上限 (Hz)
+    result: str = TopicResponseResult.OK
+    message: str = ""
+    transport: str = TransportType.MQTT_JSON
+    stream_url: str = ""             # HTTP 流地址（重量话题）
+
+
+@dataclass
+class SensorMetaData:
+    """重量话题元信息"""
+    topic: str = ""
+    msg_type: str = ""
+    transport: str = TransportType.HTTP_STREAM
+    stream_url: str = ""
+    size_bytes: int = 0
+    freq_hz: float = 0.0
+
+
+@dataclass
+class FleetData:
+    """机器人间数据"""
+    data_type: str = "custom"        # "position" | "nav_goal" | "custom" | "pointcloud"
+    payload: Dict[str, Any] = field(default_factory=dict)
+    ttl: float = 30.0                # 有效时间（秒）
+
+
+# ---------------------------------------------------------------------------
+# 核心消息封装
+# ---------------------------------------------------------------------------
+@dataclass
+class Message:
+    """
+    通用消息格式 - 所有跨网络通信的顶层包装
+
+    JSON 示例:
+    {
+        "ver": "1.0",
+        "ts": 1712582400.0,
+        "src": "robot_001",
+        "dst": "station",
+        "type": "status",
+        "seq": 42,
+        "data": { ... }
+    }
+    """
+    ver: str = PROTOCOL_VERSION
+    ts: float = field(default_factory=time.time)
+    src: str = ""
+    dst: str = ""
+    type: str = ""
+    seq: int = 0
+    data: Dict[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> str:
+        """序列化为 JSON 字符串"""
+        return json.dumps(asdict(self), ensure_ascii=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转为字典"""
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, raw: str) -> Message:
+        """从 JSON 字符串反序列化"""
+        d = json.loads(raw)
+        return cls(
+            ver=d.get("ver", PROTOCOL_VERSION),
+            ts=d.get("ts", 0.0),
+            src=d.get("src", ""),
+            dst=d.get("dst", ""),
+            type=d.get("type", ""),
+            seq=d.get("seq", 0),
+            data=d.get("data", {}),
+        )
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> Message:
+        """从字典构建"""
+        return cls(
+            ver=d.get("ver", PROTOCOL_VERSION),
+            ts=d.get("ts", 0.0),
+            src=d.get("src", ""),
+            dst=d.get("dst", ""),
+            type=d.get("type", ""),
+            seq=d.get("seq", 0),
+            data=d.get("data", {}),
+        )
+
+
+# ---------------------------------------------------------------------------
+# 消息工厂 - 快速创建各类消息
+# ---------------------------------------------------------------------------
+class MessageFactory:
+    """消息工厂 - 快速创建各类标准消息"""
+
+    def __init__(self, src: str, seq_start: int = 0):
+        self.src = src
+        self._seq = seq_start
+
+    def _next_seq(self) -> int:
+        self._seq += 1
+        return self._seq
+
+    def _make(self, msg_type: str, data: Any, dst: str = "station") -> Message:
+        """构建通用消息"""
+        if isinstance(data, (StatusData, CmdData, CmdAckData, EventData,
+                             DiscoverData, DiscoverResponseData,
+                             TopicRequestData, TopicResponseData,
+                             SensorMetaData, FleetData)):
+            data = asdict(data)
+        return Message(
+            ts=time.time(),
+            src=self.src,
+            dst=dst,
+            type=msg_type,
+            seq=self._next_seq(),
+            data=data if isinstance(data, dict) else {},
+        )
+
+    def status(self, status_data: StatusData) -> Message:
+        """创建状态上报消息"""
+        return self._make(MessageType.STATUS, status_data)
+
+    def cmd(self, cmd_data: CmdData, dst: str = "") -> Message:
+        """创建控制指令消息"""
+        return self._make(MessageType.CMD, cmd_data, dst=dst)
+
+    def cmd_ack(self, ack_data: CmdAckData) -> Message:
+        """创建指令确认消息"""
+        return self._make(MessageType.CMD_ACK, ack_data)
+
+    def event(self, event_data: EventData) -> Message:
+        """创建事件消息"""
+        return self._make(MessageType.EVENT, event_data)
+
+    def discover(self) -> Message:
+        """创建发现请求消息"""
+        return self._make(MessageType.DISCOVER, DiscoverData(), dst="broadcast")
+
+    def discover_response(self, resp_data: DiscoverResponseData) -> Message:
+        """创建发现响应消息"""
+        return self._make(MessageType.DISCOVER_RESPONSE, resp_data)
+
+    def topic_request(self, req_data: TopicRequestData, dst: str = "") -> Message:
+        """创建 Topic 订阅请求消息"""
+        return self._make(MessageType.TOPIC_REQUEST, req_data, dst=dst)
+
+    def topic_response(self, resp_data: TopicResponseData) -> Message:
+        """创建 Topic 请求响应消息"""
+        return self._make(MessageType.TOPIC_RESPONSE, resp_data)
+
+    def sensor_meta(self, meta_data: SensorMetaData) -> Message:
+        """创建重量话题元信息消息"""
+        return self._make(MessageType.SENSOR_META, meta_data)
+
+    def fleet_data(self, fleet_data: FleetData, dst: str = "") -> Message:
+        """创建机器人间通信消息"""
+        return self._make(MessageType.FLEET_DATA, fleet_data, dst=dst)

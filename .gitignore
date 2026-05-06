@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+*.db
+*.sqlite3
+data/
+
+# Logs
+*.log
+broker/data/
+broker/logs/
+
+# Frontend
+node_modules/
+**/dist/
+src/auto-imports.d.ts
+src/components.d.ts
+
+# Claude Code (project configs tracked, auto-generated ignored)
+.claude/settings.local.json
+skills-lock.json
+
+# pytest
+.pytest_cache/
+
+# User memory (not project code)
+.workbuddy/

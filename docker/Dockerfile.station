@@ -1,0 +1,18 @@
+FROM python:3.10-slim
+
+RUN pip install --no-cache-dir \
+    paho-mqtt>=2.0 \
+    pyyaml>=6.0 \
+    fastapi>=0.104 \
+    "uvicorn[standard]>=0.24"
+
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+COPY protocol/ /app/protocol/
+COPY station/ /app/station/
+
+# Ensure data directory exists for SQLite
+RUN mkdir -p /app/data
+
+CMD ["python", "-m", "station.backend.main", "--config", "station/backend/config.yaml"]

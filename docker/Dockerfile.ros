@@ -1,0 +1,18 @@
+FROM ros:noetic-robot
+
+# Install supervisor and pip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    supervisor \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python MQTT deps (rarely change)
+RUN pip3 install --no-cache-dir paho-mqtt pyyaml numpy
+
+# Copy supervisor config
+COPY docker/supervisord.conf /etc/supervisor/conf.d/ros-agent.conf
+
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]

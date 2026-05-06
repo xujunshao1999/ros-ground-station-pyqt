@@ -1,0 +1,823 @@
+from __future__ import annotations
+
+"""
+Agent 抽象基类
+
+所有 Agent（Mock/ROS1/ROS2）的统一接口。
+Agent 的核心职责：
+1. 连接 MQTT Broker
+2. 上报机器人状态
+3. 接收地面站指令
+4. 按需转发话题数据（轻量/中等/重量分层）
+5. 响应发现请求和话题订阅请求
+"""
+
+import json
+import logging
+import threading
+import time
+from abc import ABC, abstractmethod
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable, Dict, List, Optional
+
+import paho.mqtt.client as mqtt
+
+from protocol.messages import (
+    Message,
+    MessageType,
+    MessageFactory,
+    StatusData,
+    Position,
+    Velocity,
+    CmdData,
+    CmdAckData,
+    EventData,
+    DiscoverData,
+    DiscoverResponseData,
+    TopicRequestData,
+    TopicResponseData,
+    SensorMetaData,
+    FleetData,
+    TopicAction,
+    RobotMode,
+    CmdAction,
+)
+from protocol.topics import (
+    robot_status,
+    robot_sensor,
+    robot_sensor_meta,
+    robot_cmd,
+    robot_cmd_ack,
+    robot_event,
+    robot_to_robot,
+    robot_to_robot_meta,
+    all_robot_to_robot,
+    all_robot_to_robot_meta,
+    station_discover,
+    station_topic_request,
+    station_topic_response,
+)
+from agent.rate_limiter import RateLimiter
+from agent.topic_handler import TopicHandler
+from protocol.topic_registry import TopicTier
+
+logger = logging.getLogger(__name__)
+
+
+class AgentState(Enum):
+    """Agent 状态"""
+
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+
+
+@dataclass
+class AgentConfig:
+    """Agent 配置"""
+
+    robot_id: str = "robot_001"
+    broker_host: str = "localhost"
+    broker_port: int = 1883
+    status_interval: float = 2.0  # 状态上报间隔（秒）
+    default_freq_limit: float = 10.0  # 默认话题频率上限（Hz）
+    http_stream_port: int = 8080  # 重量话题 HTTP 流端口
+    auto_reconnect: bool = True  # 自动重连
+    reconnect_delay: float = 5.0  # 重连延迟（秒）
+
+    def __post_init__(self):
+        """校验配置字段"""
+        if not self.robot_id:
+            raise ValueError("robot_id 不能为空")
+        if not self.broker_host:
+            raise ValueError("broker_host 不能为空")
+        if not (1 <= self.broker_port <= 65535):
+            raise ValueError(f"broker_port 必须在 1-65535 之间，当前: {self.broker_port}")
+        if self.status_interval <= 0:
+            raise ValueError(f"status_interval 必须大于 0，当前: {self.status_interval}")
+        if self.default_freq_limit < 0:
+            raise ValueError(f"default_freq_limit 必须 >= 0，当前: {self.default_freq_limit}")
+        if not (1 <= self.http_stream_port <= 65535):
+            raise ValueError(f"http_stream_port 必须在 1-65535 之间，当前: {self.http_stream_port}")
+        if self.reconnect_delay <= 0:
+            raise ValueError(f"reconnect_delay 必须大于 0，当前: {self.reconnect_delay}")
+
+    @classmethod
+    def from_yaml(cls, path: str) -> AgentConfig:
+        """从 YAML 文件加载并校验配置"""
+        import logging
+        from pathlib import Path
+
+        import yaml
+
+        logger = logging.getLogger(__name__)
+
+        p = Path(path)
+        if not p.exists():
+            logger.warning(f"配置文件不存在: {path}，使用默认值")
+            return cls()
+
+        with open(p, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+
+        # 检测未知字段（防止拼写错误）
+        known_keys = {
+            "robot_id", "broker_host", "broker_port",
+            "status_interval", "default_freq_limit", "http_stream_port",
+            "auto_reconnect", "reconnect_delay",
+            "username", "password", "ros_master_uri", "ros_namespace",
+        }
+        unknown = set(raw.keys()) - known_keys
+        if unknown:
+            logger.warning(f"配置文件中存在未识别的字段: {unknown}")
+
+        return cls(
+            robot_id=raw.get("robot_id", "robot_001"),
+            broker_host=raw.get("broker_host", "localhost"),
+            broker_port=raw.get("broker_port", 1883),
+            status_interval=raw.get("status_interval", 2.0),
+            default_freq_limit=raw.get("default_freq_limit", 10.0),
+            http_stream_port=raw.get("http_stream_port", 8080),
+            auto_reconnect=raw.get("auto_reconnect", True),
+            reconnect_delay=raw.get("reconnect_delay", 5.0),
+        )
+
+
+class BaseAgent(ABC):
+    """Agent 抽象基类
+
+    子类需要实现：
+    - _get_status_data() -> StatusData: 获取当前机器人状态
+    - _execute_command(cmd: CmdData) -> bool: 执行控制指令
+    - _get_available_topics() -> list[dict]: 获取可用话题列表
+    - _on_topic_subscribed(topic, msg_type, options): 话题被订阅时的回调
+    - _on_topic_unsubscribed(topic): 话题被取消订阅时的回调
+
+    使用方法：
+        agent = MockAgent(config)
+        agent.start()  # 阻塞运行
+    """
+
+    def __init__(self, config: Optional[AgentConfig] = None):
+        self.config = config or AgentConfig()
+        self.state = AgentState.DISCONNECTED
+
+        # MQTT 客户端
+        self._mqtt_client: Optional[mqtt.Client] = None
+        self._factory = MessageFactory(src=self.config.robot_id)
+
+        # 限频器和话题处理器
+        self._rate_limiter = RateLimiter(default_freq_limit=self.config.default_freq_limit)
+        self._topic_handler = TopicHandler()
+
+        # 话题订阅管理：{ros_topic: {"msg_type": str, "freq_limit": float, ...}}
+        self._subscribed_topics: Dict[str, dict] = {}
+
+        # 指令追踪
+        self._exec_counter = 0
+
+        # 运行标志
+        self._running = False
+        self._last_status_time = 0.0
+
+        # 状态上报线程（基类默认实现）
+        self._status_thread: Optional[threading.Thread] = None
+
+        # HTTP 流服务端（重量话题用）
+        self._stream_server: Optional[HTTPServer] = None
+        self._stream_thread: Optional[threading.Thread] = None
+        self._stream_data: Dict[str, bytes] = {}
+        self._stream_lock = threading.Lock()
+
+    # ============================================================
+    # 公共接口
+    # ============================================================
+
+    def start(self) -> None:
+        """启动 Agent（阻塞运行）"""
+        logger.info(f"[Agent] Starting {self.config.robot_id}...")
+        self._running = True
+        self.state = AgentState.CONNECTING
+
+        # 初始化 MQTT 客户端
+        self._init_mqtt()
+
+        # 连接 Broker
+        try:
+            self._mqtt_client.connect(
+                self.config.broker_host, self.config.broker_port
+            )
+            logger.info(
+                f"[Agent] Connecting to {self.config.broker_host}:{self.config.broker_port}"
+            )
+        except Exception as e:
+            logger.error(f"[Agent] Connection failed: {e}")
+            if self.config.auto_reconnect:
+                self._reconnect_loop()
+            return
+
+        # 启动网络循环（阻塞）
+        self.state = AgentState.CONNECTED
+        try:
+            self._mqtt_client.loop_forever()
+        except KeyboardInterrupt:
+            logger.info("[Agent] Interrupted by user")
+        finally:
+            self.stop()
+
+    def stop(self) -> None:
+        """停止 Agent"""
+        logger.info("[Agent] Stopping...")
+        self._running = False
+        self.state = AgentState.STOPPING
+
+        # 等待状态上报线程结束
+        if self._status_thread and self._status_thread.is_alive():
+            self._status_thread.join(timeout=2.0)
+            self._status_thread = None
+
+        if self._mqtt_client:
+            self._mqtt_client.disconnect()
+            self._mqtt_client.loop_stop()
+
+        self.state = AgentState.STOPPED
+        logger.info("[Agent] Stopped.")
+
+    def publish_event(self, event_data: EventData) -> None:
+        """发布事件/告警
+
+        由子类调用，通过 MQTT 发送事件消息到地面站。
+
+        Args:
+            event_data: 事件数据
+        """
+        try:
+            msg = self._factory.event(event_data)
+            from protocol.topics import robot_event
+            self._mqtt_publish(
+                robot_event(self.config.robot_id), msg.to_json().encode("utf-8")
+            )
+        except Exception as e:
+            logger.error(f"[Agent] Failed to publish event: {e}")
+
+    def publish_sensor_data(self, ros_topic: str, msg_type: str, data: dict) -> None:
+        """发布传感器数据
+
+        由子类调用，将话题数据通过分层策略发送。
+
+        Args:
+            ros_topic: ROS 话题名，如 "/camera/image_raw/compressed"
+            msg_type: 消息类型，如 "sensor_msgs/CompressedImage"
+            data: 话题数据字典
+        """
+        # 检查是否被地面站订阅
+        if ros_topic not in self._subscribed_topics:
+            return
+
+        # 检查限频
+        if not self._rate_limiter.can_send(ros_topic):
+            return
+
+        # 添加消息类型信息
+        data["_msg_type"] = msg_type
+
+        # 处理数据
+        try:
+            sub_info = self._subscribed_topics[ros_topic]
+            options = sub_info.get("options", {})
+            processed = self._topic_handler.process(
+                ros_topic, data, **options
+            )
+        except Exception as e:
+            logger.error(f"[Agent] Failed to process topic {ros_topic}: {e}")
+            return
+
+        # 发送
+        mqtt_topic = self._get_sensor_mqtt_topic(ros_topic, processed.tier)
+
+        if processed.mqtt_payload:
+            self._mqtt_publish(mqtt_topic, processed.mqtt_payload)
+
+        # 重量话题额外处理
+        if processed.tier == TopicTier.HEAVY and processed.stream_data:
+            # 存储流数据，供 HTTP 流服务端读取
+            self._store_stream_data(ros_topic, processed.stream_data)
+            # 发送元信息
+            if processed.meta:
+                meta_topic = robot_sensor_meta(self.config.robot_id, ros_topic)
+                meta_msg = self._factory.sensor_meta(SensorMetaData(
+                    topic=ros_topic,
+                    msg_type=msg_type,
+                    transport="http_stream",
+                    stream_url=f"http://{self._get_local_ip()}:{self.config.http_stream_port}/stream{ros_topic}",
+                    size_bytes=processed.meta.get("size_bytes", 0),
+                ))
+                self._mqtt_publish(meta_topic, meta_msg.to_json().encode("utf-8"))
+
+        self._rate_limiter.mark_sent(ros_topic)
+
+    # ============================================================
+    # 机器人间通信
+    # ============================================================
+
+    def send_to_robot(self, target_id: str, fleet_data: FleetData) -> None:
+        """向指定机器人发送轻量数据（MQTT JSON）
+
+        Args:
+            target_id: 目标机器人 ID
+            fleet_data: 机器人间数据（位置/导航目标/自定义）
+        """
+        msg = self._factory.fleet_data(fleet_data, dst=target_id)
+        topic = robot_to_robot(self.config.robot_id, target_id)
+        self._mqtt_publish(topic, msg.to_json().encode("utf-8"))
+        logger.info(f"[Agent] Sent fleet data to {target_id}: type={fleet_data.data_type}")
+
+    def share_heavy_data(self, target_id: str, topic: str, data: bytes,
+                         msg_type: str = "sensor_msgs/PointCloud2") -> None:
+        """向指定机器人共享重量数据（点云等）
+
+        复用 HTTP 流服务端存储数据，通过 MQTT 发送带 stream_url 的信令。
+
+        Args:
+            target_id: 目标机器人 ID
+            topic: 数据话题名，如 "/fleet/points"
+            data: 二进制数据（如 float32 点云）
+            msg_type: ROS 消息类型
+        """
+        self._store_stream_data(topic, data)
+
+        stream_url = (
+            f"http://{self._get_local_ip()}:"
+            f"{self.config.http_stream_port}/stream{topic}"
+        )
+        meta = FleetData(
+            data_type="pointcloud",
+            payload={
+                "topic": topic,
+                "msg_type": msg_type,
+                "stream_url": stream_url,
+                "size_bytes": len(data),
+            },
+            ttl=30.0,
+        )
+        # 通过 meta topic 发送信令
+        meta_msg = self._factory.fleet_data(meta, dst=target_id)
+        meta_topic = robot_to_robot_meta(self.config.robot_id, target_id)
+        self._mqtt_publish(meta_topic, meta_msg.to_json().encode("utf-8"))
+        logger.info(f"[Agent] Shared heavy data to {target_id}: topic={topic} ({len(data)} bytes)")
+
+    # ============================================================
+    # 抽象方法（子类实现）
+    # ============================================================
+
+    @abstractmethod
+    def _get_status_data(self) -> StatusData:
+        """获取当前机器人状态
+
+        Returns:
+            StatusData 实例
+        """
+        ...
+
+    @abstractmethod
+    def _execute_command(self, cmd: CmdData) -> tuple[bool, str]:
+        """执行控制指令
+
+        Args:
+            cmd: 指令数据
+
+        Returns:
+            (成功与否, 消息)
+        """
+        ...
+
+    @abstractmethod
+    def _get_available_topics(self) -> List[dict]:
+        """获取机器人可用的话题列表
+
+        Returns:
+            [{"topic": str, "msg_type": str, "description": str}, ...]
+        """
+        ...
+
+    def _on_topic_subscribed(self, topic: str, msg_type: str, options: dict) -> None:
+        """话题被地面站订阅时的回调
+
+        子类可重写此方法以启动话题数据采集。
+
+        Args:
+            topic: ROS 话题名
+            msg_type: 消息类型
+            options: 订阅选项（频率、压缩等）
+        """
+        pass
+
+    def _on_topic_unsubscribed(self, topic: str) -> None:
+        """话题被取消订阅时的回调
+
+        子类可重写此方法以停止话题数据采集。
+
+        Args:
+            topic: ROS 话题名
+        """
+        pass
+
+    @abstractmethod
+    def _on_fleet_message(self, src_id: str, data: FleetData) -> None:
+        """收到其他机器人数据的回调
+
+        Args:
+            src_id: 源机器人 ID
+            data: 机器人间数据
+        """
+        ...
+
+    # ============================================================
+    # MQTT 回调
+    # ============================================================
+
+    def _init_mqtt(self) -> None:
+        """初始化 MQTT 客户端"""
+        client_id = f"agent_{self.config.robot_id}"
+        self._mqtt_client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            client_id=client_id,
+        )
+
+        # 设置 Last Will：异常断开时 Broker 立即通知地面站
+        will_topic = robot_event(self.config.robot_id)
+        will_payload = json.dumps({
+            "type": "event",
+            "src": self.config.robot_id,
+            "data": {
+                "level": "error",
+                "code": "AGENT_DISCONNECTED",
+                "message": f"Agent {self.config.robot_id} disconnected unexpectedly",
+            },
+        })
+        self._mqtt_client.will_set(will_topic, will_payload, qos=1, retain=False)
+
+        # 设置回调
+        self._mqtt_client.on_connect = self._on_connect
+        self._mqtt_client.on_disconnect = self._on_disconnect
+        self._mqtt_client.on_message = self._on_message
+
+        logger.info(f"[Agent] MQTT client initialized: {client_id}")
+
+    def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:
+        """MQTT 连接成功回调（paho-mqtt v2 签名）"""
+        if reason_code == 0 or (hasattr(reason_code, 'value') and reason_code.value == 0):
+            self.state = AgentState.CONNECTED
+            logger.info("[Agent] Connected to broker")
+
+            # 订阅控制话题
+            client.subscribe(robot_cmd(self.config.robot_id), qos=1)
+            client.subscribe(station_discover(), qos=1)
+            client.subscribe(station_topic_request(), qos=1)
+
+            # 订阅其他机器人发来的 fleet 数据
+            client.subscribe(all_robot_to_robot(self.config.robot_id), qos=1)
+            client.subscribe(all_robot_to_robot_meta(self.config.robot_id), qos=1)
+
+            # 启动状态上报循环
+            self._start_status_loop()
+        else:
+            rc_val = reason_code if isinstance(reason_code, int) else getattr(reason_code, 'value', -1)
+            logger.error(f"[Agent] Connection failed with code: {rc_val}")
+
+    def _on_disconnect(self, client, userdata, flags, reason_code, properties) -> None:
+        """MQTT 断开连接回调（paho-mqtt v2 签名）"""
+        self.state = AgentState.DISCONNECTED
+        rc_val = reason_code if isinstance(reason_code, int) else getattr(reason_code, 'value', 1)
+        if rc_val != 0:
+            logger.warning(f"[Agent] Unexpected disconnect (rc={rc_val})")
+            if self.config.auto_reconnect:
+                self._reconnect_loop()
+
+    def _on_message(self, client, userdata, msg) -> None:
+        """MQTT 消息回调"""
+        try:
+            payload = msg.payload.decode("utf-8")
+            message = Message.from_json(payload)
+            self._handle_message(message)
+        except Exception as e:
+            logger.error(f"[Agent] Failed to handle message on {msg.topic}: {e}")
+
+    def _handle_message(self, message: Message) -> None:
+        """处理收到的消息"""
+        msg_type = message.type
+
+        if msg_type == MessageType.DISCOVER:
+            self._handle_discover(message)
+        elif msg_type == MessageType.CMD:
+            self._handle_command(message)
+        elif msg_type == MessageType.TOPIC_REQUEST:
+            self._handle_topic_request(message)
+        elif msg_type == MessageType.FLEET_DATA:
+            self._handle_fleet_message(message)
+        else:
+            logger.warning(f"[Agent] Unknown message type: {msg_type}")
+
+    # ============================================================
+    # 消息处理
+    # ============================================================
+
+    def _handle_discover(self, message: Message) -> None:
+        """处理发现请求"""
+        logger.info("[Agent] Received discover request")
+
+        # 获取可用话题
+        topics = self._get_available_topics()
+
+        # 发送发现响应
+        response = self._factory.discover_response(DiscoverResponseData(
+            request_id=message.data.get("request_id", ""),
+            robot_id=self.config.robot_id,
+            ros_version=self._get_ros_version(),
+            ip=self._get_local_ip(),
+            topics=topics,  # 直接传递完整列表 [{"topic": ..., "msg_type": ..., "description": ...}]
+        ))
+        self._mqtt_publish(station_topic_response(self.config.robot_id), response.to_json().encode("utf-8"))
+
+    def _handle_command(self, message: Message) -> None:
+        """处理控制指令"""
+        cmd_data = message.data
+        if isinstance(cmd_data, dict):
+            cmd = CmdData(
+                action=cmd_data.get("action", ""),
+                params=cmd_data.get("params", {}),
+                exec_id=cmd_data.get("exec_id", ""),
+            )
+        else:
+            cmd = cmd_data
+        logger.info(f"[Agent] Received command: {cmd.action}")
+
+        # 执行指令
+        success, result_msg = self._execute_command(cmd)
+
+        # 发送确认
+        self._exec_counter += 1
+        ack = self._factory.cmd_ack(CmdAckData(
+            exec_id=cmd.exec_id or str(self._exec_counter),
+            result="ok" if success else "error",
+            message=result_msg,
+        ))
+        self._mqtt_publish(
+            robot_cmd_ack(self.config.robot_id), ack.to_json().encode("utf-8")
+        )
+
+    def _handle_topic_request(self, message: Message) -> None:
+        """处理话题订阅/取消订阅请求"""
+        data = message.data
+        action = data.get("action")
+        topic = data.get("topic")
+        msg_type = data.get("msg_type")
+        freq_limit = data.get("freq_limit", self.config.default_freq_limit)
+        # 兼容 options 和 compression 两种字段名
+        options = data.get("options") or data.get("compression", {})
+
+        logger.info(f"[Agent] Topic request: {action} {topic}")
+
+        if action == TopicAction.SUBSCRIBE.value:
+            # 订阅话题
+            self._subscribed_topics[topic] = {
+                "msg_type": msg_type,
+                "freq_limit": freq_limit,
+                "options": options,
+            }
+            self._rate_limiter.set_limit(topic, freq_limit)
+            self._on_topic_subscribed(topic, msg_type, options)
+
+            # 发送确认
+            response = self._factory.topic_response(TopicResponseData(
+                request_id=data.get("request_id", ""),
+                action="subscribe",
+                topic=topic,
+                msg_type=msg_type,
+                freq_limit=freq_limit,
+                result="ok",
+            ))
+            self._mqtt_publish(
+                station_topic_response(self.config.robot_id),
+                response.to_json().encode("utf-8"),
+            )
+
+        elif action == TopicAction.UNSUBSCRIBE.value:
+            # 取消订阅
+            self._subscribed_topics.pop(topic, None)
+            self._rate_limiter.remove_limit(topic)
+            self._on_topic_unsubscribed(topic)
+
+            response = self._factory.topic_response(TopicResponseData(
+                request_id=data.get("request_id", ""),
+                action="unsubscribe",
+                topic=topic,
+                result="ok",
+            ))
+            self._mqtt_publish(
+                station_topic_response(self.config.robot_id),
+                response.to_json().encode("utf-8"),
+            )
+
+    def _handle_fleet_message(self, message: Message) -> None:
+        """处理其他机器人发来的数据
+
+        Args:
+            message: fleet_data 类型的消息
+        """
+        src_id = message.src
+        fleet_data = message.data  # dict
+        data_type = fleet_data.get("data_type", "custom")
+
+        logger.info(f"[Agent] Fleet data from {src_id}: type={data_type}")
+
+        # 重量数据 meta 信令
+        if data_type == "pointcloud":
+            payload = fleet_data.get("payload", {})
+            stream_url = payload.get("stream_url", "")
+            if stream_url:
+                logger.info(f"[Agent] Received heavy data meta from {src_id}: "
+                            f"url={stream_url}, size={payload.get('size_bytes', 0)}")
+                self._on_fleet_message(src_id, FleetData(
+                    data_type=data_type,
+                    payload=payload,
+                    ttl=fleet_data.get("ttl", 30.0),
+                ))
+            return
+
+        # 轻量数据：直接回调子类
+        self._on_fleet_message(src_id, FleetData(
+            data_type=data_type,
+            payload=fleet_data.get("payload", {}),
+            ttl=fleet_data.get("ttl", 30.0),
+        ))
+
+    # ============================================================
+    # 状态上报
+    # ============================================================
+
+    def _start_status_loop(self) -> None:
+        """启动状态上报循环
+
+        默认实现：启动独立线程定时上报。子类可重写以使用其他方式
+        （如 ROS timer、asyncio 任务等）。
+        """
+        if self._status_thread is not None and self._status_thread.is_alive():
+            return  # 已经在运行
+
+        self._status_thread = threading.Thread(
+            target=self._default_status_loop,
+            daemon=True,
+            name="status_reporter",
+        )
+        self._status_thread.start()
+        logger.info("[Agent] Status report loop started")
+
+    def _default_status_loop(self) -> None:
+        """默认状态上报循环（独立线程）"""
+        while self._running:
+            if self.state in (AgentState.CONNECTED, AgentState.RUNNING):
+                self._check_and_publish_status()
+            time.sleep(self.config.status_interval)
+
+    def _check_and_publish_status(self) -> None:
+        """检查并发布状态（由定时器或主循环调用）"""
+        now = time.monotonic()
+        if now - self._last_status_time < self.config.status_interval:
+            return
+
+        self._last_status_time = now
+
+        try:
+            status = self._get_status_data()
+            msg = self._factory.status(status)
+            self._mqtt_publish(
+                robot_status(self.config.robot_id), msg.to_json().encode("utf-8")
+            )
+        except Exception as e:
+            logger.error(f"[Agent] Failed to publish status: {e}")
+
+    # ============================================================
+    # 工具方法
+    # ============================================================
+
+    def _mqtt_publish(self, topic: str, payload: bytes, qos: int = 1) -> None:
+        """发布 MQTT 消息"""
+        if self._mqtt_client and self.state in (
+            AgentState.CONNECTED,
+            AgentState.RUNNING,
+        ):
+            self._mqtt_client.publish(topic, payload, qos=qos)
+            logger.debug(f"[Agent] Published to {topic} ({len(payload)} bytes)")
+
+    def _reconnect_loop(self) -> None:
+        """自动重连循环"""
+        while self._running and self.config.auto_reconnect:
+            logger.info(
+                f"[Agent] Reconnecting in {self.config.reconnect_delay}s..."
+            )
+            time.sleep(self.config.reconnect_delay)
+            try:
+                self._mqtt_client.reconnect()
+                logger.info("[Agent] Reconnected!")
+                return
+            except Exception as e:
+                logger.error(f"[Agent] Reconnect failed: {e}")
+
+    def _get_ros_version(self) -> str:
+        """获取 ROS 版本（子类可重写）"""
+        return "mock"
+
+    def _get_local_ip(self) -> str:
+        """获取本地 IP 地址"""
+        import socket
+
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def _get_sensor_mqtt_topic(self, ros_topic: str, tier) -> str:
+        """获取传感器数据的 MQTT topic"""
+        # 简化话题名（移除开头的 /）
+        name = ros_topic.lstrip("/").replace("/", "_")
+        return robot_sensor(self.config.robot_id, name)
+
+    def _store_stream_data(self, topic: str, data: bytes) -> None:
+        """存储流数据（供 HTTP 流服务端读取）"""
+        with self._stream_lock:
+            self._stream_data[topic] = data
+
+    # ============================================================
+    # HTTP 流服务端（重量话题）
+    # ============================================================
+
+    def _start_stream_server(self) -> None:
+        """启动 HTTP 流服务端"""
+        if self._stream_server is not None:
+            return
+
+        handler = self._create_stream_handler()
+
+        try:
+            self._stream_server = HTTPServer(
+                ("0.0.0.0", self.config.http_stream_port), handler
+            )
+            self._stream_thread = threading.Thread(
+                target=self._stream_server.serve_forever,
+                daemon=True,
+                name="http_stream_server",
+            )
+            self._stream_thread.start()
+            logger.info(
+                f"[Agent] HTTP stream server started on port {self.config.http_stream_port}"
+            )
+        except Exception as e:
+            logger.error(f"[Agent] Failed to start stream server: {e}")
+
+    def _stop_stream_server(self) -> None:
+        """停止 HTTP 流服务端"""
+        if self._stream_server:
+            self._stream_server.shutdown()
+            self._stream_server = None
+        if self._stream_thread:
+            self._stream_thread.join(timeout=2.0)
+            self._stream_thread = None
+
+    def _create_stream_handler(self):
+        """创建 HTTP 流请求处理器"""
+        agent = self
+
+        class StreamHandler(BaseHTTPRequestHandler):
+            """HTTP 流请求处理器"""
+
+            def do_GET(self):
+                if self.path.startswith("/stream/"):
+                    topic = "/" + self.path[len("/stream/"):]
+                    with agent._stream_lock:
+                        data = agent._stream_data.get(topic)
+                    if data:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/octet-stream")
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Cache-Control", "no-cache")
+                        self.end_headers()
+                        self.wfile.write(data)
+                    else:
+                        self.send_error(404, f"No data for topic: {topic}")
+                else:
+                    self.send_error(404, "Not found. Use /stream/<topic>")
+
+            def log_message(self, format, *args):
+                logger.debug(f"[StreamServer] {format % args}")
+
+        return StreamHandler

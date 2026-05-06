@@ -1,0 +1,56 @@
+version: "3.8"
+
+# ============================================================
+# ROS Ground Station — Docker 混合测试环境
+#
+# 架构：地面站 (Station + Mosquitto) 在 Ubuntu 原生运行
+#       Robot 容器 (ROS Noetic + ROS1 Agent + 传感器模拟器)
+#       通过 Docker bridge 网络连接宿主机的 MQTT Broker
+#
+# 启动：docker-compose up -d
+# 查看日志：docker-compose logs -f
+# 停止：docker-compose down
+# ============================================================
+
+services:
+  # ------------------------------------------------------------------
+  # ROS 机器人 — robot_001 (roscore + ROS1 Agent + 传感器模拟器)
+  # ------------------------------------------------------------------
+  robot-001:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ros
+    container_name: robot-001
+    environment:
+      - ROBOT_ID=robot_001
+      - BROKER_HOST=host-gateway
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    restart: unless-stopped
+    volumes:
+      - ./protocol:/app/protocol:ro
+      - ./agent:/app/agent:ro
+      - ./docker/sensor_simulator.py:/app/docker/sensor_simulator.py:ro
+    stdin_open: true
+    tty: true
+
+  # ------------------------------------------------------------------
+  # ROS 机器人 — robot_002 (roscore + ROS1 Agent + 传感器模拟器)
+  # ------------------------------------------------------------------
+  robot-002:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ros
+    container_name: robot-002
+    environment:
+      - ROBOT_ID=robot_002
+      - BROKER_HOST=host-gateway
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    restart: unless-stopped
+    volumes:
+      - ./protocol:/app/protocol:ro
+      - ./agent:/app/agent:ro
+      - ./docker/sensor_simulator.py:/app/docker/sensor_simulator.py:ro
+    stdin_open: true
+    tty: true

@@ -1,0 +1,13 @@
+# MQTT-ROS Bridge Configuration
+mqtt:
+  broker_host: "localhost"
+  broker_port: 1883
+  client_id: "mqtt_ros_bridge"
+
+ros:
+  master_uri: "http://localhost:11311"
+  node_name: "mqtt_ros_bridge"
+  max_update_frequency: 30.0
+
+heartbeat_timeout: 30.0  # seconds before marking robot offline
+transmit_config_path: "../config/transmit_config.yaml"

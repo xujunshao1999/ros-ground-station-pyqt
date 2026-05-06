@@ -1,0 +1,23 @@
+FROM python:3.10-slim
+
+# Install system deps for opencv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps (rarely change, cached early)
+RUN pip install --no-cache-dir \
+    paho-mqtt>=2.0 \
+    pyyaml>=6.0 \
+    opencv-python>=4.8 \
+    numpy>=1.24
+
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+# Copy shared protocol + agent code
+COPY protocol/ /app/protocol/
+COPY agent/ /app/agent/
+
+CMD ["python", "-m", "agent.main", "--agent-type", "mock"]

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ros-ground-station"
+version = "0.1.0"
+description = "ROS Ground Station - MQTT-based multi-robot control system"
+requires-python = ">=3.8"
+dependencies = [
+    "paho-mqtt>=2.0",
+    "pyyaml>=6.0",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+station = [
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.1",
+    "amqtt>=0.11",    # 纯 Python MQTT Broker（开发替代 Mosquitto）
+]
+
+[tool.setuptools.packages.find]
+include = ["protocol*", "agent*", "station*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
