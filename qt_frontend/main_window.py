@@ -181,11 +181,11 @@ class MainWindow(QMainWindow):
         sig = self._mqtt_client.signals
         sig.connected.connect(self._on_mqtt_connected)
         sig.disconnected.connect(self._on_mqtt_disconnected)
-        sig.status_received.connect(self._robot_list.on_status_received)
+        sig.status_received.connect(self._on_robot_status)
         sig.event_received.connect(self._event_panel.on_event_received)
         sig.cmd_ack_received.connect(self._command.on_cmd_ack)
         sig.sensor_data_received.connect(self._on_sensor_data)
-        sig.discover_response_received.connect(self._robot_list.on_discover_response)
+        sig.discover_response_received.connect(self._on_discover)
 
         self._act_connect.triggered.connect(self._mqtt_client.connect)
         self._act_disconnect.triggered.connect(self._mqtt_client.disconnect)
@@ -259,6 +259,18 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # MQTT callbacks
     # ------------------------------------------------------------------
+
+    def _on_robot_status(self, robot_id: str, data: dict) -> None:
+        self._robot_list.on_status_received(robot_id, data)
+        robots = self._robot_list.get_online_robots()
+        self._command.on_robot_list_changed(robots)
+        self._lb_online.setText(f"在线: {len(robots)}")
+
+    def _on_discover(self, robot_id: str, data: dict) -> None:
+        self._robot_list.on_discover_response(robot_id, data)
+        robots = self._robot_list.get_online_robots()
+        self._command.on_robot_list_changed(robots)
+        self._lb_online.setText(f"在线: {len(robots)}")
 
     def _on_mqtt_connected(self) -> None:
         self._lb_conn.setText("● 已连接")
