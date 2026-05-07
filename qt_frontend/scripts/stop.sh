@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Stop all Qt frontend, bridge, and ROS processes
+# Stop Qt frontend and bridge processes only.
+# Does NOT touch roscore/rosmaster — those may belong to other ROS programs
+# (e.g. turtlebot3, Gazebo).
+# To stop agents, use agent/stop.sh.
 
 pkill -f "qt_frontend/main.py" 2>/dev/null || true
-pkill -f "mqtt_ros_bridge.py" 2>/dev/null || true
-pkill -f "agent.main" 2>/dev/null || true
-pkill -f "roscore" 2>/dev/null || true
-pkill -f "rosmaster" 2>/dev/null || true
+pkill -f "mqtt_ros_bridge" 2>/dev/null || true
 echo "Stopped."
