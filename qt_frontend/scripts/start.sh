@@ -51,12 +51,23 @@ except Exception as e:
 echo_green "librviz_widget.so OK"
 
 # ------------------------------------------------------------------
-# 3. roscore 检查
+# 3. roscore 检查 + 自动启动
 # ------------------------------------------------------------------
 if ! command -v rostopic &>/dev/null; then
     echo_fail "rostopic not found. Source ROS setup first."
     exit 1
 fi
+
+if ! rostopic list &>/dev/null; then
+    echo_warn "roscore is not running. Starting..."
+    roscore &
+    sleep 3
+    if ! rostopic list &>/dev/null; then
+        echo_fail "Failed to start roscore"
+        exit 1
+    fi
+fi
+echo_green "roscore OK"
 
 # ------------------------------------------------------------------
 # 4. Mosquitto Broker 检查
