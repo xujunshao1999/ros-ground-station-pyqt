@@ -1,0 +1,187 @@
+#include "rviz_widget.h"
+
+#include <QAbstractItemModel>
+#include <QLayout>
+#include <QTreeView>
+#include <QVBoxLayout>
+#include <QWidget>
+#include <rviz/visualization_frame.h>
+#include <rviz/visualization_manager.h>
+#include <rviz/render_panel.h>
+#include <rviz/displays_panel.h>
+#include <rviz/display.h>
+#include <rviz/display_group.h>
+#include <rviz/panel_dock_widget.h>
+#include <rviz/tool_manager.h>
+#include <rviz/yaml_config_reader.h>
+#include <rviz/properties/property_tree_model.h>
+#include <ros/ros.h>
+
+#include <map>
+
+struct RvizInstance {
+    rviz::VisualizationFrame* frame;
+    rviz::RenderPanel* render_panel;
+    rviz::VisualizationManager* manager;
+    rviz::DisplaysPanel* displays_panel;
+    QLayout* dock_layout;
+};
+
+static std::map<void*, RvizInstance*> g_instances;
+
+class DockExtractor : public QObject {
+    Q_OBJECT
+public:
+    static DockExtractor* instance() {
+        static DockExtractor* s = new DockExtractor();
+        return s;
+    }
+public Q_SLOTS:
+    void onConfigChanged();
+};
+
+void DockExtractor::onConfigChanged() {
+    for (auto& pair : ::g_instances) {
+        RvizInstance* inst = pair.second;
+        if (!inst->dock_layout) continue;
+        auto docks = inst->frame->findChildren<rviz::PanelDockWidget*>();
+        for (auto* dw : docks) {
+            QString title = dw->windowTitle();
+            if (title == "Camera" || title == "Image") {
+                if (!dw->parentWidget() || dw->parentWidget() != inst->dock_layout->parentWidget()) {
+                    inst->dock_layout->addWidget(dw);
+                }
+            }
+        }
+    }
+}
+
+static bool g_ros_init_done = false;
+
+void* create_rviz_widget(void* parent_ptr) {
+    QWidget* parent = static_cast<QWidget*>(parent_ptr);
+
+    if (!g_ros_init_done) {
+        int argc = 1;
+        static char name[] = "qt_frontend";
+        static char* argv[] = {name, nullptr};
+        ros::init(argc, argv, "qt_frontend", ros::init_options::NoSigintHandler);
+        ros::start();
+        g_ros_init_done = true;
+    }
+
+    auto* instance = new RvizInstance();
+    instance->dock_layout = nullptr;
+
+    instance->frame = new rviz::VisualizationFrame();
+    instance->frame->initialize();
+    instance->manager = instance->frame->getManager();
+    instance->render_panel = instance->manager->getRenderPanel();
+
+    instance->render_panel->initialize(
+        instance->manager->getSceneManager(), instance->manager);
+
+    instance->render_panel->winId();  // Force native X11 window
+    instance->render_panel->setMouseTracking(true);
+    instance->render_panel->setFocus();
+
+    instance->manager->setFixedFrame("map");
+    instance->manager->initialize();
+    instance->manager->startUpdate();
+    instance->manager->removeAllDisplays();
+
+    // Create default displays manually (avoids load_config which breaks mouse)
+    instance->manager->createDisplay("rviz/Grid", "Grid", true);
+    instance->manager->createDisplay("rviz/TF", "TF", true);
+
+    // Activate MoveCamera tool
+    rviz::ToolManager* tm = instance->manager->getToolManager();
+    rviz::Tool* cam_tool = tm->addTool("rviz/MoveCamera");
+    if (cam_tool) {
+        tm->setDefaultTool(cam_tool);
+        tm->setCurrentTool(cam_tool);
+    }
+
+    instance->displays_panel = new rviz::DisplaysPanel();
+    instance->displays_panel->initialize(instance->manager);
+    instance->displays_panel->onInitialize();
+
+    auto* treeView = instance->displays_panel->findChild<QTreeView*>();
+    if (treeView) {
+        QAbstractItemModel* model = treeView->model();
+        QObject::connect(model, SIGNAL(configChanged()),
+                         DockExtractor::instance(), SLOT(onConfigChanged()));
+    }
+
+    if (parent && parent->layout()) {
+        parent->layout()->addWidget(instance->render_panel);
+    }
+
+    g_instances[instance->render_panel] = instance;
+
+    return static_cast<void*>(instance->render_panel);
+}
+
+int load_config(void* widget_ptr, const char* config_path) {
+    // NOTE: frame->loadDisplayConfig() and manager->load() both break mouse
+    // interaction by resetting View/Tool configuration.
+    // Instead, Grid + TF are created manually in create_rviz_widget().
+    // Future: parse config here and create displays programmatically.
+    (void)widget_ptr;
+    (void)config_path;
+    return 0;
+}
+
+void set_fixed_frame(void* widget_ptr, const char* frame) {
+    if (!widget_ptr || !frame) return;
+    auto it = g_instances.find(widget_ptr);
+    if (it == g_instances.end()) return;
+    it->second->manager->setFixedFrame(QString::fromUtf8(frame));
+}
+
+void* get_display_panel(void* widget_ptr) {
+    if (!widget_ptr) return nullptr;
+    auto it = g_instances.find(widget_ptr);
+    if (it == g_instances.end()) return nullptr;
+    return static_cast<void*>(it->second->displays_panel);
+}
+
+void set_dock_layout(void* widget_ptr, void* layout_ptr) {
+    if (!widget_ptr || !layout_ptr) return;
+    auto it = g_instances.find(widget_ptr);
+    if (it == g_instances.end()) return;
+    it->second->dock_layout = static_cast<QLayout*>(layout_ptr);
+}
+
+long get_window_id(void* widget_ptr) {
+    if (!widget_ptr) return 0;
+    auto* panel = static_cast<rviz::RenderPanel*>(widget_ptr);
+    return static_cast<long>(panel->winId());
+}
+
+void destroy_panel(void* widget_ptr) {
+    if (!widget_ptr) return;
+    auto it = g_instances.find(widget_ptr);
+    if (it == g_instances.end()) return;
+    RvizInstance* instance = it->second;
+    instance->manager->stopUpdate();
+    delete instance->displays_panel;
+    delete instance->frame;
+    delete instance;
+    g_instances.erase(it);
+}
+
+// Backward-compatible splitter wrapper
+void* create_rviz_splitter(void) {
+    // Create a simple container with RViz (single pane — Python can add panels)
+    QWidget* container = new QWidget();
+    QVBoxLayout* layout = new QVBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    void* rviz = create_rviz_widget(nullptr);
+    if (rviz) {
+        layout->addWidget(static_cast<QWidget*>(rviz));
+    }
+    return static_cast<void*>(container);
+}
+
+#include "rviz_widget.moc"

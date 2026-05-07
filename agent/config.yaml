@@ -59,3 +59,27 @@ reconnect_delay: 5.0
 
 # ROS 命名空间
 # ros_namespace: "/"
+
+# ============================================================
+# 订阅与编队通信持久化
+# ============================================================
+
+# 地面站下发的持久订阅列表（启动时自动恢复）
+subscriptions: []
+# 格式示例：
+# subscriptions:
+#   - topic: "/odom"
+#     msg_type: "nav_msgs/Odometry"
+#     freq_limit: 10.0
+#     transport: "mqtt_json"
+#     compression: {}
+
+# 编队通信规则（地面站下发，启动时自动恢复）
+fleet_rules: []
+# 格式示例：
+# fleet_rules:
+#   - topic: "/odom"
+#     msg_type: "nav_msgs/Odometry"
+#     target: "robot_002"
+#     freq_limit: 2.0
+#     transport: "mqtt_json"

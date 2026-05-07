@@ -12,12 +12,16 @@ dependencies = [
     "pyyaml>=6.0",
     "opencv-python>=4.8",
     "numpy>=1.24",
+    "pyqt5>=5.15",
 ]
 
 [project.optional-dependencies]
 station = [
     "fastapi>=0.104",
     "uvicorn[standard]>=0.24",
+]
+qt = [
+    "pyqt5>=5.15",
 ]
 dev = [
     "pytest>=7.4",
@@ -27,7 +31,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["protocol*", "agent*", "station*"]
+include = ["protocol*", "agent*", "station*", "qt_frontend*"]
 
 [tool.ruff]
 line-length = 100

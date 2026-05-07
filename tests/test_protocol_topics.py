@@ -253,6 +253,7 @@ class TestQoS:
             "status", "sensor", "sensor_meta", "cmd",
             "cmd_ack", "event", "discover", "topic_request",
             "topic_response", "to_robot", "to_robot_meta",
+            "config_sync", "config_query", "config_response",
         }
         assert set(TOPIC_QOS.keys()) == expected_keys
 

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- MQTT-ROS Bridge -->
+  <node
+    pkg="ros_ground_station"
+    type="mqtt_ros_bridge.py"
+    name="mqtt_ros_bridge"
+    output="screen"
+    required="true">
+    <param name="config_path" value="$(find ros_ground_station)/bridge/bridge_config.yaml"/>
+  </node>
+
+  <!-- Qt Frontend (non-ROS node, launched as external process) -->
+  <node
+    pkg="ros_ground_station"
+    type="main.py"
+    name="qt_frontend"
+    output="screen"
+    launch-prefix="python3">
+    <param name="config_path" value="$(find ros_ground_station)/qt_frontend/config/config.yaml"/>
+  </node>
+</launch>

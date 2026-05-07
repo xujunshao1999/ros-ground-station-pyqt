@@ -25,3 +25,16 @@ def sample_status_data() -> StatusData:
         uptime=120,
         ip="192.168.1.100",
     )
+
+
+@pytest.fixture
+def sample_message_factory() -> MessageFactory:
+    """创建 Qt 前端测试用 MessageFactory"""
+    return MessageFactory(src="test_qt")
+
+
+@pytest.fixture
+def mqtt_signals():
+    """创建 MqttSignals 实例（用于测试 emit 行为）"""
+    from qt_frontend.mqtt_client import MqttSignals
+    return MqttSignals()

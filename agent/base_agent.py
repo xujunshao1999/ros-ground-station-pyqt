@@ -40,6 +40,8 @@ from protocol.messages import (
     TopicResponseData,
     SensorMetaData,
     FleetData,
+    ConfigSyncData,
+    ConfigResponseData,
     TopicAction,
     RobotMode,
     CmdAction,
@@ -58,6 +60,9 @@ from protocol.topics import (
     station_discover,
     station_topic_request,
     station_topic_response,
+    station_config_sync,
+    station_config_query,
+    station_config_response,
 )
 from agent.rate_limiter import RateLimiter
 from agent.topic_handler import TopicHandler
@@ -89,6 +94,8 @@ class AgentConfig:
     http_stream_port: int = 8080  # 重量话题 HTTP 流端口
     auto_reconnect: bool = True  # 自动重连
     reconnect_delay: float = 5.0  # 重连延迟（秒）
+    subscriptions: list = field(default_factory=list)  # 持久订阅列表
+    fleet_rules: list = field(default_factory=list)  # 编队通信规则
 
     def __post_init__(self):
         """校验配置字段"""
@@ -130,6 +137,7 @@ class AgentConfig:
             "robot_id", "broker_host", "broker_port",
             "status_interval", "default_freq_limit", "http_stream_port",
             "auto_reconnect", "reconnect_delay",
+            "subscriptions", "fleet_rules",
             "username", "password", "ros_master_uri", "ros_namespace",
         }
         unknown = set(raw.keys()) - known_keys
@@ -145,6 +153,8 @@ class AgentConfig:
             http_stream_port=raw.get("http_stream_port", 8080),
             auto_reconnect=raw.get("auto_reconnect", True),
             reconnect_delay=raw.get("reconnect_delay", 5.0),
+            subscriptions=raw.get("subscriptions", []),
+            fleet_rules=raw.get("fleet_rules", []),
         )
 
 
@@ -479,10 +489,15 @@ class BaseAgent(ABC):
             client.subscribe(robot_cmd(self.config.robot_id), qos=1)
             client.subscribe(station_discover(), qos=1)
             client.subscribe(station_topic_request(), qos=1)
+            client.subscribe(station_config_sync(self.config.robot_id), qos=1)
+            client.subscribe(station_config_query(self.config.robot_id), qos=1)
 
             # 订阅其他机器人发来的 fleet 数据
             client.subscribe(all_robot_to_robot(self.config.robot_id), qos=1)
             client.subscribe(all_robot_to_robot_meta(self.config.robot_id), qos=1)
+
+            # 恢复持久化订阅
+            self._load_subscriptions_from_config()
 
             # 启动状态上报循环
             self._start_status_loop()
@@ -520,6 +535,10 @@ class BaseAgent(ABC):
             self._handle_topic_request(message)
         elif msg_type == MessageType.FLEET_DATA:
             self._handle_fleet_message(message)
+        elif msg_type == MessageType.CONFIG_SYNC:
+            self._handle_config_sync(message)
+        elif msg_type == MessageType.CONFIG_QUERY:
+            self._handle_config_query(message)
         else:
             logger.warning(f"[Agent] Unknown message type: {msg_type}")
 
@@ -656,6 +675,110 @@ class BaseAgent(ABC):
             payload=fleet_data.get("payload", {}),
             ttl=fleet_data.get("ttl", 30.0),
         ))
+
+    # ============================================================
+    # 配置同步
+    # ============================================================
+
+    def _handle_config_sync(self, message: Message) -> None:
+        """处理地面站下发的配置同步"""
+        logger.info(f"[Agent] Received config sync from station")
+        data = message.data
+
+        new_subscriptions = data.get("subscriptions", [])
+        new_fleet_rules = data.get("fleet_rules", [])
+
+        # 合并配置
+        self.config.subscriptions = new_subscriptions
+        self.config.fleet_rules = new_fleet_rules
+
+        # 持久化到 config.yaml
+        self._save_config()
+
+        # 逐条恢复订阅
+        for sub in new_subscriptions:
+            topic = sub.get("topic", "")
+            msg_type = sub.get("msg_type", "")
+            freq_limit = sub.get("freq_limit", self.config.default_freq_limit)
+            options = sub.get("compression", {})
+
+            if topic and topic not in self._subscribed_topics:
+                self._subscribed_topics[topic] = {
+                    "msg_type": msg_type,
+                    "freq_limit": freq_limit,
+                    "options": options,
+                }
+                self._rate_limiter.set_limit(topic, freq_limit)
+                self._on_topic_subscribed(topic, msg_type, options)
+                logger.info(f"[Agent] Config sync: subscribed to {topic}")
+
+        # 回复确认
+        response = self._factory.config_response(ConfigResponseData(
+            robot_id=self.config.robot_id,
+            subscriptions=self.config.subscriptions,
+            fleet_rules=self.config.fleet_rules,
+        ))
+        self._mqtt_publish(
+            station_config_response(self.config.robot_id),
+            response.to_json().encode("utf-8"),
+        )
+
+    def _handle_config_query(self, message: Message) -> None:
+        """处理地面站发来的配置查询"""
+        logger.info(f"[Agent] Received config query from station")
+
+        response = self._factory.config_response(ConfigResponseData(
+            robot_id=self.config.robot_id,
+            subscriptions=self.config.subscriptions,
+            fleet_rules=self.config.fleet_rules,
+        ))
+        self._mqtt_publish(
+            station_config_response(self.config.robot_id),
+            response.to_json().encode("utf-8"),
+        )
+
+    def _load_subscriptions_from_config(self) -> None:
+        """启动时恢复持久化订阅"""
+        for sub in self.config.subscriptions:
+            topic = sub.get("topic", "")
+            msg_type = sub.get("msg_type", "")
+            freq_limit = sub.get("freq_limit", self.config.default_freq_limit)
+            options = sub.get("compression", {})
+
+            if topic:
+                self._subscribed_topics[topic] = {
+                    "msg_type": msg_type,
+                    "freq_limit": freq_limit,
+                    "options": options,
+                }
+                self._rate_limiter.set_limit(topic, freq_limit)
+                self._on_topic_subscribed(topic, msg_type, options)
+                logger.info(f"[Agent] Restored subscription: {topic}")
+
+    def _save_config(self) -> None:
+        """持久化当前配置到 agent/config.yaml"""
+        from pathlib import Path
+        import yaml
+
+        config_path = Path(__file__).resolve().parent / "config.yaml"
+        try:
+            config_dict = {
+                "robot_id": self.config.robot_id,
+                "broker_host": self.config.broker_host,
+                "broker_port": self.config.broker_port,
+                "status_interval": self.config.status_interval,
+                "default_freq_limit": self.config.default_freq_limit,
+                "http_stream_port": self.config.http_stream_port,
+                "auto_reconnect": self.config.auto_reconnect,
+                "reconnect_delay": self.config.reconnect_delay,
+                "subscriptions": self.config.subscriptions,
+                "fleet_rules": self.config.fleet_rules,
+            }
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(config_dict, f, default_flow_style=False, allow_unicode=True)
+            logger.info(f"[Agent] Config saved to {config_path}")
+        except Exception as e:
+            logger.error(f"[Agent] Failed to save config: {e}")
 
     # ============================================================
     # 状态上报

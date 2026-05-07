@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-ROS Ground Station — an MQTT-based multi-robot control system. Robots run ROS locally; the Agent bridges ROS topics ↔ MQTT; the Station (FastAPI + Vue 3) displays robot state and sends commands. The Station is ROS-agnostic — it only speaks the MQTT protocol.
+ROS Ground Station — an MQTT-based multi-robot control system. Robots run ROS locally; the Agent bridges ROS topics ↔ MQTT; the Station (PyQt5 + embedded RViz) displays robot state and sends commands. The Station is ROS-agnostic — it only speaks the MQTT protocol.
 
 Development is done on **Ubuntu 20.04** (native Station + Docker robot containers) or **Windows with Mock Agent** (no ROS required). Real ROS Agents are tested either via Docker containers (`ros:noetic-robot` image) or on physical Linux machines.
 
@@ -40,8 +40,32 @@ ROS_Project/
 │   │   ├── alert_engine.py          #   告警规则引擎
 │   │   ├── dependencies.py          #   依赖注入容器
 │   │   └── config.yaml              #   Station 配置文件
-│   └── frontend/                    # Vue 3 + TypeScript + Vite
-│       └── src/                     #   组件/视图/store
+│   └── station/                       # Vue 前端已废弃，由 qt-frontend 替代
+│
+├── qt-frontend/                      # PyQt5 桌面前端
+│   ├── main.py                       #   QApplication 入口
+│   ├── main_window.py                #   QMainWindow + RvizWidget (ctypes)
+│   ├── mqtt_client.py                #   线程安全 MQTT (paho → Qt Signal)
+│   ├── panels/                       #   面板
+│   │   ├── robot_list_panel.py       #     机器人列表 + 心跳检测
+│   │   ├── command_panel.py          #     速度/模式控制
+│   │   ├── event_panel.py            #     事件/告警列表
+│   │   ├── sensor_summary_panel.py   #     传感器数据摘要
+│   │   ├── data_sender_panel.py      #     数据推送
+│   │   ├── traffic_monitor.py        #     带宽流量监控
+│   │   ├── topic_config_panel.py     #     话题订阅配置
+│   │   └── fleet_comm_panel.py       #     编队通信规则
+│   ├── native/                       #   C++ RViz 胶水库
+│   │   ├── rviz_widget.h / .cpp      #     extern "C" 接口
+│   │   └── CMakeLists.txt            #     CMake 构建
+│   ├── config/                       #   配置文件
+│   │   ├── config.yaml               #     MQTT/ROS/RViz 配置
+│   │   ├── default.rviz              #     RViz 默认布局
+│   │   └── transmit_config.yaml      #     话题订阅持久化
+│   ├── scripts/                      #   启动/停止脚本
+│   │   ├── start.sh / stop.sh
+│   └── launch/                       #   ROS launch 文件
+│       └── station.launch
 │
 ├── broker/                          # MQTT Broker 配置
 │   ├── mosquitto.conf               #   Mosquitto 配置（listener 1883）
@@ -86,18 +110,30 @@ ROS_Project/
 # Install (development)
 pip install -e ".[station,dev]"
 
+# Install with Qt frontend
+pip install -e ".[qt,dev]"
+
+# Build RViz C++ glue library (Ubuntu + ROS Noetic required)
+cd qt-frontend/native && mkdir -p build && cd build && cmake .. && make -j$(nproc)
+
 # Run all tests
-python -m pytest tests/ -v
+python3 -m pytest tests/ -v
 
 # Run a single test file
-python -m pytest tests/test_protocol_messages.py -v
+python3 -m pytest tests/test_protocol_messages.py -v
 
 # ============================================
-# Station (native — Ubuntu or Windows)
+# Station — Qt frontend (Ubuntu + ROS Noetic)
 # ============================================
 
-# Start station backend
-python -m station.backend.main
+# Build RViz C++ library
+cd qt-frontend/native && mkdir -p build && cd build && cmake .. && make -j$(nproc)
+
+# Start Qt frontend (requires roscore + mosquitto + built .so)
+./qt-frontend/scripts/start.sh
+
+# Or start manually
+python3 qt-frontend/main.py
 
 # ============================================
 # Agent — three options
@@ -118,22 +154,16 @@ python -m agent.main --agent-type ros1 --broker-host <station-ip>
 ## Architecture
 
 ```
-Robot (ROS) ──► Agent (Python) ──MQTT──► Mosquitto Broker ──MQTT──► Station Backend (FastAPI) ──WebSocket──► Vue 3 Frontend
+Robot (ROS) → Agent → MQTT Broker → Qt Frontend (PyQt5 + RViz 3D)
+                                   → bridge/mqtt_ros_bridge.py → local roscore
 ```
 
 ### Data flow: Robot → Station
 
-1. **Agent** subscribes to ROS topics. When the Station requests a topic via `station/topic/request`, the Agent starts forwarding that topic's data through a **tiered transport**:
-   - **LIGHT** (< 10KB, e.g. IMU/GPS/Odometry): direct MQTT + JSON
-   - **MEDIUM** (10KB-1MB, e.g. compressed image/LaserScan): MQTT + binary, rate-limited
-   - **HEAVY** (> 1MB, e.g. PointCloud2): HTTP stream + MQTT signaling (data over HTTP, metadata over MQTT)
-   - The tier is determined by `TopicRegistry` (`protocol/topic_registry.py`), which maps ROS message types to tiers.
-
-2. **MQTTHandler** (`station/backend/mqtt_handler.py`) receives all MQTT messages on wildcard subscriptions and dispatches them to callbacks.
-
-3. **RobotManager** (`station/backend/robot_manager.py`) stores robot state (status, subscribed topics, latest sensor data, pending commands), tracks heartbeats, and fires callbacks to push data to WebSocket clients.
-
-4. **WsManager** (`station/backend/ws_manager.py`) manages WebSocket connections and provides `broadcast_sync()` for thread-safe pushing from MQTT callback threads to the asyncio event loop.
+1. **Agent** subscribes to ROS topics. When the Station requests a topic via `station/topic/request`, the Agent starts forwarding.
+2. **MqttClient** (`qt-frontend/mqtt_client.py`) receives MQTT messages on wildcard subscriptions and emits Qt Signals.
+3. **Panels** (`qt-frontend/panels/`) receive data via Signal/Slot connections on the main thread.
+4. **RViz** (`qt-frontend/native/`) renders ROS topics via the bridge on a local roscore.
 
 ### Data flow: Station → Robot (commands)
 

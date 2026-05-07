@@ -60,6 +60,9 @@ TOPIC_QOS = {
     "topic_response": QoS.AT_LEAST_ONCE,
     "to_robot": QoS.AT_LEAST_ONCE,
     "to_robot_meta": QoS.AT_LEAST_ONCE,
+    "config_sync": QoS.AT_LEAST_ONCE,
+    "config_query": QoS.AT_LEAST_ONCE,
+    "config_response": QoS.AT_LEAST_ONCE,
 }
 
 
@@ -111,6 +114,21 @@ def station_topic_response(robot_id: str = "") -> str:
     if robot_id:
         return f"{STATION_PREFIX}/{_TOPIC_RESPONSE}/{robot_id}"
     return f"{STATION_PREFIX}/{_TOPIC_RESPONSE}"
+
+
+def station_config_sync(robot_id: str) -> str:
+    """station/{robot_id}/config/sync — 地面站下发配置到指定机器人"""
+    return f"{STATION_PREFIX}/{robot_id}/config/sync"
+
+
+def station_config_query(robot_id: str) -> str:
+    """station/{robot_id}/config/query — 查询机器人当前配置"""
+    return f"{STATION_PREFIX}/{robot_id}/config/query"
+
+
+def station_config_response(robot_id: str) -> str:
+    """station/{robot_id}/config/response — 机器人返回当前配置"""
+    return f"{STATION_PREFIX}/{robot_id}/config/response"
 
 
 # ---------------------------------------------------------------------------
@@ -232,5 +250,12 @@ def parse_station_topic(topic: str) -> Optional[Dict[str, str]]:
             return {"type": "topic_request"}
         elif len(parts) > 2 and parts[2] == "response":
             return {"type": "topic_response"}
+    elif len(parts) >= 4 and parts[2] == "config":
+        if parts[3] == "sync":
+            return {"type": "config_sync", "robot_id": parts[1]}
+        elif parts[3] == "query":
+            return {"type": "config_query", "robot_id": parts[1]}
+        elif parts[3] == "response":
+            return {"type": "config_response", "robot_id": parts[1]}
 
     return None

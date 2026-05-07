@@ -1,0 +1,12 @@
+mqtt:
+  broker_host: "localhost"
+  broker_port: 1883
+  client_id: "qt_frontend"
+
+ros:
+  master_uri: "http://localhost:11311"
+  default_max_freq: 30.0
+
+rviz:
+  default_config: "config/default.rviz"
+  fixed_frame: "map"

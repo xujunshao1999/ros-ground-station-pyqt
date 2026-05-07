@@ -1,0 +1,21 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Displays:
+    - Class: rviz/Grid
+      Name: Grid
+      Enabled: true
+    - Class: rviz/TF
+      Name: TF
+      Enabled: true
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 30
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 10
+      Focal Point: [0, 0, 0]

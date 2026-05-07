@@ -36,6 +36,9 @@ class MessageType(str, Enum):
     SENSOR_DATA = "sensor_data"      # 传感器数据
     SENSOR_META = "sensor_meta"      # 重量话题元信息
     FLEET_DATA = "fleet_data"        # 机器人间数据
+    CONFIG_SYNC = "config_sync"      # 配置同步
+    CONFIG_QUERY = "config_query"    # 配置查询
+    CONFIG_RESPONSE = "config_response"  # 配置响应
 
 
 class TopicAction(str, Enum):
@@ -214,6 +217,21 @@ class FleetData:
     ttl: float = 30.0                # 有效时间（秒）
 
 
+@dataclass
+class ConfigSyncData:
+    """配置同步数据 - 地面站下发到 Agent"""
+    subscriptions: List[Dict[str, Any]] = field(default_factory=list)
+    fleet_rules: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class ConfigResponseData:
+    """配置响应数据 - Agent 返回当前配置"""
+    robot_id: str = ""
+    subscriptions: List[Dict[str, Any]] = field(default_factory=list)
+    fleet_rules: List[Dict[str, Any]] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # 核心消息封装
 # ---------------------------------------------------------------------------
@@ -296,7 +314,8 @@ class MessageFactory:
         if isinstance(data, (StatusData, CmdData, CmdAckData, EventData,
                              DiscoverData, DiscoverResponseData,
                              TopicRequestData, TopicResponseData,
-                             SensorMetaData, FleetData)):
+                             SensorMetaData, FleetData,
+                             ConfigSyncData, ConfigResponseData)):
             data = asdict(data)
         return Message(
             ts=time.time(),
@@ -346,3 +365,15 @@ class MessageFactory:
     def fleet_data(self, fleet_data: FleetData, dst: str = "") -> Message:
         """创建机器人间通信消息"""
         return self._make(MessageType.FLEET_DATA, fleet_data, dst=dst)
+
+    def config_sync(self, config_data: ConfigSyncData, dst: str = "") -> Message:
+        """创建配置同步消息"""
+        return self._make(MessageType.CONFIG_SYNC, config_data, dst=dst)
+
+    def config_query(self, robot_id: str = "") -> Message:
+        """创建配置查询消息"""
+        return self._make(MessageType.CONFIG_QUERY, {"robot_id": robot_id}, dst="broadcast")
+
+    def config_response(self, resp_data: ConfigResponseData) -> Message:
+        """创建配置响应消息"""
+        return self._make(MessageType.CONFIG_RESPONSE, resp_data)
