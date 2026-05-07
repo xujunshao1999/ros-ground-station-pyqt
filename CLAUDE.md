@@ -215,11 +215,26 @@ All topics follow the pattern defined in `protocol/topics.py`:
 Defined in `protocol/messages.py`. Use `MessageFactory` to create messages and `Message.from_json()` to parse them.
 
 ## 开发规范
-- 使用 TypeScript strict 模式
-- 优先使用 interface 而非 type
-- 禁止使用 any，使用 unknown 替代
-- 前端包管理使用 pnpm，不用 npm
-- 所有组件必须包含单元测试
+
+### 版本控制（Git）
+
+- **修改代码前必须 commit**：任何代码改动前，先将当前工作状态提交到 git。这使得改动可追溯、可回滚。
+- **Commit message 格式**：`<type>: <简短描述>`，type 为 feat/fix/refactor/docs/test 之一。正文补充关键细节。
+- **禁止 `git push --force`、`git reset --hard`、`git checkout --` 等不可逆操作**，除非用户明确要求。
+- **Commit 粒度**：每个独立功能/修复完成后立即提交，不要攒大量改动。
+- **`Co-Authored-By`**：所有 commit message 末尾添加 `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`。
+- **未跟踪文件**：`demo/`、build 产物（`*.so`、`build/`）不纳入版本控制。
+- **回滚**：如果某次改动引入了 bug 且短时间无法修复，先 `git stash` 或回退到上一个已知良好 commit，再分析根因。
+
+### Python 规范
+- Python 3.8+ 兼容性（ROS Noetic 要求）
+- `from __future__ import annotations` 作为每个 `.py` 文件第一个 import
+- 使用 `pathlib.Path` 处理文件路径，不拼接字符串
+- 使用 `Optional[X]` / `List[X]`，不用 `X | None` / `list[X]`
+
+### 测试规范
+- 所有面板和协议模块必须有单元测试
+- 测试运行：`python3 -m pytest tests/ -v`
 
 ## Key documents
 
