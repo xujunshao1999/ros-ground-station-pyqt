@@ -219,7 +219,7 @@ Defined in `protocol/messages.py`. Use `MessageFactory` to create messages and `
 ### 版本控制（Git）
 
 - **修改代码前必须 commit**：任何代码改动前，先将当前工作状态提交到 git。这使得改动可追溯、可回滚。
-- **Commit message 格式**：`<type>: <简短描述>`，type 为 feat/fix/refactor/docs/test 之一。正文补充关键细节。
+- **Commit message 格式**：`<type>: <中文简短描述>`，type 为 feat/fix/refactor/docs/test 之一。正文用中文补充关键细节。
 - **禁止 `git push --force`、`git reset --hard`、`git checkout --` 等不可逆操作**，除非用户明确要求。
 - **Commit 粒度**：每个独立功能/修复完成后立即提交，不要攒大量改动。
 - **`Co-Authored-By`**：所有 commit message 末尾添加 `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`。
