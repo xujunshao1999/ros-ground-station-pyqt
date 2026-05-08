@@ -109,6 +109,9 @@ class MqttRosBridge:
         self._transmit_config_path = str(tx_candidate)
 
         self._heartbeat_timeout = float(self._config.get("heartbeat_timeout", 30.0))
+        self._namespace_tf_frames = bool(
+            self._config.get("ros", {}).get("namespace_tf_frames", False)
+        )
 
     # ================================================================
     # Public API
@@ -484,6 +487,10 @@ class MqttRosBridge:
     # MQTT ---> ROS: sensor data
     # ================================================================
 
+    # Special sensor names that publish to canonical ROS topics
+    # (RViz and standard tools subscribe to these, not /{robot_id}/...)
+    _CANONICAL_TOPICS = frozenset({"tf", "tf_static", "joint_states"})
+
     def _handle_sensor_data(
         self, robot_id: str, sensor_name: str, payload: bytes
     ) -> None:
@@ -491,9 +498,34 @@ class MqttRosBridge:
 
         Payload is expected to be a JSON dict of ROS message fields
         (LIGHT transport tier).  The topic map provides the target ROS
-        topic and message type.
+        topic and message type; when no mapping exists, the ``_msg_type``
+        field injected by the agent is used for auto-detection.
+
+        TF, TF_STATIC, and JOINT_STATES are routed to canonical ROS
+        topics (``/tf``, ``/tf_static``, ``/joint_states``) so that
+        RViz and other standard tools can consume them.
         """
-        # Look up topic mapping
+        # 1. Decode the JSON payload (moved first for auto-detection)
+        try:
+            text = payload.decode("utf-8")
+            data_dict = json.loads(text)
+        except Exception as e:
+            logger.error(
+                "[Bridge] Failed to decode sensor data from %s/%s: %s",
+                robot_id, sensor_name, e,
+            )
+            return
+
+        if not isinstance(data_dict, dict):
+            logger.warning(
+                "[Bridge] Sensor data is not a dict for %s/%s",
+                robot_id, sensor_name,
+            )
+            return
+
+        # 2. Resolve ROS topic and message type
+        is_canonical = sensor_name in self._CANONICAL_TOPICS
+
         with self._lock:
             robot_map = self._topic_map.get(robot_id, {})
             mapping = robot_map.get(sensor_name)
@@ -501,53 +533,51 @@ class MqttRosBridge:
         if mapping is not None:
             ros_topic_str, msg_type = mapping
         else:
-            # Unknown sensor — publish as generic JSON String
-            logger.debug(
-                "[Bridge] No topic mapping for %s/%s, publishing as JSON",
-                robot_id,
-                sensor_name,
-            )
-            try:
-                text = payload.decode("utf-8")
-            except Exception:
-                text = str(payload)
-            self._publish_as_json(f"/{robot_id}/{sensor_name}", text)
-            return
+            # Auto-detect from the _msg_type field injected by the agent
+            msg_type = data_dict.get("_msg_type", "")
+            if not msg_type:
+                logger.debug(
+                    "[Bridge] No topic mapping or _msg_type for %s/%s, "
+                    "publishing as JSON String",
+                    robot_id, sensor_name,
+                )
+                self._publish_as_json(
+                    f"/{robot_id}/{sensor_name}", text
+                )
+                return
 
-        # Decode the JSON payload
-        try:
-            text = payload.decode("utf-8")
-            data_dict = json.loads(text)
-        except Exception as e:
-            logger.error(
-                "[Bridge] Failed to decode sensor data from %s/%s: %s",
-                robot_id,
-                sensor_name,
-                e,
-            )
-            return
+            # Canonical topics go to the standard ROS topic name
+            if is_canonical:
+                ros_topic_str = f"/{sensor_name}"
+            else:
+                ros_topic_str = f"/{sensor_name}"
 
-        if not isinstance(data_dict, dict):
-            logger.warning(
-                "[Bridge] Sensor data is not a dict for %s/%s",
-                robot_id,
-                sensor_name,
-            )
-            return
-
-        # Strip internal fields before passing to dict_to_ros_msg
+        # 3. Strip internal field before conversion
         data_dict.pop("_msg_type", None)
 
-        # Convert to ROS message and publish
+        # 4. Convert to ROS message and publish
         try:
+            # Prefix frame_ids for multi-robot when enabled
+            if (
+                self._namespace_tf_frames
+                and msg_type == "tf2_msgs/TFMessage"
+            ):
+                self._prefix_tf_frames(data_dict, robot_id)
+
             ros_msg = dict_to_ros_msg(data_dict, msg_type)
-            full_topic = f"/{robot_id}{ros_topic_str}"
+
+            if is_canonical:
+                full_topic = ros_topic_str  # /tf, /tf_static, /joint_states
+            else:
+                full_topic = f"/{robot_id}{ros_topic_str}"
+
             pub = self._get_or_create_typed_publisher(
                 full_topic, type(ros_msg)
             )
             pub.publish(ros_msg)
             logger.debug(
-                "[Bridge] Published sensor data to ROS: %s", full_topic
+                "[Bridge] Published sensor data to ROS: %s (%s)",
+                full_topic, msg_type,
             )
         except Exception as e:
             logger.error(
@@ -933,6 +963,34 @@ class MqttRosBridge:
         except Exception:
             text = str(payload)
         self._publish_as_json(ros_topic, text)
+
+    def _prefix_tf_frames(
+        self, data_dict: dict, robot_id: str
+    ) -> None:
+        """Prefix frame_id and child_frame_id with robot namespace.
+
+        Modifies *data_dict* in place so that each transform's
+        ``header.frame_id`` and ``child_frame_id`` become e.g.
+        ``turtlebot_001/odom`` instead of ``odom``.
+
+        Idempotent: skips frames that already carry the prefix.
+        """
+        transforms = data_dict.get("transforms")
+        if not transforms:
+            return
+
+        prefix = f"{robot_id}/"
+        for tf in transforms:
+            if not isinstance(tf, dict):
+                continue
+            header = tf.get("header")
+            if isinstance(header, dict):
+                fid = header.get("frame_id")
+                if isinstance(fid, str) and fid and not fid.startswith(prefix):
+                    header["frame_id"] = prefix + fid
+            cid = tf.get("child_frame_id")
+            if isinstance(cid, str) and cid and not cid.startswith(prefix):
+                tf["child_frame_id"] = prefix + cid
 
     @staticmethod
     def _resolve_msg_data(msg: String) -> Any:

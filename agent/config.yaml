@@ -82,6 +82,14 @@ subscriptions:
     msg_type: "tf2_msgs/TFMessage"
     freq_limit: 10.0
     transport: "mqtt_json"
+  - topic: "/tf_static"
+    msg_type: "tf2_msgs/TFMessage"
+    freq_limit: 10.0
+    transport: "mqtt_json"
+  - topic: "/joint_states"
+    msg_type: "sensor_msgs/JointState"
+    freq_limit: 50.0
+    transport: "mqtt_json"
 
 # 编队通信规则（地面站下发，启动时自动恢复）
 fleet_rules: []
