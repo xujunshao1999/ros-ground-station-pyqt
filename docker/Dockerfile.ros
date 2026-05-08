@@ -1,9 +1,14 @@
 FROM ros:noetic-robot
 
-# Install supervisor and pip
+# Install supervisor, pip, and turtlebot3 simulation packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     python3-pip \
+    ros-noetic-turtlebot3-gazebo \
+    ros-noetic-turtlebot3-slam \
+    ros-noetic-slam-gmapping \
+    ros-noetic-gazebo-plugins \
+    ros-noetic-rviz \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python MQTT deps (rarely change)

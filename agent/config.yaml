@@ -6,7 +6,7 @@
 # ============================================================
 
 # 机器人 ID（每台机器人唯一）
-robot_id: "robot_001"
+robot_id: "turtlebot_001"
 
 # MQTT Broker 地址
 broker_host: "localhost"
@@ -65,14 +65,23 @@ reconnect_delay: 5.0
 # ============================================================
 
 # 地面站下发的持久订阅列表（启动时自动恢复）
-subscriptions: []
-# 格式示例：
-# subscriptions:
-#   - topic: "/odom"
-#     msg_type: "nav_msgs/Odometry"
-#     freq_limit: 10.0
-#     transport: "mqtt_json"
-#     compression: {}
+subscriptions:
+  - topic: "/odom"
+    msg_type: "nav_msgs/Odometry"
+    freq_limit: 10.0
+    transport: "mqtt_json"
+  - topic: "/scan"
+    msg_type: "sensor_msgs/LaserScan"
+    freq_limit: 5.0
+    transport: "mqtt_binary"
+  - topic: "/imu"
+    msg_type: "sensor_msgs/Imu"
+    freq_limit: 10.0
+    transport: "mqtt_json"
+  - topic: "/tf"
+    msg_type: "tf2_msgs/TFMessage"
+    freq_limit: 10.0
+    transport: "mqtt_json"
 
 # 编队通信规则（地面站下发，启动时自动恢复）
 fleet_rules: []

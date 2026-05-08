@@ -54,3 +54,29 @@ services:
       - ./docker/sensor_simulator.py:/app/docker/sensor_simulator.py:ro
     stdin_open: true
     tty: true
+
+  # ------------------------------------------------------------------
+  # Turtlebot3 仿真 — turtlebot_001 (roscore + ROS1 Agent + Gazebo)
+  # ------------------------------------------------------------------
+  robot-turtlebot-001:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ros
+    container_name: turtlebot-001
+    environment:
+      - ROBOT_ID=turtlebot_001
+      - BROKER_HOST=host-gateway
+      - TURTLEBOT3_MODEL=burger
+      - DISPLAY=${DISPLAY}
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    restart: unless-stopped
+    volumes:
+      - ./protocol:/app/protocol:ro
+      - ./agent:/app/agent:ro
+      - ./docker/supervisord-turtlebot3.conf:/etc/supervisor/conf.d/ros-agent.conf:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/dri:/dev/dri
+    stdin_open: true
+    tty: true
