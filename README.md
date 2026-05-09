@@ -1,107 +1,101 @@
 # ROS Ground Station
 
-基于 MQTT 的地面站控制系统，实现一对多机器人管理。Station 与 ROS 版本解耦，只认 MQTT 协议。
+基于 MQTT 的 ROS 地面站控制系统，PyQt5 + RViz 嵌入式 3D 可视化，实现一对多机器人管理。Station 与 ROS 版本的解耦——仅通过 MQTT 协议通信。
 
 ## 架构
 
 ```
-Robot (ROS) ──► Agent (Python) ──MQTT──► Mosquitto Broker ──MQTT──► Station (FastAPI) ──WebSocket──► Vue 3 前端
+Robot (ROS) ──► Agent ──MQTT──► Mosquitto Broker ──MQTT──► Bridge ──► roscore (宿主机) ──► Qt 前端 + RViz
 ```
 
-- **Agent**：运行在机器人端，桥接 ROS 话题 ↔ MQTT 消息
-- **Station**：地面站，FastAPI 后端 + Vue 3 前端，ROS 无关
+- **Agent**：运行在机器人端（Docker 容器或物理机），桥接 ROS 话题 ↔ MQTT
+- **Bridge** (`mqtt_ros_bridge`)：宿主机 MQTT ↔ ROS 双向翻译，自动类型检测
+- **Qt 前端**：PyQt5 桌面应用，嵌入式 RViz 3D 渲染，话题订阅、命令控制面板
 - **MQTT Broker**：Mosquitto，消息中枢
 
-## 快速开始（Ubuntu 20.04）
+## 快速开始（Ubuntu 20.04 + ROS Noetic）
 
 ```bash
-# 1. 安装系统依赖
-sudo apt install mosquitto mosquitto-clients python3-pip python3-venv
-sudo systemctl stop mosquitto && sudo systemctl disable mosquitto
+# 1. 系统依赖
+sudo apt install mosquitto mosquitto-clients python3-pip
+pip install -e ".[qt,dev]"
 
-# 2. 克隆项目
-git clone https://github.com/xujunshao1999/ros-ground-station.git
-cd ros-ground-station
+# 2. 构建 RViz C++ 胶水库
+cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(nproc) && cd ../../..
 
-# 3. 安装 Python 依赖
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[station,dev]"
+# 3. Docker 混合测试（Turtlebot3 仿真 + 地面站）
+docker compose up -d robot-turtlebot-001        # 启动仿真容器（Gazebo + gmapping + RViz）
+./qt_frontend/scripts/start.sh                  # 启动地面站（自动拉起 roscore + broker + bridge）
 
-# 4. Docker 混合测试
-./scripts/start_hybrid_test.sh          # 启动 broker + 2 个机器人容器
-python -m station.backend.main          # 启动地面站
-python scripts/test_hybrid.py           # 自动化验证
-
-# 5. 运行单元测试
-python -m pytest tests/ -v
+# 4. 停止
+./qt_frontend/scripts/stop.sh
+docker compose stop robot-turtlebot-001
 ```
 
-详细指南见 [`docs/docker-hybrid-test.md`](docs/docker-hybrid-test.md)。
-
-## Windows 开发（Mock Agent）
-
-```powershell
-# 安装依赖
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[station,dev]"
-
-# 启动 Mock Agent（无需 ROS）
-python -m agent.main --agent-type mock
-
-# 启动地面站
-python -m station.backend.main
-```
+> 仿真容器首次构建约需 20 分钟（需下载 Gazebo 等依赖）。详见 `docs/work-log-2026-05-08.md`。
 
 ## 目录结构
 
 ```
-ROS_Project/
-├── protocol/                     # 共享消息协议（零外部依赖）
-│   ├── messages.py               #   消息格式 + MessageFactory
-│   ├── topics.py                 #   MQTT topic 命名/解析
-│   └── topic_registry.py         #   话题传输分层 (LIGHT/MEDIUM/HEAVY)
-├── agent/                        # 机器人端 Agent
-│   ├── base_agent.py             #   抽象基类
+ros-ground-station-pyqt/
+├── protocol/                     # 共享消息协议（Agent / Bridge 共用，零外部依赖）
+│   ├── messages.py               #   消息格式 (dataclass) + MessageFactory
+│   ├── topics.py                 #   MQTT topic 命名/生成/解析
+│   └── topic_registry.py         #   话题传输分层（41 种 ROS 类型）
+├── agent/                        # 机器人端 Agent（ROS ↔ MQTT 桥接）
+│   ├── base_agent.py             #   抽象基类 + AgentConfig
 │   ├── ros1_agent.py             #   ROS 1 实现 (rospy)
 │   ├── mock_agent.py             #   模拟 Agent（无 ROS）
 │   ├── topic_handler.py          #   话题分层处理
-│   ├── rate_limiter.py           #   按话题限频
+│   ├── rate_limiter.py           #   按话题独立限频
+│   ├── ros_msg_converter.py      #   ROS 消息 → dict
+│   ├── config.yaml               #   Agent 配置文件
 │   └── main.py                   #   启动入口
-├── station/
-│   ├── backend/                  # FastAPI 后端
-│   │   ├── api.py                #   REST + WebSocket API
-│   │   ├── mqtt_handler.py       #   MQTT 客户端
-│   │   ├── robot_manager.py      #   机器人状态管理
-│   │   ├── ws_manager.py         #   WebSocket 连接池
-│   │   ├── database.py           #   SQLite 存储
-│   │   ├── recorder.py           #   数据录制/回放
-│   │   ├── alert_engine.py       #   告警规则引擎
-│   │   └── main.py               #   启动入口
-│   └── frontend/                 # Vue 3 + TypeScript
-├── docker/                       # Docker 镜像
-│   ├── Dockerfile.ros            #   ROS Noetic 机器人
-│   ├── sensor_simulator.py       #   ROS 传感器模拟器
-│   └── supervisord.conf          #   容器内进程管理
-├── scripts/                      # 辅助脚本
-│   ├── start_hybrid_test.sh      #   混合测试启动
-│   ├── stop_hybrid_test.sh       #   混合测试停止
-│   └── test_hybrid.py            #   端到端验证
-├── tests/                        # 单元测试 (89 tests)
-├── docs/                         # 文档
-│   ├── docker-hybrid-test.md     #   Docker 测试指南
-│   ├── protocol.md               #   通信协议
-│   └── tech-stack.md             #   技术栈
+├── bridge/                       # 宿主机 MQTT-ROS 桥接
+│   ├── mqtt_ros_bridge.py        #   双向翻译核心
+│   ├── dict_to_ros_msg.py        #   dict → ROS 消息 通用反序列化
+│   └── bridge_config.yaml        #   Bridge 配置
+├── qt_frontend/                  # PyQt5 桌面端
+│   ├── main.py                   #   QApplication 入口
+│   ├── main_window.py            #   QMainWindow + RViz 嵌入 (ctypes)
+│   ├── mqtt_client.py            #   线程安全 MQTT (paho → Qt Signal)
+│   ├── panels/                   #   面板
+│   │   ├── robot_list_panel.py   #     机器人列表 + 心跳检测
+│   │   ├── command_panel.py      #     速度/模式控制
+│   │   ├── event_panel.py        #     事件/告警列表
+│   │   └── ...                   #     传感器摘要、数据推送等
+│   ├── native/                   #   C++ RViz 胶水库
+│   │   ├── rviz_widget.h / .cpp  #     extern "C" 接口
+│   │   └── CMakeLists.txt
+│   ├── config/                   #   配置文件
+│   ├── launch/                   #   ROS launch
+│   │   └── station.launch        #     静态 TF 变换
+│   └── scripts/
+│       ├── start.sh              #     一键启动
+│       └── stop.sh               #     一键停止
+├── docker/                       # Docker 构建
+│   ├── Dockerfile.ros            #   ROS Noetic 基础镜像
+│   ├── supervisord.conf          #   机器人容器进程管理
+│   ├── supervisord-turtlebot3.conf  # Turtlebot3 仿真容器进程管理
+│   └── sensor_simulator.py       #   传感器模拟器
+├── tests/                        # 单元测试
+├── docs/                         # 文档 + 工作日志
 ├── docker-compose.yml            # Docker 编排
-├── pyproject.toml                # 依赖配置
-└── CLAUDE.md                     # Claude Code 项目指南
+├── pyproject.toml                # 依赖/构建配置
+└── CLAUDE.md                     # 项目指南（AI 开发用）
 ```
 
-## 测试
+## 常用命令
 
 ```bash
-python -m pytest tests/ -v                       # 全部测试 (89)
-python -m pytest tests/test_protocol_messages.py -v  # 单文件
+# 测试
+python3 -m pytest tests/ -v
+
+# 仅启模拟 Agent（无 ROS）
+python -m agent.main --agent-type mock
+
+# 查看宿主机话题
+source /opt/ros/noetic/setup.bash && rostopic list
 ```
 
 ## 文档
@@ -109,10 +103,10 @@ python -m pytest tests/test_protocol_messages.py -v  # 单文件
 | 文档 | 内容 |
 |------|------|
 | [`CLAUDE.md`](CLAUDE.md) | 项目架构、开发规范、命令速查 |
-| [`docs/docker-hybrid-test.md`](docs/docker-hybrid-test.md) | Docker 混合测试完整指南 |
+| [`docs/work-log-2026-05-08.md`](docs/work-log-2026-05-08.md) | Docker Turtlebot3 仿真搭建 |
+| [`docs/work-log-2026-05-09.md`](docs/work-log-2026-05-09.md) | Bridge 数据流修复 + 命令/LaserScan 修复 |
 | [`docs/protocol.md`](docs/protocol.md) | MQTT 通信协议文档 |
 | [`docs/tech-stack.md`](docs/tech-stack.md) | 技术栈详情 |
-| [`project-plan.md`](project-plan.md) | 分步执行计划 |
 
 ## License
 
