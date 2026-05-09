@@ -110,7 +110,14 @@ if [ -f "$ROS_SETUP" ]; then
 fi
 
 # ------------------------------------------------------------------
-# 7. 启动 bridge（后台）
+# 7. 静态 TF（通过 launch 文件）
+# ------------------------------------------------------------------
+roslaunch "$PROJECT_ROOT/qt_frontend/launch/station.launch" &
+sleep 1
+echo_green "Static transforms published"
+
+# ------------------------------------------------------------------
+# 8. 启动 bridge（后台）
 # ------------------------------------------------------------------
 echo_green "Starting MQTT-ROS bridge..."
 cd "$PROJECT_ROOT"
@@ -125,7 +132,7 @@ fi
 echo_green "Bridge PID: $BRIDGE_PID"
 
 # ------------------------------------------------------------------
-# 8. 启动 Qt 前端（前台）
+# 9. 启动 Qt 前端（前台）
 # ------------------------------------------------------------------
 echo_green "Starting Qt frontend..."
 cleanup() {

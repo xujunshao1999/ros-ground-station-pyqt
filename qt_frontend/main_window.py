@@ -289,7 +289,7 @@ class MainWindow(QMainWindow):
 
     def _on_command(self, robot_id: str, action: str, params: dict) -> None:
         if self._mqtt_client:
-            self._mqtt_client.send_cmd(robot_id, params)
+            self._mqtt_client.send_cmd(robot_id, {"action": action, "params": params})
 
     def _on_data_send(self, robot_id: str, topic: str, json_str: str) -> None:
         if self._mqtt_client:
