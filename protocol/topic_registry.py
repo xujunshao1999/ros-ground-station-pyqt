@@ -106,6 +106,10 @@ _BUILTIN_REGISTRY: dict[str, TopicInfo] = {
         "sensor_msgs/LaserScan", TopicTier.MEDIUM, "激光扫描",
         default_freq_limit=10,
     ),
+    "nav_msgs/OccupancyGrid": TopicInfo(
+        "nav_msgs/OccupancyGrid", TopicTier.MEDIUM, "占据栅格地图",
+        default_freq_limit=2,
+    ),
 
     # ================================================================
     # 重量话题 → HTTP 流 + MQTT 信令  (>1 MB)
@@ -118,10 +122,6 @@ _BUILTIN_REGISTRY: dict[str, TopicInfo] = {
     "sensor_msgs/PointCloud": TopicInfo(
         "sensor_msgs/PointCloud", TopicTier.HEAVY, "3D点云(遗留)",
         default_freq_limit=2,
-    ),
-    "nav_msgs/OccupancyGrid": TopicInfo(
-        "nav_msgs/OccupancyGrid", TopicTier.HEAVY, "占据栅格地图",
-        default_freq_limit=1,
     ),
 }
 
