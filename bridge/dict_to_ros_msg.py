@@ -29,7 +29,7 @@ def dict_to_ros_msg(data: dict, msg_type: str):
     Raises:
         ValueError: 如果 msg_type 无法通过 rospy.msg.get_message_class 解析
     """
-    from rospy.msg import get_message_class
+    from genpy.message import get_message_class
 
     msg_class = get_message_class(msg_type)
     if msg_class is None:

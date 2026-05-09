@@ -24,7 +24,7 @@ status_interval: 2.0
 # ============================================================
 
 # 默认话题频率上限（Hz），0 表示不限频
-default_freq_limit: 10.0
+default_freq_limit: 30.0
 
 # ============================================================
 # HTTP 流服务（重量话题）
@@ -68,7 +68,7 @@ reconnect_delay: 5.0
 subscriptions:
   - topic: "/odom"
     msg_type: "nav_msgs/Odometry"
-    freq_limit: 10.0
+    freq_limit: 30.0
     transport: "mqtt_json"
   - topic: "/scan"
     msg_type: "sensor_msgs/LaserScan"
@@ -76,11 +76,11 @@ subscriptions:
     transport: "mqtt_binary"
   - topic: "/imu"
     msg_type: "sensor_msgs/Imu"
-    freq_limit: 10.0
+    freq_limit: 50.0
     transport: "mqtt_json"
   - topic: "/tf"
     msg_type: "tf2_msgs/TFMessage"
-    freq_limit: 10.0
+    freq_limit: 50.0
     transport: "mqtt_json"
   - topic: "/tf_static"
     msg_type: "tf2_msgs/TFMessage"
@@ -88,7 +88,11 @@ subscriptions:
     transport: "mqtt_json"
   - topic: "/joint_states"
     msg_type: "sensor_msgs/JointState"
-    freq_limit: 50.0
+    freq_limit: 30.0
+    transport: "mqtt_json"
+  - topic: "/map"
+    msg_type: "nav_msgs/OccupancyGrid"
+    freq_limit: 2.0
     transport: "mqtt_json"
 
 # 编队通信规则（地面站下发，启动时自动恢复）
