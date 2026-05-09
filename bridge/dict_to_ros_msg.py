@@ -72,9 +72,9 @@ def _convert_value(val: Any, type_str: str) -> Any:
         if not isinstance(val, (list, tuple)):
             return val
 
-        # uint8[] / char[] / byte[] → bytes
+        # uint8[] / int8[] / char[] / byte[] → bytes
         if base_type in ("uint8", "int8", "char", "byte") and fixed_length is None:
-            return bytes(val)
+            return bytes(b & 0xFF for b in val)
 
         # 嵌套消息数组
         if "/" in base_type:
