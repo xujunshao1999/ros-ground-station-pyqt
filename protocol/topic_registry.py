@@ -112,15 +112,15 @@ _BUILTIN_REGISTRY: dict[str, TopicInfo] = {
     ),
 
     # ================================================================
-    # 重量话题 → HTTP 流 + MQTT 信令  (>1 MB)
+    # HEAVY 层保留骨架暂不使用（HTTP 流需要 Web 前端拉取，当前不用）
+    # 以下类型降为 MEDIUM → MQTT JSON 直传
     # ================================================================
     "sensor_msgs/PointCloud2": TopicInfo(
-        "sensor_msgs/PointCloud2", TopicTier.HEAVY, "3D点云",
+        "sensor_msgs/PointCloud2", TopicTier.MEDIUM, "3D点云",
         default_freq_limit=5,
-        compression_defaults={"voxel_size": 0.1},
     ),
     "sensor_msgs/PointCloud": TopicInfo(
-        "sensor_msgs/PointCloud", TopicTier.HEAVY, "3D点云(遗留)",
+        "sensor_msgs/PointCloud", TopicTier.MEDIUM, "3D点云(遗留)",
         default_freq_limit=2,
     ),
 }
