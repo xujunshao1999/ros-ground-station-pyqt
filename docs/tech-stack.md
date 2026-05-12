@@ -1,253 +1,330 @@
-# ROS 地面站 — 技术选型说明
+# ROS 地面站 - 技术选型说明
 
 ## 一、系统概述
 
-本项目开发一套基于 MQTT 的地面站控制系统，实现一对多机器人管理。核心设计原则：**ROS 仅在机器人本地运行，跨机器通信走 MQTT + JSON，地面站与 ROS 版本完全解耦。**
+本项目是一套基于 MQTT 的 ROS 多机器人地面站。机器人侧运行 ROS 和 Agent，地面站侧通过 MQTT 接收状态、传感器和事件数据，并用本地 ROS + RViz 做 3D 可视化。
 
+核心原则：
+
+- 机器人本地 ROS 不直接暴露给地面站。
+- 跨机器通信统一走 MQTT + JSON。
+- Station 与机器人侧 ROS 版本解耦，协议层只依赖 MQTT 消息格式。
+- 需要 RViz 原生显示能力时，在 Station 本机启动 roscore，并由 Bridge 把 MQTT 数据还原为 ROS 话题。
+
+当前主线架构：
+
+```text
+Robot (ROS) -> Agent -> MQTT Broker -> Bridge -> local roscore -> PyQt5 + RViz
+                    \                                /
+                     -------- command / ack --------
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         地面站 (Station)                         │
-│                                                                 │
-│  ┌──────────┐    ┌──────────────┐    ┌───────────────────────┐ │
-│  │  MQTT    │    │   业务逻辑层  │    │      Web 前端          │ │
-│  │  Broker  │◄──►│              │◄──►│                       │ │
-│  │(Mosquitto)│   │ - 连接管理    │    │ - 机器人状态面板       │ │
-│  └──────────┘    │ - Topic 路由  │    │ - 控制面板            │ │
-│                  │ - 指令调度    │    │ - 视频显示            │ │
-│                  │ - 数据录制    │    │ - 日志/告警           │ │
-│                  └──────────────┘    └───────────────────────┘ │
-└─────────────────────────┼────────────────────────────────────────┘
-                          │ MQTT (TCP)
-              ┌───────────┼───────────┐
-              │           │           │
-    ┌─────────┴──┐  ┌────┴─────┐  ┌──┴─────────┐
-    │  Robot A   │  │ Robot B  │  │  Robot C    │
-    │ ┌───────┐  │  │┌───────┐│  │ ┌───────┐   │
-    │ │Agent  │  │  ││Agent  ││  │ │Agent  │   │
-    │ │(ROS1) │  │  ││(ROS2) ││  │ │(ROS1) │   │
-    │ └───┬───┘  │  │└───┬───┘│  │ └───┬───┘   │
-    │  ┌──┴──┐   │  │ ┌──┴──┐ │  │  ┌──┴──┐    │
-    │  │ROS  │   │  │ │ROS  │ │  │  │ROS  │    │
-    │  │本地 │   │  │ │本地 │ │  │  │本地 │    │
-    │  └─────┘   │  │ └─────┘ │  │  └─────┘    │
-    └────────────┘  └─────────┘  └─────────────┘
+
+更完整的数据流：
+
+```text
+Robot container / physical robot
+  roscore
+  ROS topics: /odom /scan /imu /tf /map ...
+  agent.ros1_agent
+      |
+      | MQTT JSON
+      v
+Station host
+  Mosquitto
+  bridge.mqtt_ros_bridge
+      |
+      | typed ROS messages
+      v
+  local roscore
+  qt_frontend
+    - PyQt5 panels
+    - embedded RViz RenderPanel
+    - MQTT command client
 ```
+
+> 说明：早期文档中提到的 FastAPI + Vue Web 地面站不是当前实现主线。当前仓库以 `qt_frontend/` 桌面站、`bridge/` MQTT-ROS 桥和 `agent/` 机器人端 Agent 为核心。
 
 ---
 
 ## 二、技术选型总览
 
-| 层级 | 技术选型 | 版本要求 |
-|------|---------|---------|
-| 跨机器通信协议 | MQTT 5.0 | Mosquitto 2.x |
-| 消息序列化 | JSON（开发期）→ MessagePack（优化期） | — |
-| 机器人端 Agent | Python 3.8+ | 兼容 ROS Noetic (Python 3.8) |
-| 地面站后端 | Python + FastAPI + asyncio | FastAPI ≥ 0.104 |
-| 地面站前端 | Vue 3 + TypeScript + Vite | — |
-| MQTT Broker | Eclipse Mosquitto | ≥ 2.0 |
-| 数据存储 | SQLite | — |
-| 视频（Phase 3） | MJPEG → WebRTC（Phase 5） | — |
-| 点云（Phase 3） | 体素降采样 + HTTP 流 | — |
+| 层级 | 当前选型 | 版本/依赖 | 说明 |
+|------|----------|-----------|------|
+| 跨机器通信 | MQTT | Mosquitto 2.x / paho-mqtt 2.x | 机器人、Bridge、Qt 前端之间的统一消息总线 |
+| 消息序列化 | JSON | protocol/messages.py | 开发期可读、可用 mosquitto_sub 直接排查 |
+| 协议层 | Python dataclass | Python 3.8+ | `protocol/` 零 ROS 依赖，Agent/Station 共用 |
+| 机器人端 Agent | Python + rospy | ROS Noetic / Python 3.8 | ROS topic 与 MQTT 双向桥接 |
+| 地面站 GUI | PyQt5 | Qt5 / PyQt5 | 机器人管理、控制、事件、话题配置等面板 |
+| 3D 可视化 | RViz embedded | C++ glue + librviz | 原生 RViz Display 渲染，不为每种 ROS 消息手写前端组件 |
+| MQTT-ROS Bridge | Python + rospy | bridge/mqtt_ros_bridge.py | 把 MQTT sensor 数据还原成本地 ROS 话题 |
+| ROS 消息转换 | introspection | genpy / rospy | `ros_msg_to_dict()` 与 `dict_to_ros_msg()` 通用转换 |
+| 配置 | YAML | pyyaml | Agent、Bridge、Qt 前端配置 |
+| 测试 | pytest | tests/ | 协议、转换、MQTT 客户端、Qt 面板逻辑测试 |
+| 仿真测试 | Docker + Turtlebot3 | ROS Noetic / Gazebo / gmapping | 机器人容器与宿主机 Station 通过 MQTT 隔离 |
 
 ---
 
 ## 三、逐项选型理由
 
-### 1. 跨机器通信：MQTT（而非 ROS 原生通信 / gRPC / WebSocket）
+### 1. MQTT：跨机器通信主干
 
 | 对比项 | MQTT | ROS 原生通信 | gRPC | WebSocket |
-|--------|------|-------------|------|-----------|
-| ROS 版本解耦 | ✅ 完全解耦 | ❌ 绑定 rosmaster | ✅ 解耦 | ✅ 解耦 |
-| 断线重连 | ✅ 协议内置 | ❌ 需手动实现 | ⚠️ 需应用层实现 | ⚠️ 需应用层实现 |
-| QoS 等级 | ✅ 0/1/2 三级 | ❌ 无保证 | ✅ 有但复杂 | ❌ 无 |
-| 一对多 | ✅ 发布/订阅原生支持 | ⚠需 rosbridge | ✅ 需服务端设计 | ⚠️ 需自行实现 |
-| 带宽占用 | ✅ 极小（2字节头部） | ⚠️ 中等 | ⚠️ HTTP/2 开销 | ⚠️ 中等 |
-| 弱网表现 | ✅ 专为物联网设计 | ❌ 依赖 TCP 稳定连接 | ⚠️ 一般 | ❌ 连接易断 |
-| 生态成熟度 | ✅ 工业级 | ⚠️ ROS 专属 | ✅ 成熟 | ✅ 成熟 |
+|--------|------|--------------|------|-----------|
+| ROS 版本解耦 | 强 | 弱，绑定 rosmaster / DDS | 强 | 强 |
+| 一对多机器人 | 发布/订阅天然支持 | 需要额外命名空间和网络规划 | 需自建路由 | 需自建路由 |
+| 断线重连 | 客户端和协议生态成熟 | 需要应用层处理 | 需要应用层处理 | 需要应用层处理 |
+| 调试便利 | mosquitto_sub 可直接观察 | 依赖 ROS 工具链 | 需要专用客户端 | 一般 |
+| 部署复杂度 | 低 | 跨主机 ROS 网络配置复杂 | 中 | 中 |
 
-**选择 MQTT 的核心理由：**
-- **ROS 版本无关**：地面站不依赖 rosmaster，ROS 1 和 ROS 2 机器人可同时接入
-- **天生一对多**：发布/订阅模式天然匹配"一台地面站控制多台机器人"
-- **弱网友好**：机器人可能在信号不好的环境（仓库、野外），MQTT 的 QoS 和自动重连是刚需
-- **轻量高效**：2 字节固定头部，适合带宽受限场景
+选择 MQTT 的主要原因：
 
-### 2. MQTT Broker：Eclipse Mosquitto（而非 EMQX / VerneMQ / 自研）
+- Station 不需要加入机器人侧 roscore，也不需要知道机器人 ROS 网络细节。
+- 多机器人接入时只需要统一接入 Broker。
+- Topic 通配符适合地面站订阅 `robot/+/status`、`robot/+/sensor/#` 这类全局数据。
+- QoS、Last Will、重连机制适合机器人弱网场景。
 
-| 对比项 | Mosquitto | EMQX | VerneMQ | 自研 |
-|--------|-----------|------|---------|------|
-| 轻量 | ✅ 单二进制 | ❌ 需要 Erlang | ❌ 需要 Erlang | — |
-| 部署复杂度 | ✅ 极低 | ⚠️ 中等 | ⚠️ 中等 | ❌ 高 |
-| 性能上限 | ⚠️ ~10万连接 | ✅ 百万级 | ✅ 百万级 | — |
-| 跨平台 | ✅ Win/Linux/Mac | ⚠️ Docker 为主 | ⚠️ Docker 为主 | — |
-| 配置简单 | ✅ 一个 conf 文件 | ⚠️ 较复杂 | ⚠️ 较复杂 | — |
+当前 topic 规范由 `protocol/topics.py` 维护，主要包括：
 
-**选择 Mosquitto 的核心理由：**
-- **项目规模匹配**：一对多机器人场景，连接数在百级以内，Mosquitto 绑绑有余
-- **零运维**：一个配置文件 + 一条命令启动，不需要 Erlang 环境
-- **跨平台**：Windows 和 Linux 同一份配置，开发测试无缝切换
-- **备用方案**：项目还包含纯 Python 的 amqtt 作为开发备用 Broker
+| MQTT Topic | 方向 | 用途 |
+|------------|------|------|
+| `robot/{id}/status` | Robot -> Station | 心跳和状态 |
+| `robot/{id}/sensor/{name}` | Robot -> Station | 传感器数据 |
+| `robot/{id}/sensor/{name}/meta` | Robot -> Station | 重量数据元信息 |
+| `robot/{id}/cmd` | Station -> Robot | 控制指令 |
+| `robot/{id}/cmd/ack` | Robot -> Station | 指令确认 |
+| `robot/{id}/event` | Robot -> Station | 事件和告警 |
+| `station/discover` | Station -> Robot | 发现请求 |
+| `station/topic/request` | Station -> Robot | 话题订阅管理 |
+| `station/topic/response/{id}` | Robot -> Station | 订阅响应 |
+| `station/{id}/config/*` | Station <-> Robot | 配置同步 |
 
-### 3. Agent 语言：Python 3.8+（而非 C++ / Rust）
+### 2. Mosquitto：轻量 MQTT Broker
 
-| 对比项 | Python | C++ | Rust |
-|--------|--------|-----|------|
-| ROS 1 集成 | ✅ rospy 原生 | ✅ roscpp 原生 | ❌ 无官方支持 |
-| ROS 2 集成 | ✅ rclpy 原生 | ✅ rclcpp 原生 | ⚠️ rclrs 实验性 |
-| 开发效率 | ✅ 高 | ❌ 低 | ⚠️ 中等 |
-| Noetic 兼容 | ✅ Python 3.8 | ✅ | — |
-| 依赖管理 | ✅ pip/venv | ⚠️ catkin/colcon | ⚠️ cargo + colcon |
-| 门槛 | ✅ 低 | ❌ 高 | ❌ 高 |
+Mosquitto 适合本项目当前规模：
 
-**选择 Python 的核心理由：**
-- **ROS 官方一等支持**：rospy / rclpy 都是官方维护，无需额外桥接
-- **Noetic 兼容**：ROS Noetic 绑定 Python 3.8，项目设置 `requires-python >= 3.8` + `from __future__ import annotations` 确保兼容
-- **快速迭代**：Agent 本质是"ROS 话题 ↔ MQTT"的翻译层，不涉及计算密集任务，Python 性能完全足够
-- **统一技术栈**：Agent 和后端都用 Python，协议层代码零修改共享
+- 单机部署简单，配置文件少。
+- 对几十到几百台机器人规模足够。
+- Linux/Windows 都容易启动，方便 Mock Agent 开发。
+- 仓库中保留 `amqtt` 作为纯 Python 开发备用 Broker。
 
-### 4. 后端框架：FastAPI + asyncio（而非 Flask / Django / Go）
+本项目没有选择 EMQX/VerneMQ，主要是因为当前更关注本地部署、低运维和调试便利，而不是百万级连接。
 
-| 对比项 | FastAPI | Flask | Django | Go (net/http) |
-|--------|---------|-------|--------|---------------|
-| 异步支持 | ✅ 原生 asyncio | ❌ 需扩展 | ❌ 有限 | ✅ 原生 |
-| WebSocket | ✅ 原生 | ⚠️ 需扩展 | ⚠️ Channels | ✅ 原生 |
-| 自动文档 | ✅ OpenAPI/Swagger | ❌ 需手动 | ❌ 需手动 | ⚠️ 需工具 |
-| 类型安全 | ✅ Pydantic | ❌ | ❌ | ✅ |
-| 性能 | ✅ 高 | ⚠️ 中 | ⚠️ 中低 | ✅ 极高 |
-| 开发效率 | ✅ 高 | ✅ 高 | ⚠️ 中 | ⚠️ 中 |
+### 3. Python Agent：贴近 ROS，开发成本低
 
-**选择 FastAPI 的核心理由：**
-- **异步原生**：MQTT 客户端 + WebSocket 推送 + HTTP API 需要并发处理，asyncio 是自然选择
-- **WebSocket 一等支持**：前端实时推送不需要额外框架
-- **自动 API 文档**：调试阶段省大量时间，前端对接也有文档可查
-- **与 Agent 同语言**：协议层（protocol/）代码 Agent 和 Station 共享，零拷贝
+机器人端 Agent 使用 Python 的原因：
 
-### 5. 前端：Vue 3 + TypeScript + Vite（而非 React / Angular / Electron）
+- ROS Noetic 默认 Python 3.8，`rospy` 集成成本最低。
+- Agent 的工作主要是 I/O 和消息转换，不是计算密集型任务。
+- `protocol/` 可以被 Agent、Bridge、Qt 前端直接复用。
+- Mock Agent 可以在无 ROS 环境运行，用于协议链路和界面调试。
 
-| 对比项 | Vue 3 | React | Angular | Electron |
-|--------|-------|-------|---------|----------|
-| 学习曲线 | ✅ 低 | ⚠️ 中 | ❌ 高 | ⚠️ 中 |
-| TypeScript | ✅ 原生支持 | ✅ 原生支持 | ✅ 原生支持 | ✅ |
-| 体积 | ✅ 轻量 | ✅ 轻量 | ❌ 重 | ❌ 极重 |
-| 生态 | ✅ 丰富 | ✅ 极丰富 | ⚠️ 专属 | — |
-| 跨终端 | ✅ 浏览器即用 | ✅ | ✅ | ❌ 桌面应用 |
-| Dashboard 生态 | ✅ ECharts/Element Plus | ✅ D3/Ant Design | ✅ ng-zorro | — |
+项目要求保持 Python 3.8 兼容：
 
-**选择 Vue 3 的核心理由：**
-- **Dashboard 型应用**：地面站本质是数据密集型仪表盘，Vue + ECharts + Element Plus 是成熟组合
-- **多终端适配**：浏览器打开即用，平板也能操作，不需要安装桌面应用
-- **Vite 构建快**：开发体验好，热更新秒级
-- **TypeScript 安全**：接口类型定义减少前后端对接错误
+- 使用 `from __future__ import annotations`。
+- 类型标注避免 `X | None` 和 `list[X]`。
+- Ruff target 为 `py38`。
 
-### 6. 序列化：JSON 优先，MessagePack 后置优化（而非 Protobuf / ROS 消息）
+### 4. PyQt5 + RViz：当前地面站 GUI 主线
 
-| 对比项 | JSON | MessagePack | Protobuf | ROS 消息 |
-|--------|------|-------------|----------|---------|
-| 可读性 | ✅ 人可读 | ❌ 二进制 | ❌ 二进制 | ❌ 二进制 |
-| 调试便利 | ✅ mosquitto_sub 直接看 | ❌ 需解码工具 | ❌ 需解码工具 | ❌ 需要 rostopic |
-| 体积 | ⚠️ 较大 | ✅ 小 30-50% | ✅ 小 50-70% | — |
-| 前端兼容 | ✅ 原生 | ❌ 需库 | ❌ 需库 | ❌ 不兼容 |
-| Schema | ✅ 灵活 | ✅ 灵活 | ⚠️ 需定义 .proto | ❌ 绑定 ROS |
-| 开发效率 | ✅ 最高 | ⚠️ 中 | ❌ 需编译 | ❌ 需编译 |
+早期 Web 前端需要为每种 ROS 消息类型手写可视化组件，例如 LaserScan、Image、PointCloud2、TF、Map 等。当前改为 PyQt5 嵌入 RViz，核心收益是：
 
-**选择 JSON 的核心理由：**
-- **开发期可调试性优先**：用 `mosquitto_sub -v` 直接看消息内容，排查问题极快
-- **前端零成本**：浏览器原生 JSON.parse，不需要额外解码库
-- **ROS 解耦**：不依赖 ROS 消息定义，地面站完全不需要安装 ROS
-- **后续可平滑迁移**：JSON → MessagePack 只需改序列化层，协议和业务代码不变
+- RViz 已经支持 ROS 常用 Display，不需要重复实现 3D 可视化。
+- 用户可以直接添加 Odometry、LaserScan、TF、Map、RobotModel 等 Display。
+- PyQt5 适合快速实现机器人列表、控制面板、事件列表、话题配置等桌面工具界面。
+- MQTT 客户端回调可通过 Qt Signal/Slot 安全切回主线程。
 
-### 7. 话题传输分层策略
+RViz 嵌入方式：
 
-核心洞察：ROS 话题数据量差异极大（IMU 几百字节 vs 点云几 MB），不能一刀切。
+- `qt_frontend/native/rviz_widget.cpp` 使用 C++ 创建 RViz 组件。
+- 对 Python 暴露 `extern "C"` 接口。
+- `qt_frontend/main_window.py` 通过 `ctypes.CDLL` 加载 `librviz_widget.so`。
+- PyQt5 使用原生窗口句柄把 RViz 面板嵌入主窗口。
 
-| 话题类型 | 典型消息 | 单帧大小 | 传输方式 | 理由 |
-|---------|---------|---------|---------|------|
-| 轻量 | IMU、GPS、里程计 | < 10KB | MQTT + JSON | 数据小，直接 MQTT 搞定 |
-| 中等 | 压缩图像、LaserScan | 10KB - 1MB | MQTT + 二进制 | 限频 + 压缩，MQTT 仍可承载 |
-| 重量 | 原始图像、PointCloud2 | > 1MB | HTTP 流 + MQTT 信令 | MQTT 不适合传大数据，用 HTTP 流专路 |
+已知工程约束：
 
-**设计理由：**
-- **带宽可控**：轻量话题走 MQTT 天然限频；重量话题走 HTTP 流，地面站按需拉取
-- **渐进式实现**：Phase 1 只需轻量话题（MQTT + JSON），中等/重量后续加
-- **弹性通道**：同一套 MQTT 信令控制所有通道，地面站一个 subscribe 请求搞定
+- 需要 Ubuntu + ROS Noetic 才能构建和运行 RViz 胶水库。
+- `load_config()` 曾导致 RViz 鼠标交互失效，目前采用手动创建基础 Display 的方式规避。
+- pip 安装的 PyQt5 可能与系统 Qt/RViz 版本冲突，Ubuntu 上优先使用系统 PyQt5 包。
 
-### 8. 数据存储：SQLite（而非 MySQL / PostgreSQL / MongoDB）
+### 5. MQTT-ROS Bridge：让 RViz 看见真实 ROS 话题
 
-| 对比项 | SQLite | MySQL | PostgreSQL | MongoDB |
-|--------|--------|-------|------------|---------|
-| 运维 | ✅ 零运维（文件数据库） | ❌ 需装服务 | ❌ 需装服务 | ❌ 需装服务 |
-| 部署 | ✅ 随应用启动 | ❌ 需独立部署 | ❌ 需独立部署 | ❌ 需独立部署 |
-| 性能 | ✅ 单机足够 | ✅ 高 | ✅ 高 | ✅ 高 |
-| 跨平台 | ✅ 一个文件 | ⚠️ 需适配 | ⚠️ 需适配 | ⚠️ 需适配 |
-| 适合场景 | 单机、嵌入式 | 多用户服务 | 复杂查询 | 文档型数据 |
+Bridge 是当前架构的关键组件。它订阅 MQTT 传感器数据，再发布到 Station 本地 roscore：
 
-**选择 SQLite 的核心理由：**
-- **单机场景**：地面站就一台电脑，不需要多用户并发
-- **零运维**：不需要装数据库服务，一个文件搞定，拷贝就能备份
-- **跨平台**：Windows/Linux 通用，部署零差异
+```text
+robot/turtlebot_001/sensor/scan
+  -> bridge parses JSON
+  -> dict_to_ros_msg(sensor_msgs/LaserScan)
+  -> publish /turtlebot_001/scan
+  -> RViz LaserScan Display
+```
 
-### 9. 视频方案：MJPEG 优先，WebRTC 后置（而非 RTSP / 直接 ROS 图像）
+Bridge 的设计要点：
 
-| 对比项 | MJPEG | WebRTC | RTSP | ROS 图像直传 |
-|--------|-------|--------|------|-------------|
-| 实现复杂度 | ✅ 极低 | ❌ 高 | ⚠️ 中 | ✅ 低 |
-| 延迟 | ⚠️ 200-500ms | ✅ < 100ms | ⚠️ 200ms | — |
-| 浏览器兼容 | ✅ 原生 `<img>` | ✅ 需库 | ❌ 需插件 | ❌ 不兼容 |
-| 依赖 | ✅ 无 | ❌ 信令服务器 | ⚠️ 流媒体服务器 | ❌ ROS |
-| 带宽 | ⚠️ 较大 | ✅ 高效压缩 | ✅ 高效压缩 | — |
+- 优先使用 Station 已知订阅表中的 msg_type。
+- 未注册话题可从 MQTT payload 的 `_msg_type` 自动检测 ROS 类型。
+- `/tf`、`/tf_static`、`/joint_states` 走标准 ROS 话题名，而不是强行加机器人前缀。
+- 普通话题发布为 `/{robot_id}/{original_topic}`，例如 `/turtlebot_001/odom`。
+- 多机器人 TF 命名空间前缀由 `namespace_tf_frames` 配置控制。
 
-**选择 MJPEG 的核心理由：**
-- **先用最简单方案跑通**：MJPEG 就是连续发 JPEG 帧，一个 HTTP 请求搞定
-- **浏览器原生支持**：`<img src="stream_url">` 就能看，不需要任何插件
-- **后续可升级**：MJPEG → WebRTC 只需换 Agent 端的推流方式和前端的渲染，架构不变
+这让 Station 可以同时做到：
 
-### 10. 开发策略：Windows + Mock Agent 先行
+- MQTT 层保持 ROS 版本解耦。
+- RViz 层仍然使用原生 ROS 话题和原生插件。
 
-| 对比项 | 本方案 | 传统 ROS 开发 |
-|--------|--------|-------------|
-| 开发环境 | ✅ Windows，无 ROS | ❌ 必须 Linux + ROS |
-| 代码覆盖率 | ✅ 80% 代码无 ROS 依赖 | ❌ 100% 依赖 ROS |
-| 调试效率 | ✅ 本地全链路 | ❌ 需两台机器 |
-| Mock Agent | ✅ 模拟完整行为 | — |
-| ROS 集成 | ⚠️ 最后 20% 在 Linux 测 | ❌ 一开始就需要 |
+### 6. 通用 ROS 消息转换
 
-**核心理由：**
-- **ROS 只在机器人端**：地面站完全不依赖 ROS，自然可以在 Windows 开发
-- **Mock Agent 验证通信**：模拟机器人所有行为，提前验证 80% 的代码
-- **降低开发门槛**：不需要 Linux + ROS 环境也能写代码、跑测试
+项目中有两个互逆转换：
+
+- `agent/ros_msg_converter.py`：ROS message -> dict。
+- `bridge/dict_to_ros_msg.py`：dict -> ROS message。
+
+选择通用字段内省而不是硬编码类型的原因：
+
+- ROS 标准消息类型很多，手写维护成本高。
+- RViz 常用 Display 覆盖 Odometry、LaserScan、Imu、PointCloud2、OccupancyGrid、Marker、TF 等多类消息。
+- 自定义消息也可以在字段结构兼容时复用通用转换逻辑。
+
+当前 `protocol/topic_registry.py` 已覆盖 41 种常见 ROS 消息类型，并按数据量分为轻量、中等、重量话题。
+
+### 7. JSON 优先，二进制/MessagePack 后置
+
+当前开发期仍以 JSON 为主：
+
+- 方便直接用 `mosquitto_sub -v` 查看 payload。
+- 方便 pytest 构造测试数据。
+- 方便 Mock Agent 和非 ROS 工具参与调试。
+- 协议字段稳定后再考虑 MessagePack 或二进制通道优化。
+
+数据量分层策略：
+
+| 分层 | 典型类型 | 当前/目标传输方式 |
+|------|----------|-------------------|
+| LIGHT | Imu、Odometry、NavSatFix、Twist | MQTT + JSON |
+| MEDIUM | LaserScan、CompressedImage、OccupancyGrid 小地图 | MQTT + JSON/二进制，配合限频 |
+| HEAVY | 原始 Image、PointCloud2、大地图 | HTTP stream + MQTT meta，后续优化 |
+
+近期日志中记录了 `/map` OccupancyGrid 大消息的 Bridge 发布问题，这是当前需要继续排查的重点之一。
+
+### 8. Docker Turtlebot3：真实链路测试环境
+
+当前推荐的集成测试方式是机器人跑在 Docker 容器，Station 跑在宿主机：
+
+```text
+Docker: turtlebot-001
+  roscore
+  Gazebo Turtlebot3
+  gmapping
+  ros1_agent
+      |
+      | MQTT
+      v
+Host:
+  Mosquitto
+  mqtt_ros_bridge
+  roscore
+  Qt frontend + RViz
+```
+
+这样可以验证两个关键边界：
+
+- 机器人 ROS 网络与 Station ROS 网络完全隔离。
+- 所有跨机器数据都必须经过 MQTT 协议。
+
+常用启动流程见 `README.md`，核心命令是：
+
+```bash
+docker compose up -d robot-turtlebot-001
+./qt_frontend/scripts/start.sh
+```
+
+### 9. 配置和持久化
+
+当前主要使用 YAML 配置：
+
+- `agent/config.yaml`：机器人 ID、Broker、状态频率、默认订阅等。
+- `bridge/bridge_config.yaml`：Broker、ROS topic 前缀、TF namespace 策略等。
+- `qt_frontend/config/config.yaml`：Qt 前端连接和显示配置。
+- `qt_frontend/config/transmit_config.yaml`：话题订阅持久化。
+
+SQLite、录制和回放在早期设计中出现过，但当前代码主线的重点仍是通信链路、RViz 显示和控制链路。后续实现录制回放时，再以 SQLite 作为本地单机存储是合理选择。
 
 ---
 
 ## 四、关键架构决策
 
-| 决策 | 选择 | 理由 |
-|------|------|------|
-| 跨机器通信 | MQTT | QoS、断线重连、一对多、ROS 解耦 |
-| ROS 版本解耦 | Agent 翻译层 | 地面站不关心 ROS 版本，只认 MQTT 协议 |
-| 开发环境 | Windows + Mock Agent | 无 ROS 也能开发 80% 代码 |
-| 地面站跨平台 | 代码零差异 | 所有组件跨平台，部署仅适配启动方式 |
-| 话题传输分层 | 轻/中/重三级通道 | 按数据量选通道，带宽可控 |
-| 序列化 | JSON → MessagePack | 可调试性优先，后续优化带宽 |
-| Python 版本 | 3.8+ 兼容 Noetic | Noetic 绑定 Python 3.8 |
-| 视频方案 | MJPEG → WebRTC | 先简单跑通，再追求低延迟 |
-| 数据存储 | SQLite | 单机够用，零运维 |
+| 决策 | 当前选择 | 理由 |
+|------|----------|------|
+| 跨机器通信 | MQTT | ROS 解耦、一对多、弱网恢复、调试便利 |
+| Station 可视化 | PyQt5 + embedded RViz | 复用 RViz 原生 ROS Display |
+| Station 本地 ROS | 需要 | 仅用于 RViz/Bridge，不直接连接机器人 roscore |
+| ROS 数据还原 | Bridge 发布本地 ROS 话题 | 让 RViz 订阅真实 typed ROS messages |
+| Agent 语言 | Python | rospy 集成简单，协议代码可复用 |
+| 消息格式 | JSON | 开发期透明可查，后续可替换序列化层 |
+| 话题命名 | `/{robot_id}/{topic}` + canonical TF | 多机器人隔离，同时兼容 RViz TF 习惯 |
+| 仿真验证 | Docker Turtlebot3 + 宿主机 Station | 模拟真实多机边界，避免单 roscore 假联通 |
+| Python 版本 | 3.8+ | 兼容 ROS Noetic |
 
 ---
 
 ## 五、当前进度
 
-| Phase | 状态 | 说明 |
-|-------|------|------|
-| Phase 1：通信链路 | 🟢 已完成 | Mock Agent Windows 全链路验证通过，ros1_agent.py 已实现 |
-| Phase 2：地面站 GUI | 🟢 已完成 | 状态面板、控制面板、话题管理、指令追踪、设计令牌统一 |
-| Phase 3：多机器人 + 增强功能 | 🟢 已完成 | 多机器人管理、点云+图像可视化、数据录制回放、告警系统+规则引擎、机器人间通信 |
-| Phase 4：ROS 2 + 通用化 | ⬜ 待开始 | ROS 2 Agent、混合编队、Docker 部署 |
-| Phase 5：优化 | ⬜ 待开始 | MessagePack、WebRTC、TLS |
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| 协议层 `protocol/` | 已实现 | 消息格式、topic 生成/解析、话题注册表 |
+| Mock Agent | 已实现 | 无 ROS 环境可验证 MQTT 协议链路 |
+| ROS1 Agent | 已实现 | 支持 ROS topic 订阅、命令下发、配置同步 |
+| 通用 ROS 序列化 | 已实现 | `ros_msg_to_dict()` 支持字段内省 |
+| MQTT-ROS Bridge | 已实现，仍有待排查项 | TF、scan、odom、imu、joint_states 已验证 |
+| PyQt5 前端 | 已实现主框架 | 主窗口、RViz 嵌入、机器人/命令/事件/话题等面板 |
+| RViz C++ 胶水 | 已实现 | 支持嵌入 RenderPanel 和 Display 面板 |
+| Turtlebot3 Docker 仿真 | 已实现 | Gazebo + gmapping + Agent 容器化 |
+| 命令链路 | 已验证 | Qt -> MQTT -> Agent -> `/cmd_vel` -> Gazebo |
 
-### Phase 3 实现详情
+当前已验证数据流：
 
-- **多机器人管理**：支持同时选择多台机器人，批量停止/返航，Grid 布局概览
-- **点云可视化**：Three.js 3D 场景，OrbitControls 旋转/缩放/平移，Z 高度渐变色，500ms 轮询，后端 HTTP 流代理
-- **图像显示**：基于 MQTT base64 JPEG 传输的实时相机画面，自动检测图像话题，FPS 计数
-- **数据录制**：SQLite 存储状态历史+事件日志，开始/暂停/停止控制，历史面板+CSV 导出
-- **告警系统**：AlertEngine 规则引擎（电量阈值、通信超时、位置越界），AlertPanel 浮动通知面板，SQLite 持久化
-- **机器人间通信**：MQTT topic `robot/{src}/to/{dst}` + 重量数据 HTTP 流复用，Agent 启动时自动订阅 fleet 话题，轻量数据 MQTT JSON 直传
+```text
+Turtlebot3 /odom /scan /imu /tf /joint_states
+  -> ros1_agent
+  -> MQTT
+  -> mqtt_ros_bridge
+  -> host roscore
+  -> RViz / Qt frontend
+```
+
+当前已验证命令流：
+
+```text
+Qt CommandPanel
+  -> robot/{id}/cmd
+  -> Agent _handle_command(action="velocity")
+  -> ROS /cmd_vel
+  -> Gazebo robot moves
+```
+
+---
+
+## 六、待完成和已知问题
+
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| `/map` OccupancyGrid 发布 | 待排查 | MQTT 侧有数据，Bridge 内大消息发布链路仍需诊断 |
+| `/tf_static` latched topic | 有 workaround | 当前用 `station.launch` 补静态 TF，根因仍需查 |
+| 多机器人 TF namespace | 待验证 | Bridge 已有配置项，需要多容器实测 |
+| ROS2 Agent | 未开始 | 协议层支持方向明确，但尚未实现 |
+| 录制与回放 | 未完成 | 后续可用 SQLite 本地存储状态、事件和传感器摘要 |
+| MessagePack / 二进制优化 | 未开始 | 等协议稳定和性能瓶颈明确后再做 |
+| TLS / 鉴权 | 未开始 | 生产部署前需要补齐 Broker 安全配置 |
+
+---
+
+## 七、历史方案说明
+
+早期设计曾规划：
+
+- FastAPI + WebSocket 后端。
+- Vue 3 + TypeScript + Vite Web 前端。
+- Three.js 点云和自定义图像/传感器组件。
+
+这些方案适合浏览器仪表盘，但在本项目当前目标下存在一个核心问题：ROS 可视化组件需要大量重复实现。当前已经转向 PyQt5 + RViz，是因为 RViz 原生支持绝大多数机器人可视化场景，开发重点可以放在通信、控制、多机器人管理和部署稳定性上。
+
+因此，后续文档和开发应以 `README.md`、`docs/qt-rviz-station-plan-B.md`、`docs/work-log-2026-05-08.md`、`docs/work-log-2026-05-09.md` 记录的 PyQt5/RViz 路线为准。
