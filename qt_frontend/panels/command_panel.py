@@ -86,11 +86,7 @@ class CommandPanel(QWidget):
         mode_layout.addLayout(mode_btn_row)
 
         self._btn_emergency = QPushButton("急停")
-        self._btn_emergency.setStyleSheet(
-            "QPushButton { background-color: #d00; color: white; font-weight: bold; "
-            "padding: 6px 16px; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #f00; }"
-        )
+        self._btn_emergency.setObjectName("dangerButton")
         self._btn_emergency.clicked.connect(self._send_emergency)
         mode_layout.addWidget(self._btn_emergency)
 

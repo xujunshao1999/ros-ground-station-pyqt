@@ -11,6 +11,7 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from qt_frontend.main_window import MainWindow
+from qt_frontend.theme import apply_app_theme
 
 
 def main() -> None:
@@ -23,6 +24,7 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("ROS Ground Station")
     app.setOrganizationName("ros-ground-station")
+    apply_app_theme(app)
 
     window = MainWindow(config)
     window.show()

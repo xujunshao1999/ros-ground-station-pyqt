@@ -96,10 +96,14 @@ class DataSenderPanel(QWidget):
             json.loads(content)
         except json.JSONDecodeError as e:
             logger.error(f"[DataSender] Invalid JSON: {e}")
-            self._json_edit.setStyleSheet("QTextEdit { border: 2px solid red; }")
+            self._json_edit.setProperty("invalid", True)
+            self._json_edit.style().unpolish(self._json_edit)
+            self._json_edit.style().polish(self._json_edit)
             return
 
-        self._json_edit.setStyleSheet("")
+        self._json_edit.setProperty("invalid", False)
+        self._json_edit.style().unpolish(self._json_edit)
+        self._json_edit.style().polish(self._json_edit)
         self.send_json.emit(robot_id, topic, content)
 
     def _send_binary_file(self) -> None:

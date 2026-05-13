@@ -20,6 +20,7 @@ from qt_frontend.panels import (
     CommandPanel, DataSenderPanel, EventPanel, FleetCommPanel,
     RobotListPanel, SensorSummaryPanel, TopicConfigPanel, TrafficMonitor,
 )
+from qt_frontend.theme import DANGER, SUCCESS
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class MainWindow(QMainWindow):
         self._rviz_ptr = None
         self._rviz_lib = None
         self._mqtt_client: Optional[MqttClient] = None
+        self._splitter_sizes = [360, 920, 320]
 
         self._init_window()
         self._init_panels()
@@ -41,6 +43,7 @@ class MainWindow(QMainWindow):
         self._init_ros_monitor()
 
         QTimer.singleShot(200, self._init_rviz)
+        QTimer.singleShot(350, self._apply_splitter_layout)
 
     # ------------------------------------------------------------------
     # 初始化
@@ -120,13 +123,15 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         btn = QPushButton("全部急停")
-        btn.setStyleSheet("QPushButton{background:#d00;color:white;font-weight:bold;padding:4px 16px;border-radius:4px;font-size:14px;}QPushButton:hover{background:#f00;}")
+        btn.setObjectName("dangerButton")
+        btn.setMinimumWidth(112)
         btn.clicked.connect(self._on_emergency)
         toolbar.addWidget(btn)
 
     def _init_central_widget(self) -> None:
         # Left tabs
         left = QTabWidget()
+        left.setMinimumWidth(320)
         t = QWidget(); l = QVBoxLayout(t); l.setContentsMargins(0,0,0,0)
         l.addWidget(self._robot_list); l.addWidget(self._command)
         left.addTab(t, "机器人")
@@ -137,6 +142,7 @@ class MainWindow(QMainWindow):
 
         # Right tabs
         right = QTabWidget()
+        right.setMinimumWidth(280)
         self._display_container = QWidget()
         dl = QVBoxLayout(self._display_container); dl.setContentsMargins(0,0,0,0)
         dl.addWidget(QLabel("RViz 初始化中..."))
@@ -158,8 +164,14 @@ class MainWindow(QMainWindow):
         self._splitter.addWidget(left)
         self._splitter.addWidget(QLabel("加载中..."))
         self._splitter.addWidget(right)
-        self._splitter.setSizes([250, 800, 350])
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setStretchFactor(2, 0)
+        self._apply_splitter_layout()
         self.setCentralWidget(self._splitter)
+
+    def _apply_splitter_layout(self) -> None:
+        self._splitter.setSizes(self._splitter_sizes)
 
     def _init_status_bar(self) -> None:
         sb = QStatusBar()
@@ -206,7 +218,9 @@ class MainWindow(QMainWindow):
         except Exception:
             ok = False
         self._lb_ros.setText("ROS Master ✓" if ok else "ROS Master ✗")
-        self._lb_ros.setStyleSheet(f"color: {'green' if ok else 'red'}; font-weight: bold;")
+        self._lb_ros.setStyleSheet(
+            f"color: {SUCCESS if ok else DANGER}; font-weight: bold;"
+        )
 
     # ------------------------------------------------------------------
     # RViz
@@ -235,9 +249,11 @@ class MainWindow(QMainWindow):
 
         rviz_widget = sip.wrapinstance(int(rviz_ptr), QWidget)
         rviz_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        old = self._splitter.widget(1)
-        if old: old.hide(); old.deleteLater()
-        self._splitter.insertWidget(1, rviz_widget)
+        old = self._splitter.replaceWidget(1, rviz_widget)
+        if old:
+            old.deleteLater()
+        self._splitter.setStretchFactor(1, 1)
+        self._apply_splitter_layout()
 
         lib.set_fixed_frame(rviz_ptr, b"map")
 
@@ -274,12 +290,12 @@ class MainWindow(QMainWindow):
 
     def _on_mqtt_connected(self) -> None:
         self._lb_conn.setText("● 已连接")
-        self._lb_conn.setStyleSheet("color: green; font-weight: bold;")
+        self._lb_conn.setStyleSheet(f"color: {SUCCESS}; font-weight: bold;")
         self._act_connect.setEnabled(False); self._act_disconnect.setEnabled(True)
 
     def _on_mqtt_disconnected(self) -> None:
         self._lb_conn.setText("● 已断开")
-        self._lb_conn.setStyleSheet("color: red; font-weight: bold;")
+        self._lb_conn.setStyleSheet(f"color: {DANGER}; font-weight: bold;")
         self._act_connect.setEnabled(True); self._act_disconnect.setEnabled(False)
 
     def _on_sensor_data(self, robot_id: str, sensor_name: str, data: object) -> None:
