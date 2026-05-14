@@ -219,6 +219,12 @@ class TestTopicParser:
         assert result is not None
         assert result["type"] == "topic_response"
 
+    def test_parse_station_topic_response_with_robot_id(self):
+        result = parse_station_topic("station/topic/response/robot_001")
+        assert result is not None
+        assert result["type"] == "topic_response"
+        assert result["robot_id"] == "robot_001"
+
     def test_parse_station_wrong_prefix(self):
         assert parse_station_topic("robot/robot_001/status") is None
 

@@ -198,6 +198,8 @@ class MainWindow(QMainWindow):
         sig.cmd_ack_received.connect(self._command.on_cmd_ack)
         sig.sensor_data_received.connect(self._on_sensor_data)
         sig.discover_response_received.connect(self._on_discover)
+        sig.topic_response_received.connect(self._topic_config.on_topic_response)
+        sig.config_response_received.connect(self._topic_config.on_config_response)
 
         self._act_connect.triggered.connect(self._mqtt_client.connect)
         self._act_disconnect.triggered.connect(self._mqtt_client.disconnect)
@@ -205,6 +207,15 @@ class MainWindow(QMainWindow):
         self._robot_list.discover_requested.connect(self._mqtt_client.send_discover)
         self._command.command_sent.connect(self._on_command)
         self._data_sender.send_json.connect(self._on_data_send)
+        self._topic_config.topic_request_requested.connect(
+            self._mqtt_client.send_topic_request
+        )
+        self._topic_config.config_sync_requested.connect(
+            self._mqtt_client.send_config_sync
+        )
+        self._topic_config.config_query_requested.connect(
+            self._mqtt_client.send_config_query
+        )
 
     def _init_ros_monitor(self) -> None:
         self._ros_timer = QTimer(self); self._ros_timer.timeout.connect(self._check_ros)
@@ -280,12 +291,16 @@ class MainWindow(QMainWindow):
         self._robot_list.on_status_received(robot_id, data)
         robots = self._robot_list.get_online_robots()
         self._command.on_robot_list_changed(robots)
+        self._topic_config.on_robot_list_changed(robots)
+        self._data_sender.on_robot_list_changed(robots)
         self._lb_online.setText(f"在线: {len(robots)}")
 
     def _on_discover(self, robot_id: str, data: dict) -> None:
         self._robot_list.on_discover_response(robot_id, data)
         robots = self._robot_list.get_online_robots()
         self._command.on_robot_list_changed(robots)
+        self._topic_config.on_robot_list_changed(robots)
+        self._data_sender.on_robot_list_changed(robots)
         self._lb_online.setText(f"在线: {len(robots)}")
 
     def _on_mqtt_connected(self) -> None:

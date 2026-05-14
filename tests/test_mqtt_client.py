@@ -178,6 +178,8 @@ class TestOnMessageStatus:
         client._on_message(mock_paho, None, mqtt_msg)
 
         resp_signal.assert_called_once()
+        assert resp_signal.call_args[0][0] == "robot_001"
+        assert resp_signal.call_args[0][1]["topic"] == "/odom"
 
     def test_config_response_received(self, client, mock_paho):
         cfg_signal = MagicMock()

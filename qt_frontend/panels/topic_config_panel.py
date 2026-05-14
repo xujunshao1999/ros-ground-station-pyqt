@@ -30,9 +30,33 @@ class SubscriptionEntry:
     status: str = "pending"
     compression: Dict[str, Any] = field(default_factory=dict)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "topic": self.topic,
+            "msg_type": self.msg_type,
+            "freq_limit": self.freq_limit,
+            "transport": self.transport,
+            "status": self.status,
+            "compression": dict(self.compression),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any], status: str = "pending") -> "SubscriptionEntry":
+        return cls(
+            topic=data.get("topic", ""),
+            msg_type=data.get("msg_type", ""),
+            freq_limit=float(data.get("freq_limit") or 0.0),
+            transport=data.get("transport", "auto"),
+            status=data.get("status", status),
+            compression=dict(data.get("compression") or data.get("options") or {}),
+        )
+
 
 class TopicConfigPanel(QWidget):
     config_changed = pyqtSignal()
+    topic_request_requested = pyqtSignal(str, dict)  # (robot_id, request)
+    config_sync_requested = pyqtSignal(str, dict)  # (robot_id, config)
+    config_query_requested = pyqtSignal(str)  # robot_id
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -57,17 +81,24 @@ class TopicConfigPanel(QWidget):
 
         # 按钮行
         btn_row1 = QHBoxLayout()
-        for text in ["+ 添加话题", "删除", "保存配置"]:
-            btn = QPushButton(text)
+        self._btn_add = QPushButton("+ 添加话题")
+        self._btn_delete = QPushButton("删除")
+        self._btn_save = QPushButton("保存配置")
+        self._btn_add.clicked.connect(self._show_add_form)
+        self._btn_delete.clicked.connect(self._delete_selected_entry)
+        self._btn_save.clicked.connect(self._save_config)
+        for btn in [self._btn_add, self._btn_delete, self._btn_save]:
             btn_row1.addWidget(btn)
         layout.addLayout(btn_row1)
 
         btn_row2 = QHBoxLayout()
-        btn_deploy = QPushButton("下发配置到机器人")
-        btn_deploy.setStyleSheet("QPushButton { font-weight: bold; }")
-        btn_row2.addWidget(btn_deploy)
-        btn_pull = QPushButton("从机器人拉取话题")
-        btn_row2.addWidget(btn_pull)
+        self._btn_deploy = QPushButton("下发配置到机器人")
+        self._btn_deploy.setStyleSheet("QPushButton { font-weight: bold; }")
+        self._btn_deploy.clicked.connect(self._deploy_config)
+        btn_row2.addWidget(self._btn_deploy)
+        self._btn_pull = QPushButton("从机器人拉取话题")
+        self._btn_pull.clicked.connect(self._pull_config)
+        btn_row2.addWidget(self._btn_pull)
         layout.addLayout(btn_row2)
 
         # 添加/编辑表单（可折叠）
@@ -119,14 +150,17 @@ class TopicConfigPanel(QWidget):
         f5.addWidget(self._combo_qos)
         form.addLayout(f5)
 
-        btn_confirm = QPushButton("确认")
-        btn_cancel = QPushButton("取消")
+        self._btn_confirm = QPushButton("确认")
+        self._btn_cancel = QPushButton("取消")
+        self._btn_confirm.clicked.connect(self._confirm_entry)
+        self._btn_cancel.clicked.connect(self._hide_form)
         form_row = QHBoxLayout()
-        form_row.addWidget(btn_confirm)
-        form_row.addWidget(btn_cancel)
+        form_row.addWidget(self._btn_confirm)
+        form_row.addWidget(self._btn_cancel)
         form.addLayout(form_row)
 
         layout.addWidget(self._form_group)
+        self._refresh_table()
 
     # ------------------------------------------------------------------
     # 纯逻辑方法（可测试）
@@ -150,3 +184,160 @@ class TopicConfigPanel(QWidget):
         elif tier_upper == "HEAVY":
             return "http_stream"
         return "mqtt_json"
+
+    @staticmethod
+    def build_topic_request(action: str, entry: SubscriptionEntry) -> Dict[str, Any]:
+        data = entry.to_dict()
+        data["action"] = action
+        return data
+
+    @staticmethod
+    def entries_from_config_response(data: Dict[str, Any]) -> List[SubscriptionEntry]:
+        return [
+            SubscriptionEntry.from_dict(sub, status="active")
+            for sub in data.get("subscriptions", [])
+            if sub.get("topic")
+        ]
+
+    @staticmethod
+    def apply_topic_response_to_entries(
+        entries: List[SubscriptionEntry], data: Dict[str, Any]
+    ) -> None:
+        topic = data.get("topic", "")
+        result = data.get("result", "")
+        action = data.get("action", "")
+        for entry in entries:
+            if entry.topic != topic:
+                continue
+            if result == "ok" and action == "unsubscribe":
+                entry.status = "inactive"
+            elif result == "ok":
+                entry.status = "active"
+            else:
+                entry.status = "failed"
+            return
+
+    # ------------------------------------------------------------------
+    # Slots
+    # ------------------------------------------------------------------
+
+    def on_robot_list_changed(self, robot_ids: List[str]) -> None:
+        current = self._robot_combo.currentData() or self._robot_combo.currentText()
+        self._robot_combo.blockSignals(True)
+        self._robot_combo.clear()
+        self._robot_combo.addItem("-- 选择 --", "")
+        for robot_id in robot_ids:
+            self._robot_combo.addItem(robot_id, robot_id)
+        if current:
+            idx = self._robot_combo.findData(current)
+            if idx >= 0:
+                self._robot_combo.setCurrentIndex(idx)
+        self._robot_combo.blockSignals(False)
+
+    def on_topic_response(self, robot_id: str, data: dict) -> None:
+        if robot_id != self._selected_robot_id():
+            return
+        self.apply_topic_response_to_entries(self._entries, data)
+        self._refresh_table()
+
+    def on_config_response(self, robot_id: str, data: dict) -> None:
+        if robot_id != self._selected_robot_id():
+            return
+        self._entries = self.entries_from_config_response(data)
+        self._refresh_table()
+        self.config_changed.emit()
+
+    # ------------------------------------------------------------------
+    # 内部
+    # ------------------------------------------------------------------
+
+    def _selected_robot_id(self) -> str:
+        return self._robot_combo.currentData() or ""
+
+    def _refresh_table(self) -> None:
+        self._table.setRowCount(len(self._entries))
+        for row, entry in enumerate(self._entries):
+            values = [
+                entry.topic,
+                entry.msg_type,
+                f"{entry.freq_limit:g}" if entry.freq_limit else "不限",
+                entry.transport,
+                entry.status,
+            ]
+            for col, value in enumerate(values):
+                self._table.setItem(row, col, QTableWidgetItem(value))
+
+    def _show_add_form(self) -> None:
+        self._edit_topic.clear()
+        self._combo_msg_type.setCurrentText("")
+        self._combo_transport.setCurrentIndex(0)
+        self._spin_freq.setValue(0.0)
+        self._form_group.setChecked(True)
+
+    def _hide_form(self) -> None:
+        self._form_group.setChecked(False)
+
+    def _entry_from_form(self) -> Optional[SubscriptionEntry]:
+        topic = self._edit_topic.text().strip()
+        msg_type = self._combo_msg_type.currentText().strip()
+        if not self.validate_topic(topic) or not self.validate_msg_type(msg_type):
+            return None
+
+        transport = self._combo_transport.currentText().split()[0].lower()
+        if transport == "auto":
+            transport_value = "auto"
+        else:
+            transport_value = self.transport_from_tier(transport)
+
+        return SubscriptionEntry(
+            topic=topic,
+            msg_type=msg_type,
+            freq_limit=float(self._spin_freq.value()),
+            transport=transport_value,
+            status="pending",
+            compression={},
+        )
+
+    def _confirm_entry(self) -> None:
+        entry = self._entry_from_form()
+        robot_id = self._selected_robot_id()
+        if entry is None or not robot_id:
+            return
+
+        self._entries = [e for e in self._entries if e.topic != entry.topic]
+        self._entries.append(entry)
+        self._refresh_table()
+        self._hide_form()
+        self.config_changed.emit()
+        self.topic_request_requested.emit(
+            robot_id, self.build_topic_request("subscribe", entry)
+        )
+
+    def _delete_selected_entry(self) -> None:
+        row = self._table.currentRow()
+        robot_id = self._selected_robot_id()
+        if row < 0 or row >= len(self._entries) or not robot_id:
+            return
+        entry = self._entries.pop(row)
+        self._refresh_table()
+        self.config_changed.emit()
+        self.topic_request_requested.emit(
+            robot_id, self.build_topic_request("unsubscribe", entry)
+        )
+
+    def _save_config(self) -> None:
+        self.config_changed.emit()
+
+    def _deploy_config(self) -> None:
+        robot_id = self._selected_robot_id()
+        if not robot_id:
+            return
+        self.config_sync_requested.emit(
+            robot_id,
+            {"subscriptions": [entry.to_dict() for entry in self._entries]},
+        )
+
+    def _pull_config(self) -> None:
+        robot_id = self._selected_robot_id()
+        if robot_id:
+            self.config_query_requested.emit(robot_id)

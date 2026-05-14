@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -604,11 +604,17 @@ class BaseAgent(ABC):
 
         if action == TopicAction.SUBSCRIBE.value:
             # 订阅话题
-            self._subscribed_topics[topic] = {
+            transport = data.get("transport", "auto")
+            sub_info = {
                 "msg_type": msg_type,
                 "freq_limit": freq_limit,
                 "options": options,
             }
+            self._subscribed_topics[topic] = sub_info
+            self._upsert_subscription_config(
+                topic, msg_type, freq_limit, transport, options
+            )
+            self._save_config()
             self._rate_limiter.set_limit(topic, freq_limit)
             self._on_topic_subscribed(topic, msg_type, options)
 
@@ -620,6 +626,7 @@ class BaseAgent(ABC):
                 msg_type=msg_type,
                 freq_limit=freq_limit,
                 result="ok",
+                transport=transport,
             ))
             self._mqtt_publish(
                 station_topic_response(self.config.robot_id),
@@ -631,6 +638,8 @@ class BaseAgent(ABC):
             self._subscribed_topics.pop(topic, None)
             self._rate_limiter.remove_limit(topic)
             self._on_topic_unsubscribed(topic)
+            self._remove_subscription_config(topic)
+            self._save_config()
 
             response = self._factory.topic_response(TopicResponseData(
                 request_id=data.get("request_id", ""),
@@ -685,32 +694,13 @@ class BaseAgent(ABC):
         logger.info(f"[Agent] Received config sync from station")
         data = message.data
 
-        new_subscriptions = data.get("subscriptions", [])
+        new_subscriptions = self._normalize_subscriptions(data.get("subscriptions", []))
         new_fleet_rules = data.get("fleet_rules", [])
 
-        # 合并配置
+        self._apply_subscription_config(new_subscriptions)
         self.config.subscriptions = new_subscriptions
         self.config.fleet_rules = new_fleet_rules
-
-        # 持久化到 config.yaml
         self._save_config()
-
-        # 逐条恢复订阅
-        for sub in new_subscriptions:
-            topic = sub.get("topic", "")
-            msg_type = sub.get("msg_type", "")
-            freq_limit = sub.get("freq_limit", self.config.default_freq_limit)
-            options = sub.get("compression", {})
-
-            if topic and topic not in self._subscribed_topics:
-                self._subscribed_topics[topic] = {
-                    "msg_type": msg_type,
-                    "freq_limit": freq_limit,
-                    "options": options,
-                }
-                self._rate_limiter.set_limit(topic, freq_limit)
-                self._on_topic_subscribed(topic, msg_type, options)
-                logger.info(f"[Agent] Config sync: subscribed to {topic}")
 
         # 回复确认
         response = self._factory.config_response(ConfigResponseData(
@@ -739,6 +729,7 @@ class BaseAgent(ABC):
 
     def _load_subscriptions_from_config(self) -> None:
         """启动时恢复持久化订阅"""
+        self.config.subscriptions = self._normalize_subscriptions(self.config.subscriptions)
         for sub in self.config.subscriptions:
             topic = sub.get("topic", "")
             msg_type = sub.get("msg_type", "")
@@ -754,6 +745,93 @@ class BaseAgent(ABC):
                 self._rate_limiter.set_limit(topic, freq_limit)
                 self._on_topic_subscribed(topic, msg_type, options)
                 logger.info(f"[Agent] Restored subscription: {topic}")
+
+    def _normalize_subscriptions(self, subscriptions: List[dict]) -> List[dict]:
+        """清洗订阅配置，保留协议字段并按 topic 去重。"""
+        normalized: List[dict] = []
+        seen = set()
+        for sub in subscriptions:
+            topic = sub.get("topic", "")
+            if not topic or topic in seen:
+                continue
+            seen.add(topic)
+            normalized.append({
+                "topic": topic,
+                "msg_type": sub.get("msg_type", ""),
+                "freq_limit": sub.get("freq_limit", self.config.default_freq_limit),
+                "transport": sub.get("transport", "auto"),
+                "compression": dict(sub.get("compression") or sub.get("options") or {}),
+            })
+        return normalized
+
+    def _subscription_runtime_info(self, sub: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "msg_type": sub.get("msg_type", ""),
+            "freq_limit": sub.get("freq_limit", self.config.default_freq_limit),
+            "options": dict(sub.get("compression") or {}),
+        }
+
+    def _runtime_subscription_changed(self, topic: str, sub: Dict[str, Any]) -> bool:
+        current = self._subscribed_topics.get(topic)
+        if current is None:
+            return True
+        desired = self._subscription_runtime_info(sub)
+        return (
+            current.get("msg_type") != desired["msg_type"]
+            or current.get("freq_limit") != desired["freq_limit"]
+            or current.get("options", {}) != desired["options"]
+        )
+
+    def _apply_subscription_config(self, subscriptions: List[dict]) -> None:
+        desired_by_topic = {sub["topic"]: sub for sub in subscriptions}
+
+        for topic in list(self._subscribed_topics.keys()):
+            if topic not in desired_by_topic:
+                self._subscribed_topics.pop(topic, None)
+                self._rate_limiter.remove_limit(topic)
+                self._on_topic_unsubscribed(topic)
+                logger.info(f"[Agent] Config sync: unsubscribed from {topic}")
+
+        for sub in subscriptions:
+            topic = sub["topic"]
+            msg_type = sub.get("msg_type", "")
+            freq_limit = sub.get("freq_limit", self.config.default_freq_limit)
+            options = sub.get("compression", {})
+
+            if self._runtime_subscription_changed(topic, sub):
+                if topic in self._subscribed_topics:
+                    self._on_topic_unsubscribed(topic)
+                self._subscribed_topics[topic] = self._subscription_runtime_info(sub)
+                self._rate_limiter.set_limit(topic, freq_limit)
+                self._on_topic_subscribed(topic, msg_type, options)
+                logger.info(f"[Agent] Config sync: subscribed to {topic}")
+
+    def _upsert_subscription_config(
+        self,
+        topic: str,
+        msg_type: str,
+        freq_limit: float,
+        transport: str,
+        compression: Dict[str, Any],
+    ) -> None:
+        next_sub = {
+            "topic": topic,
+            "msg_type": msg_type,
+            "freq_limit": freq_limit,
+            "transport": transport,
+            "compression": dict(compression),
+        }
+        remaining = [
+            sub for sub in self.config.subscriptions
+            if sub.get("topic") != topic
+        ]
+        self.config.subscriptions = self._normalize_subscriptions(remaining + [next_sub])
+
+    def _remove_subscription_config(self, topic: str) -> None:
+        self.config.subscriptions = self._normalize_subscriptions([
+            sub for sub in self.config.subscriptions
+            if sub.get("topic") != topic
+        ])
 
     def _save_config(self) -> None:
         """持久化当前配置到 agent/config.yaml"""

@@ -249,7 +249,10 @@ def parse_station_topic(topic: str) -> Optional[Dict[str, str]]:
         if len(parts) > 2 and parts[2] == "request":
             return {"type": "topic_request"}
         elif len(parts) > 2 and parts[2] == "response":
-            return {"type": "topic_response"}
+            result = {"type": "topic_response"}
+            if len(parts) > 3:
+                result["robot_id"] = parts[3]
+            return result
     elif len(parts) >= 4 and parts[2] == "config":
         if parts[3] == "sync":
             return {"type": "config_sync", "robot_id": parts[1]}

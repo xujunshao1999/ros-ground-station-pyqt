@@ -124,6 +124,64 @@ class TestTopicConfigPanel:
         assert entry.topic == "/odom"
         assert entry.status == "active"
 
+    def test_subscription_entry_round_trip(self):
+        entry = SubscriptionEntry(
+            topic="/scan",
+            msg_type="sensor_msgs/LaserScan",
+            freq_limit=5.0,
+            transport="mqtt_json",
+            status="active",
+            compression={"quality": 80},
+        )
+
+        restored = SubscriptionEntry.from_dict(entry.to_dict())
+
+        assert restored == entry
+
+    def test_build_topic_request_uses_entry_fields(self):
+        entry = SubscriptionEntry(
+            topic="/odom",
+            msg_type="nav_msgs/Odometry",
+            freq_limit=10.0,
+            transport="mqtt_json",
+            compression={"resize": [320, 240]},
+        )
+
+        req = TopicConfigPanel.build_topic_request("subscribe", entry)
+
+        assert req["action"] == "subscribe"
+        assert req["topic"] == "/odom"
+        assert req["msg_type"] == "nav_msgs/Odometry"
+        assert req["freq_limit"] == 10.0
+        assert req["transport"] == "mqtt_json"
+        assert req["compression"] == {"resize": [320, 240]}
+
+    def test_apply_config_response_loads_subscriptions(self):
+        entries = TopicConfigPanel.entries_from_config_response({
+            "subscriptions": [
+                {
+                    "topic": "/map",
+                    "msg_type": "nav_msgs/OccupancyGrid",
+                    "freq_limit": 1.0,
+                    "transport": "mqtt_json",
+                }
+            ]
+        })
+
+        assert len(entries) == 1
+        assert entries[0].topic == "/map"
+        assert entries[0].status == "active"
+
+    def test_apply_topic_response_marks_failed(self):
+        entry = SubscriptionEntry(topic="/scan", msg_type="sensor_msgs/LaserScan")
+
+        TopicConfigPanel.apply_topic_response_to_entries(
+            [entry],
+            {"topic": "/scan", "result": "failed", "message": "not found"},
+        )
+
+        assert entry.status == "failed"
+
 
 # ------------------------------------------------------------------
 # EventPanel formatters
