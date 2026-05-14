@@ -61,7 +61,7 @@ sys.modules["rospy.msg"] = mock_rospy.msg
 
 # Now import the module under test
 from agent.ros_msg_converter import ros_msg_to_dict  # noqa: E402
-from bridge.dict_to_ros_msg import _parse_type_str, dict_to_ros_msg  # noqa: E402
+from bridge.dict_to_ros_msg import _convert_value, _parse_type_str, dict_to_ros_msg  # noqa: E402
 
 
 # Reset warning counters for each test
@@ -188,6 +188,21 @@ class TestParseTypeStr:
 
     def test_empty_bracket(self):
         assert _parse_type_str("") == ("", False, None)
+
+
+class TestConvertValue:
+    """_convert_value 单元测试"""
+
+    def test_uint8_array_to_bytes(self):
+        """uint8[] 可转为 bytes"""
+        result = _convert_value([0, 1, 255, 128], "uint8[]")
+        assert isinstance(result, bytes)
+        assert result == bytes([0, 1, 255, 128])
+
+    def test_int8_array_stays_list(self):
+        """int8[] 保持 list，支持 OccupancyGrid.data 中的 -1"""
+        result = _convert_value([-1, 0, 100], "int8[]")
+        assert result == [-1, 0, 100]
 
 
 class TestDictToRosMsg:

@@ -72,8 +72,10 @@ def _convert_value(val: Any, type_str: str) -> Any:
         if not isinstance(val, (list, tuple)):
             return val
 
-        # uint8[] / int8[] / char[] / byte[] → bytes
-        if base_type in ("uint8", "int8", "char", "byte") and fixed_length is None:
+        # uint8[] / char[] / byte[] may be represented as bytes in genpy.
+        # int8[] must remain a list/tuple because signed values such as
+        # OccupancyGrid.data can contain -1.
+        if base_type in ("uint8", "char", "byte") and fixed_length is None:
             return bytes(b & 0xFF for b in val)
 
         # 嵌套消息数组

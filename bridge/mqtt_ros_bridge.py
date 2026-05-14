@@ -95,6 +95,7 @@ class MqttRosBridge:
         # ROS publishers created lazily
         self._ros_publishers: Dict[str, rospy.Publisher] = {}
         self._ros_subscribers: List[rospy.Subscriber] = []
+        self._publisher_ready_topics: set[str] = set()
 
         # Resolve config paths
         self._bridge_dir = Path(__file__).resolve().parent
@@ -294,6 +295,21 @@ class MqttRosBridge:
                     topic, msg_class, queue_size=10
                 )
             return self._ros_publishers[key]
+
+    def _wait_for_publisher_connection(
+        self, topic: str, pub: rospy.Publisher, timeout: float = 0.5
+    ) -> None:
+        """Give new ROS publishers a short window to connect to subscribers."""
+        if topic in self._publisher_ready_topics:
+            return
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not rospy.is_shutdown():
+            if pub.get_num_connections() > 0:
+                break
+            time.sleep(0.02)
+
+        self._publisher_ready_topics.add(topic)
 
     # ================================================================
     # MQTT callbacks
@@ -505,10 +521,16 @@ class MqttRosBridge:
         topics (``/tf``, ``/tf_static``, ``/joint_states``) so that
         RViz and other standard tools can consume them.
         """
+        total_start = time.monotonic()
+        payload_size = len(payload)
+        is_large_payload = payload_size >= 256 * 1024
+
         # 1. Decode the JSON payload (moved first for auto-detection)
         try:
+            decode_start = time.monotonic()
             text = payload.decode("utf-8")
             data_dict = json.loads(text)
+            decode_ms = (time.monotonic() - decode_start) * 1000.0
         except Exception as e:
             logger.error(
                 "[Bridge] Failed to decode sensor data from %s/%s: %s",
@@ -557,6 +579,7 @@ class MqttRosBridge:
 
         # 4. Convert to ROS message and publish
         try:
+            convert_start = time.monotonic()
             # Prefix frame_ids for multi-robot when enabled
             if (
                 self._namespace_tf_frames
@@ -565,6 +588,7 @@ class MqttRosBridge:
                 self._prefix_tf_frames(data_dict, robot_id)
 
             ros_msg = dict_to_ros_msg(data_dict, msg_type)
+            convert_ms = (time.monotonic() - convert_start) * 1000.0
 
             if is_canonical:
                 full_topic = ros_topic_str  # /tf, /tf_static, /joint_states
@@ -574,7 +598,36 @@ class MqttRosBridge:
             pub = self._get_or_create_typed_publisher(
                 full_topic, type(ros_msg)
             )
+            if is_large_payload:
+                logger.debug(
+                    "[Bridge] Large sensor payload: mqtt=%s/%s size=%.1fKB "
+                    "msg_type=%s ros_topic=%s decode=%.1fms convert=%.1fms "
+                    "connections=%d",
+                    robot_id,
+                    sensor_name,
+                    payload_size / 1024.0,
+                    msg_type,
+                    full_topic,
+                    decode_ms,
+                    convert_ms,
+                    pub.get_num_connections(),
+                )
+            self._wait_for_publisher_connection(full_topic, pub)
+
+            publish_start = time.monotonic()
             pub.publish(ros_msg)
+            publish_ms = (time.monotonic() - publish_start) * 1000.0
+
+            if is_large_payload:
+                total_ms = (time.monotonic() - total_start) * 1000.0
+                logger.debug(
+                    "[Bridge] Published large sensor payload: ros_topic=%s "
+                    "publish=%.1fms total=%.1fms connections=%d",
+                    full_topic,
+                    publish_ms,
+                    total_ms,
+                    pub.get_num_connections(),
+                )
             logger.debug(
                 "[Bridge] Published sensor data to ROS: %s (%s)",
                 full_topic, msg_type,
