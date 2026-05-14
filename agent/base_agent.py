@@ -697,11 +697,13 @@ class BaseAgent(ABC):
         data = message.data
 
         new_subscriptions = self._normalize_subscriptions(data.get("subscriptions", []))
-        new_fleet_rules = data.get("fleet_rules", [])
+        has_fleet_rules = "fleet_rules" in data
+        new_fleet_rules = data.get("fleet_rules", self.config.fleet_rules)
 
         self._apply_subscription_config(new_subscriptions)
         self.config.subscriptions = new_subscriptions
-        self.config.fleet_rules = new_fleet_rules
+        if has_fleet_rules:
+            self.config.fleet_rules = new_fleet_rules
         self._save_config()
 
         # 回复确认
@@ -846,19 +848,76 @@ class BaseAgent(ABC):
             else Path(__file__).resolve().parent / "config.yaml"
         )
         try:
-            config_dict = {}
             if config_path.exists():
-                with open(config_path, "r", encoding="utf-8") as f:
-                    loaded = yaml.safe_load(f) or {}
-                    if isinstance(loaded, dict):
-                        config_dict = loaded
-            config_dict["subscriptions"] = self.config.subscriptions
-            config_dict["fleet_rules"] = self.config.fleet_rules
+                original = config_path.read_text(encoding="utf-8")
+            else:
+                original = ""
+            updated = self._replace_top_level_yaml_section(
+                original, "subscriptions", self.config.subscriptions
+            )
             with open(config_path, "w", encoding="utf-8") as f:
-                yaml.safe_dump(config_dict, f, default_flow_style=False, allow_unicode=True)
+                f.write(updated)
             logger.info(f"[Agent] Config saved to {config_path}")
         except Exception as e:
             logger.error(f"[Agent] Failed to save config: {e}")
+
+    @staticmethod
+    def _dump_top_level_yaml_section(key: str, value: Any) -> List[str]:
+        import yaml
+
+        dumped = yaml.safe_dump(
+            {key: value},
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        return dumped.splitlines(keepends=True)
+
+    @staticmethod
+    def _is_top_level_yaml_key(line: str) -> bool:
+        if not line or line[0].isspace() or line.startswith("#"):
+            return False
+        stripped = line.strip()
+        if ":" not in stripped:
+            return False
+        key = stripped.split(":", 1)[0]
+        return bool(key) and all(ch.isalnum() or ch in "_-" for ch in key)
+
+    @classmethod
+    def _replace_top_level_yaml_section(
+        cls, original: str, key: str, value: Any
+    ) -> str:
+        lines = original.splitlines(keepends=True)
+        new_section = cls._dump_top_level_yaml_section(key, value)
+
+        start = None
+        for idx, line in enumerate(lines):
+            if line.startswith(f"{key}:"):
+                start = idx
+                break
+
+        if start is None:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] += "\n"
+            if lines and lines[-1].strip():
+                lines.append("\n")
+            return "".join(lines + new_section)
+
+        next_key = len(lines)
+        for idx in range(start + 1, len(lines)):
+            if cls._is_top_level_yaml_key(lines[idx]):
+                next_key = idx
+                break
+
+        end = next_key
+        while end > start + 1:
+            previous = lines[end - 1]
+            if previous.strip() == "" or previous.lstrip().startswith("#"):
+                end -= 1
+            else:
+                break
+
+        return "".join(lines[:start] + new_section + lines[end:])
 
     # ============================================================
     # 状态上报

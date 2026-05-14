@@ -172,7 +172,7 @@ def test_agent_config_tracks_source_path_for_save(tmp_path):
     assert config.config_path == str(config_path)
 
 
-def test_save_config_only_updates_subscriptions_and_fleet_rules(tmp_path):
+def test_save_config_only_updates_subscriptions(tmp_path):
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         "# keep header\n"
@@ -210,4 +210,72 @@ def test_save_config_only_updates_subscriptions_and_fleet_rules(tmp_path):
     assert saved["status_interval"] == 3.0
     assert saved["unknown_runtime_key"] == "keep-me"
     assert saved["subscriptions"] == agent.config.subscriptions
-    assert saved["fleet_rules"] == []
+    assert saved["fleet_rules"] == [{"name": "old-rule"}]
+
+
+def test_save_config_preserves_yaml_text_outside_subscriptions(tmp_path):
+    config_path = tmp_path / "agent.yaml"
+    config_path.write_text(
+        "# keep header\n"
+        "robot_id: \"robot_001\"\n"
+        "\n"
+        "# custom comment before broker\n"
+        "broker_host: \"custom-broker\"\n"
+        "subscriptions:\n"
+        "  - topic: /old\n"
+        "    msg_type: std_msgs/String\n"
+        "\n"
+        "# 编队通信规则（应保留）\n"
+        "fleet_rules:\n"
+        "  - name: old-rule\n",
+        encoding="utf-8",
+    )
+    config = AgentConfig.from_yaml(str(config_path))
+    agent = MockAgent(config)
+    agent.config.subscriptions = [
+        {
+            "topic": "/scan",
+            "msg_type": "sensor_msgs/LaserScan",
+            "freq_limit": 5.0,
+            "transport": "mqtt_json",
+            "compression": {},
+        }
+    ]
+
+    agent._save_config()
+
+    text = config_path.read_text(encoding="utf-8")
+    assert "# keep header\n" in text
+    assert "robot_id: \"robot_001\"\n" in text
+    assert "# custom comment before broker\n" in text
+    assert "broker_host: \"custom-broker\"\n" in text
+    assert "# 编队通信规则（应保留）\n" in text
+    assert "  - name: old-rule\n" in text
+    assert "topic: /old" not in text
+    assert "topic: /scan" in text
+
+
+def test_config_sync_without_fleet_rules_keeps_existing_fleet_rules():
+    agent = RecordingAgent(AgentConfig(
+        robot_id="robot_001",
+        subscriptions=[
+            {
+                "topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "compression": {},
+            }
+        ],
+        fleet_rules=[{"name": "keep-rule"}],
+    ))
+
+    agent._handle_config_sync(Message(
+        src="station",
+        dst="robot_001",
+        type=MessageType.CONFIG_SYNC,
+        data={"subscriptions": []},
+    ))
+
+    assert agent.config.subscriptions == []
+    assert agent.config.fleet_rules == [{"name": "keep-rule"}]
