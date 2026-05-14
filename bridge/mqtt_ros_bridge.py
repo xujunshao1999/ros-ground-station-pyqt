@@ -909,10 +909,18 @@ class MqttRosBridge:
                     "topic": ros_topic_str,
                     "msg_type": sub_info.get("msg_type", ""),
                     "freq_limit": sub_info.get("freq_limit", 10.0),
+                    "transport": sub_info.get("transport", "auto"),
+                    "compression": sub_info.get("compression", {}),
                 }
+                message = Message(
+                    src="mqtt_ros_bridge",
+                    dst=robot_id,
+                    type=MessageType.TOPIC_REQUEST,
+                    data=request,
+                )
                 self._mqtt_publish(
                     station_topic_request(),
-                    json.dumps(request).encode("utf-8"),
+                    message.to_json().encode("utf-8"),
                     qos=1,
                 )
                 restored += 1

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+import yaml
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
@@ -61,6 +64,9 @@ class TopicConfigPanel(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._entries: List[SubscriptionEntry] = []
+        self._transmit_config_path = (
+            Path(__file__).resolve().parents[1] / "config" / "transmit_config.yaml"
+        )
 
         layout = QVBoxLayout(self)
 
@@ -68,6 +74,7 @@ class TopicConfigPanel(QWidget):
         robot_row = QHBoxLayout()
         robot_row.addWidget(QLabel("目标机器人:"))
         self._robot_combo = QComboBox()
+        self._robot_combo.currentIndexChanged.connect(self._load_selected_robot_config)
         robot_row.addWidget(self._robot_combo)
         layout.addLayout(robot_row)
 
@@ -200,6 +207,64 @@ class TopicConfigPanel(QWidget):
         ]
 
     @staticmethod
+    def build_transmit_config(
+        existing: Dict[str, Any],
+        robot_id: str,
+        entries: List[SubscriptionEntry],
+    ) -> Dict[str, Any]:
+        config = dict(existing)
+        subscriptions = dict(config.get("subscriptions") or {})
+        robot_subscriptions: Dict[str, Dict[str, Any]] = {}
+
+        for entry in entries:
+            data = entry.to_dict()
+            robot_subscriptions[entry.topic] = {
+                "msg_type": data.get("msg_type", ""),
+                "freq_limit": data.get("freq_limit", 0.0),
+                "transport": data.get("transport", "auto"),
+                "compression": dict(data.get("compression") or {}),
+            }
+
+        subscriptions[robot_id] = robot_subscriptions
+        config["subscriptions"] = subscriptions
+        return config
+
+    @staticmethod
+    def entries_from_transmit_config(
+        config: Dict[str, Any], robot_id: str
+    ) -> List[SubscriptionEntry]:
+        robot_subscriptions = (config.get("subscriptions") or {}).get(robot_id, {})
+        entries: List[SubscriptionEntry] = []
+        for topic, sub_info in robot_subscriptions.items():
+            data = dict(sub_info or {})
+            data["topic"] = topic
+            entries.append(SubscriptionEntry.from_dict(data, status="saved"))
+        return entries
+
+    @staticmethod
+    def load_transmit_config_file(path: Union[str, Path]) -> Dict[str, Any]:
+        p = Path(path)
+        if not p.exists():
+            return {"subscriptions": {}}
+        with open(p, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+        return loaded if isinstance(loaded, dict) else {"subscriptions": {}}
+
+    @staticmethod
+    def save_transmit_config_file(
+        path: Union[str, Path],
+        robot_id: str,
+        entries: List[SubscriptionEntry],
+    ) -> Dict[str, Any]:
+        p = Path(path)
+        existing = TopicConfigPanel.load_transmit_config_file(p)
+        config = TopicConfigPanel.build_transmit_config(existing, robot_id, entries)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            yaml.safe_dump(config, f, default_flow_style=False, allow_unicode=True)
+        return config
+
+    @staticmethod
     def apply_topic_response_to_entries(
         entries: List[SubscriptionEntry], data: Dict[str, Any]
     ) -> None:
@@ -233,6 +298,7 @@ class TopicConfigPanel(QWidget):
             if idx >= 0:
                 self._robot_combo.setCurrentIndex(idx)
         self._robot_combo.blockSignals(False)
+        self._load_selected_robot_config()
 
     def on_topic_response(self, robot_id: str, data: dict) -> None:
         if robot_id != self._selected_robot_id():
@@ -326,6 +392,16 @@ class TopicConfigPanel(QWidget):
         )
 
     def _save_config(self) -> None:
+        robot_id = self._selected_robot_id()
+        if not robot_id:
+            return
+        self.save_transmit_config_file(
+            self._transmit_config_path, robot_id, self._entries
+        )
+        for entry in self._entries:
+            if entry.status == "pending":
+                entry.status = "saved"
+        self._refresh_table()
         self.config_changed.emit()
 
     def _deploy_config(self) -> None:
@@ -341,3 +417,16 @@ class TopicConfigPanel(QWidget):
         robot_id = self._selected_robot_id()
         if robot_id:
             self.config_query_requested.emit(robot_id)
+
+    def _load_selected_robot_config(self) -> None:
+        robot_id = self._selected_robot_id()
+        if not robot_id:
+            self._entries = []
+            self._refresh_table()
+            return
+        try:
+            config = self.load_transmit_config_file(self._transmit_config_path)
+        except Exception:
+            return
+        self._entries = self.entries_from_transmit_config(config, robot_id)
+        self._refresh_table()

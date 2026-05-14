@@ -518,7 +518,48 @@ class TestConfigLoading:
 
 
 # ===================================================================
-# 9. TestMiscHelpers
+# 9. TestStartupRecovery
+# ===================================================================
+
+class TestStartupRecovery:
+    """Saved transmit_config subscriptions are restored as protocol messages."""
+
+    def test_restore_subscriptions_publishes_topic_request_messages(
+        self, bridge: MqttRosBridge
+    ):
+        bridge._load_transmit_config = MagicMock(return_value={
+            "subscriptions": {
+                "robot_001": {
+                    "/scan": {
+                        "msg_type": "sensor_msgs/LaserScan",
+                        "freq_limit": 5.0,
+                        "transport": "mqtt_json",
+                        "compression": {},
+                    }
+                }
+            }
+        })
+        bridge._mqtt_publish = MagicMock()
+
+        bridge._restore_subscriptions()
+
+        bridge._mqtt_publish.assert_called_once()
+        mqtt_topic, payload = bridge._mqtt_publish.call_args[0][:2]
+        message = Message.from_json(payload.decode("utf-8"))
+
+        assert mqtt_topic == "station/topic/request"
+        assert message.type == MessageType.TOPIC_REQUEST
+        assert message.dst == "robot_001"
+        assert message.data["action"] == "subscribe"
+        assert message.data["topic"] == "/scan"
+        assert message.data["msg_type"] == "sensor_msgs/LaserScan"
+        assert message.data["freq_limit"] == 5.0
+        assert message.data["transport"] == "mqtt_json"
+        assert message.data["compression"] == {}
+
+
+# ===================================================================
+# 10. TestMiscHelpers
 # ===================================================================
 
 class TestMiscHelpers:

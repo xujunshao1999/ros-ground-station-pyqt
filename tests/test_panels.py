@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 import pytest
+import yaml
 
 from qt_frontend.panels.command_panel import CommandPanel
 from qt_frontend.panels.event_panel import EventPanel
@@ -181,6 +182,73 @@ class TestTopicConfigPanel:
         )
 
         assert entry.status == "failed"
+
+    def test_build_transmit_config_preserves_existing_fields(self):
+        entry = SubscriptionEntry(
+            topic="/scan",
+            msg_type="sensor_msgs/LaserScan",
+            freq_limit=5.0,
+            transport="mqtt_json",
+            status="active",
+        )
+
+        config = TopicConfigPanel.build_transmit_config(
+            {"robots": {"legacy": {}}, "subscriptions": {"old": {}}},
+            "robot_001",
+            [entry],
+        )
+
+        assert config["robots"] == {"legacy": {}}
+        assert config["subscriptions"] == {
+            "old": {},
+            "robot_001": {
+                "/scan": {
+                    "msg_type": "sensor_msgs/LaserScan",
+                    "freq_limit": 5.0,
+                    "transport": "mqtt_json",
+                    "compression": {},
+                }
+            },
+        }
+
+    def test_entries_from_transmit_config_for_robot(self):
+        entries = TopicConfigPanel.entries_from_transmit_config(
+            {
+                "subscriptions": {
+                    "robot_001": {
+                        "/odom": {
+                            "msg_type": "nav_msgs/Odometry",
+                            "freq_limit": 10.0,
+                            "transport": "mqtt_json",
+                        }
+                    }
+                }
+            },
+            "robot_001",
+        )
+
+        assert len(entries) == 1
+        assert entries[0].topic == "/odom"
+        assert entries[0].status == "saved"
+
+    def test_save_and_load_transmit_config_file(self, tmp_path):
+        path = tmp_path / "transmit_config.yaml"
+        panel_entries = [
+            SubscriptionEntry(
+                topic="/map",
+                msg_type="nav_msgs/OccupancyGrid",
+                freq_limit=1.0,
+                transport="mqtt_json",
+            )
+        ]
+
+        TopicConfigPanel.save_transmit_config_file(path, "robot_001", panel_entries)
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+        assert loaded["subscriptions"]["robot_001"]["/map"]["msg_type"] == (
+            "nav_msgs/OccupancyGrid"
+        )
+        assert TopicConfigPanel.load_transmit_config_file(path) == loaded
 
 
 # ------------------------------------------------------------------
