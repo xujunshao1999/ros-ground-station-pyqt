@@ -282,12 +282,17 @@ class TopicConfigPanel(QWidget):
                 entry.status = "failed"
             return
 
+    @staticmethod
+    def should_reload_saved_config(previous_robot_id: str, current_robot_id: str) -> bool:
+        return previous_robot_id != current_robot_id
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
 
     def on_robot_list_changed(self, robot_ids: List[str]) -> None:
-        current = self._robot_combo.currentData() or self._robot_combo.currentText()
+        previous_robot_id = self._selected_robot_id()
+        current = previous_robot_id or self._robot_combo.currentText()
         self._robot_combo.blockSignals(True)
         self._robot_combo.clear()
         self._robot_combo.addItem("-- 选择 --", "")
@@ -298,7 +303,9 @@ class TopicConfigPanel(QWidget):
             if idx >= 0:
                 self._robot_combo.setCurrentIndex(idx)
         self._robot_combo.blockSignals(False)
-        self._load_selected_robot_config()
+        current_robot_id = self._selected_robot_id()
+        if self.should_reload_saved_config(previous_robot_id, current_robot_id):
+            self._load_selected_robot_config()
 
     def on_topic_response(self, robot_id: str, data: dict) -> None:
         if robot_id != self._selected_robot_id():

@@ -250,6 +250,11 @@ class TestTopicConfigPanel:
         )
         assert TopicConfigPanel.load_transmit_config_file(path) == loaded
 
+    def test_robot_list_refresh_only_reloads_when_selected_robot_changes(self):
+        assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_001") is False
+        assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_002") is True
+        assert TopicConfigPanel.should_reload_saved_config("robot_001", "") is True
+
 
 # ------------------------------------------------------------------
 # EventPanel formatters
