@@ -96,6 +96,7 @@ class AgentConfig:
     reconnect_delay: float = 5.0  # 重连延迟（秒）
     subscriptions: list = field(default_factory=list)  # 持久订阅列表
     fleet_rules: list = field(default_factory=list)  # 编队通信规则
+    config_path: str = ""  # 当前配置文件路径，用于写回
 
     def __post_init__(self):
         """校验配置字段"""
@@ -155,6 +156,7 @@ class AgentConfig:
             reconnect_delay=raw.get("reconnect_delay", 5.0),
             subscriptions=raw.get("subscriptions", []),
             fleet_rules=raw.get("fleet_rules", []),
+            config_path=str(p),
         )
 
 
@@ -838,7 +840,11 @@ class BaseAgent(ABC):
         from pathlib import Path
         import yaml
 
-        config_path = Path(__file__).resolve().parent / "config.yaml"
+        config_path = (
+            Path(self.config.config_path)
+            if self.config.config_path
+            else Path(__file__).resolve().parent / "config.yaml"
+        )
         try:
             config_dict = {
                 "robot_id": self.config.robot_id,

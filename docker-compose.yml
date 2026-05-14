@@ -29,7 +29,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./protocol:/app/protocol:ro
-      - ./agent:/app/agent:ro
+      - ./agent:/app/agent:rw
       - ./docker/sensor_simulator.py:/app/docker/sensor_simulator.py:ro
     stdin_open: true
     tty: true
@@ -50,7 +50,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./protocol:/app/protocol:ro
-      - ./agent:/app/agent:ro
+      - ./agent:/app/agent:rw
       - ./docker/sensor_simulator.py:/app/docker/sensor_simulator.py:ro
     stdin_open: true
     tty: true
@@ -73,7 +73,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./protocol:/app/protocol:ro
-      - ./agent:/app/agent:ro
+      - ./agent:/app/agent:rw
       - ./docker/supervisord-turtlebot3.conf:/etc/supervisor/conf.d/ros-agent.conf:ro
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     devices:

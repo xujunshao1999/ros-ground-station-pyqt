@@ -200,6 +200,7 @@ class MainWindow(QMainWindow):
         sig.discover_response_received.connect(self._on_discover)
         sig.topic_response_received.connect(self._topic_config.on_topic_response)
         sig.config_response_received.connect(self._topic_config.on_config_response)
+        sig.discover_response_received.connect(self._topic_config.on_discover_response)
 
         self._act_connect.triggered.connect(self._mqtt_client.connect)
         self._act_disconnect.triggered.connect(self._mqtt_client.disconnect)

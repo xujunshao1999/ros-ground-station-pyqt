@@ -153,3 +153,18 @@ def test_config_sync_converges_added_updated_and_removed_subscriptions():
     assert agent.config.fleet_rules == [{"name": "reserved"}]
     assert agent.saved_count == 1
     assert agent.published[-1][1]["type"] == "config_response"
+
+
+def test_agent_config_tracks_source_path_for_save(tmp_path):
+    config_path = tmp_path / "agent.yaml"
+    config_path.write_text(
+        "robot_id: robot_001\n"
+        "subscriptions:\n"
+        "  - topic: /scan\n"
+        "    msg_type: sensor_msgs/LaserScan\n",
+        encoding="utf-8",
+    )
+
+    config = AgentConfig.from_yaml(str(config_path))
+
+    assert config.config_path == str(config_path)

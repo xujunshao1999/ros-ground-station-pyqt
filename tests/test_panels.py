@@ -250,6 +250,56 @@ class TestTopicConfigPanel:
         )
         assert TopicConfigPanel.load_transmit_config_file(path) == loaded
 
+    def test_build_config_sync_payload_omits_ui_status(self):
+        entry = SubscriptionEntry(
+            topic="/scan",
+            msg_type="sensor_msgs/LaserScan",
+            freq_limit=5.0,
+            transport="mqtt_json",
+            status="active",
+        )
+
+        payload = TopicConfigPanel.build_config_sync_payload([entry])
+
+        assert payload == {
+            "subscriptions": [
+                {
+                    "topic": "/scan",
+                    "msg_type": "sensor_msgs/LaserScan",
+                    "freq_limit": 5.0,
+                    "transport": "mqtt_json",
+                    "compression": {},
+                }
+            ]
+        }
+
+    def test_build_available_topic_entries(self):
+        entries = TopicConfigPanel.entries_from_available_topics([
+            {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
+            {"topic": "/odom", "msg_type": "nav_msgs/Odometry"},
+            {"topic": "", "msg_type": ""},
+        ])
+
+        assert [(entry.topic, entry.msg_type, entry.status) for entry in entries] == [
+            ("/scan", "sensor_msgs/LaserScan", "available"),
+            ("/odom", "nav_msgs/Odometry", "available"),
+        ]
+
+    def test_available_topics_cache_is_keyed_by_robot(self):
+        cache = {}
+
+        TopicConfigPanel.update_available_topics_cache(
+            cache,
+            "robot_001",
+            {"topics": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+        )
+
+        assert cache == {
+            "robot_001": [
+                {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}
+            ]
+        }
+
     def test_robot_list_refresh_only_reloads_when_selected_robot_changes(self):
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_001") is False
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_002") is True

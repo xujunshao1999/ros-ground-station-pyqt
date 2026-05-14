@@ -64,6 +64,7 @@ class TopicConfigPanel(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._entries: List[SubscriptionEntry] = []
+        self._available_topics_by_robot: Dict[str, List[Dict[str, Any]]] = {}
         self._transmit_config_path = (
             Path(__file__).resolve().parents[1] / "config" / "transmit_config.yaml"
         )
@@ -113,6 +114,16 @@ class TopicConfigPanel(QWidget):
         self._form_group.setCheckable(True)
         self._form_group.setChecked(False)
         form = QVBoxLayout(self._form_group)
+
+        available_row = QHBoxLayout()
+        available_row.addWidget(QLabel("机器人话题:"))
+        self._combo_available_topics = QComboBox()
+        self._combo_available_topics.addItem("-- 选择机器人话题 --", None)
+        self._combo_available_topics.currentIndexChanged.connect(
+            self._on_available_topic_selected
+        )
+        available_row.addWidget(self._combo_available_topics)
+        form.addLayout(available_row)
 
         f1 = QHBoxLayout()
         f1.addWidget(QLabel("ROS 话题:"))
@@ -199,12 +210,52 @@ class TopicConfigPanel(QWidget):
         return data
 
     @staticmethod
+    def entry_to_protocol_dict(entry: SubscriptionEntry) -> Dict[str, Any]:
+        data = entry.to_dict()
+        data.pop("status", None)
+        return data
+
+    @staticmethod
+    def build_config_sync_payload(entries: List[SubscriptionEntry]) -> Dict[str, Any]:
+        return {
+            "subscriptions": [
+                TopicConfigPanel.entry_to_protocol_dict(entry)
+                for entry in entries
+            ]
+        }
+
+    @staticmethod
     def entries_from_config_response(data: Dict[str, Any]) -> List[SubscriptionEntry]:
         return [
             SubscriptionEntry.from_dict(sub, status="active")
             for sub in data.get("subscriptions", [])
             if sub.get("topic")
         ]
+
+    @staticmethod
+    def entries_from_available_topics(topics: List[Dict[str, Any]]) -> List[SubscriptionEntry]:
+        return [
+            SubscriptionEntry(
+                topic=item.get("topic", ""),
+                msg_type=item.get("msg_type", ""),
+                status="available",
+            )
+            for item in topics
+            if item.get("topic") and item.get("msg_type")
+        ]
+
+    @staticmethod
+    def update_available_topics_cache(
+        cache: Dict[str, List[Dict[str, Any]]],
+        robot_id: str,
+        data: Dict[str, Any],
+    ) -> None:
+        topics = [
+            {"topic": item.get("topic", ""), "msg_type": item.get("msg_type", "")}
+            for item in data.get("topics", [])
+            if item.get("topic") and item.get("msg_type")
+        ]
+        cache[robot_id] = topics
 
     @staticmethod
     def build_transmit_config(
@@ -320,6 +371,13 @@ class TopicConfigPanel(QWidget):
         self._refresh_table()
         self.config_changed.emit()
 
+    def on_discover_response(self, robot_id: str, data: dict) -> None:
+        self.update_available_topics_cache(
+            self._available_topics_by_robot, robot_id, data
+        )
+        if robot_id == self._selected_robot_id():
+            self._refresh_available_topics()
+
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
@@ -339,6 +397,17 @@ class TopicConfigPanel(QWidget):
             ]
             for col, value in enumerate(values):
                 self._table.setItem(row, col, QTableWidgetItem(value))
+
+    def _refresh_available_topics(self) -> None:
+        robot_id = self._selected_robot_id()
+        topics = self._available_topics_by_robot.get(robot_id, [])
+        self._combo_available_topics.blockSignals(True)
+        self._combo_available_topics.clear()
+        self._combo_available_topics.addItem("-- 选择机器人话题 --", None)
+        for entry in self.entries_from_available_topics(topics):
+            label = f"{entry.topic}  ({entry.msg_type})"
+            self._combo_available_topics.addItem(label, entry.to_dict())
+        self._combo_available_topics.blockSignals(False)
 
     def _show_add_form(self) -> None:
         self._edit_topic.clear()
@@ -370,6 +439,13 @@ class TopicConfigPanel(QWidget):
             status="pending",
             compression={},
         )
+
+    def _on_available_topic_selected(self) -> None:
+        data = self._combo_available_topics.currentData()
+        if not isinstance(data, dict):
+            return
+        self._edit_topic.setText(data.get("topic", ""))
+        self._combo_msg_type.setCurrentText(data.get("msg_type", ""))
 
     def _confirm_entry(self) -> None:
         entry = self._entry_from_form()
@@ -417,8 +493,15 @@ class TopicConfigPanel(QWidget):
             return
         self.config_sync_requested.emit(
             robot_id,
-            {"subscriptions": [entry.to_dict() for entry in self._entries]},
+            self.build_config_sync_payload(self._entries),
         )
+        self.save_transmit_config_file(
+            self._transmit_config_path, robot_id, self._entries
+        )
+        for entry in self._entries:
+            if entry.status in ("pending", "active", "available"):
+                entry.status = "saved"
+        self._refresh_table()
 
     def _pull_config(self) -> None:
         robot_id = self._selected_robot_id()
@@ -437,3 +520,4 @@ class TopicConfigPanel(QWidget):
             return
         self._entries = self.entries_from_transmit_config(config, robot_id)
         self._refresh_table()
+        self._refresh_available_topics()
