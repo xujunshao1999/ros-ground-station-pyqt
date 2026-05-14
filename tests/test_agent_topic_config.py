@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import List, Tuple
 
+import yaml
+
 from agent.base_agent import AgentConfig
 from agent.mock_agent import MockAgent
 from protocol.messages import Message, MessageType
@@ -168,3 +170,44 @@ def test_agent_config_tracks_source_path_for_save(tmp_path):
     config = AgentConfig.from_yaml(str(config_path))
 
     assert config.config_path == str(config_path)
+
+
+def test_save_config_only_updates_subscriptions_and_fleet_rules(tmp_path):
+    config_path = tmp_path / "agent.yaml"
+    config_path.write_text(
+        "# keep header\n"
+        "robot_id: robot_001\n"
+        "broker_host: custom-broker\n"
+        "broker_port: 1884\n"
+        "status_interval: 3.0\n"
+        "unknown_runtime_key: keep-me\n"
+        "subscriptions:\n"
+        "  - topic: /old\n"
+        "    msg_type: std_msgs/String\n"
+        "fleet_rules:\n"
+        "  - name: old-rule\n",
+        encoding="utf-8",
+    )
+    config = AgentConfig.from_yaml(str(config_path))
+    agent = MockAgent(config)
+    agent.config.subscriptions = [
+        {
+            "topic": "/scan",
+            "msg_type": "sensor_msgs/LaserScan",
+            "freq_limit": 5.0,
+            "transport": "mqtt_json",
+            "compression": {},
+        }
+    ]
+    agent.config.fleet_rules = []
+
+    agent._save_config()
+
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["robot_id"] == "robot_001"
+    assert saved["broker_host"] == "custom-broker"
+    assert saved["broker_port"] == 1884
+    assert saved["status_interval"] == 3.0
+    assert saved["unknown_runtime_key"] == "keep-me"
+    assert saved["subscriptions"] == agent.config.subscriptions
+    assert saved["fleet_rules"] == []

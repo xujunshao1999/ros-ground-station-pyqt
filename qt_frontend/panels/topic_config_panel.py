@@ -264,31 +264,51 @@ class TopicConfigPanel(QWidget):
         entries: List[SubscriptionEntry],
     ) -> Dict[str, Any]:
         config = dict(existing)
-        subscriptions = dict(config.get("subscriptions") or {})
-        robot_subscriptions: Dict[str, Dict[str, Any]] = {}
-
-        for entry in entries:
-            data = entry.to_dict()
-            robot_subscriptions[entry.topic] = {
-                "msg_type": data.get("msg_type", ""),
-                "freq_limit": data.get("freq_limit", 0.0),
-                "transport": data.get("transport", "auto"),
-                "compression": dict(data.get("compression") or {}),
-            }
+        subscriptions = TopicConfigPanel.normalize_transmit_subscriptions(
+            config.get("subscriptions") or {}
+        )
+        robot_subscriptions = [
+            TopicConfigPanel.entry_to_protocol_dict(entry)
+            for entry in entries
+        ]
 
         subscriptions[robot_id] = robot_subscriptions
         config["subscriptions"] = subscriptions
         return config
 
     @staticmethod
+    def normalize_transmit_subscriptions(raw: Any) -> Dict[str, List[Dict[str, Any]]]:
+        if not isinstance(raw, dict):
+            return {}
+
+        normalized: Dict[str, List[Dict[str, Any]]] = {}
+        for robot_id, robot_subscriptions in raw.items():
+            entries: List[Dict[str, Any]] = []
+            if isinstance(robot_subscriptions, list):
+                for item in robot_subscriptions:
+                    if isinstance(item, dict) and item.get("topic"):
+                        entries.append(dict(item))
+            elif isinstance(robot_subscriptions, dict):
+                for topic, sub_info in robot_subscriptions.items():
+                    if not isinstance(sub_info, dict):
+                        continue
+                    data = dict(sub_info)
+                    data["topic"] = topic
+                    entries.append(data)
+            normalized[robot_id] = entries
+        return normalized
+
+    @staticmethod
     def entries_from_transmit_config(
         config: Dict[str, Any], robot_id: str
     ) -> List[SubscriptionEntry]:
-        robot_subscriptions = (config.get("subscriptions") or {}).get(robot_id, {})
+        subscriptions = TopicConfigPanel.normalize_transmit_subscriptions(
+            config.get("subscriptions") or {}
+        )
+        robot_subscriptions = subscriptions.get(robot_id, [])
         entries: List[SubscriptionEntry] = []
-        for topic, sub_info in robot_subscriptions.items():
+        for sub_info in robot_subscriptions:
             data = dict(sub_info or {})
-            data["topic"] = topic
             entries.append(SubscriptionEntry.from_dict(data, status="saved"))
         return entries
 

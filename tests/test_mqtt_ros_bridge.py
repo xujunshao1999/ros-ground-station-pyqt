@@ -529,14 +529,15 @@ class TestStartupRecovery:
     ):
         bridge._load_transmit_config = MagicMock(return_value={
             "subscriptions": {
-                "robot_001": {
-                    "/scan": {
+                "robot_001": [
+                    {
+                        "topic": "/scan",
                         "msg_type": "sensor_msgs/LaserScan",
                         "freq_limit": 5.0,
                         "transport": "mqtt_json",
                         "compression": {},
                     }
-                }
+                ]
             }
         })
         bridge._mqtt_publish = MagicMock()
@@ -556,6 +557,19 @@ class TestStartupRecovery:
         assert message.data["freq_limit"] == 5.0
         assert message.data["transport"] == "mqtt_json"
         assert message.data["compression"] == {}
+
+    def test_normalize_subscriptions_accepts_legacy_mapping_format(self):
+        result = MqttRosBridge._normalize_transmit_subscriptions({
+            "robot_001": {
+                "/scan": {"msg_type": "sensor_msgs/LaserScan"}
+            }
+        })
+
+        assert result == {
+            "robot_001": [
+                {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}
+            ]
+        }
 
 
 # ===================================================================

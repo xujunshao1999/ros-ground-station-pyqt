@@ -896,14 +896,19 @@ class MqttRosBridge:
     def _restore_subscriptions(self) -> None:
         """Load saved subscriptions from transmit_config.yaml and re-request."""
         config = self._load_transmit_config()
-        subscriptions = config.get("subscriptions", {})
+        subscriptions = self._normalize_transmit_subscriptions(
+            config.get("subscriptions", {})
+        )
         if not subscriptions:
             logger.info("[Bridge] No saved subscriptions to restore")
             return
 
         restored = 0
         for robot_id, subs in subscriptions.items():
-            for ros_topic_str, sub_info in subs.items():
+            for sub_info in subs:
+                ros_topic_str = sub_info.get("topic", "")
+                if not ros_topic_str:
+                    continue
                 request = {
                     "action": "subscribe",
                     "topic": ros_topic_str,
@@ -934,6 +939,28 @@ class MqttRosBridge:
             logger.info(
                 "[Bridge] Restored %d subscription(s)", restored
             )
+
+    @staticmethod
+    def _normalize_transmit_subscriptions(raw: Any) -> Dict[str, List[Dict[str, Any]]]:
+        if not isinstance(raw, dict):
+            return {}
+
+        normalized: Dict[str, List[Dict[str, Any]]] = {}
+        for robot_id, robot_subscriptions in raw.items():
+            entries: List[Dict[str, Any]] = []
+            if isinstance(robot_subscriptions, list):
+                for item in robot_subscriptions:
+                    if isinstance(item, dict) and item.get("topic"):
+                        entries.append(dict(item))
+            elif isinstance(robot_subscriptions, dict):
+                for topic, sub_info in robot_subscriptions.items():
+                    if not isinstance(sub_info, dict):
+                        continue
+                    data = dict(sub_info)
+                    data["topic"] = topic
+                    entries.append(data)
+            normalized[robot_id] = entries
+        return normalized
 
     # ================================================================
     # Config persistence

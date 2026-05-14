@@ -836,7 +836,7 @@ class BaseAgent(ABC):
         ])
 
     def _save_config(self) -> None:
-        """持久化当前配置到 agent/config.yaml"""
+        """持久化动态配置，保留原 YAML 中的其他字段。"""
         from pathlib import Path
         import yaml
 
@@ -846,18 +846,14 @@ class BaseAgent(ABC):
             else Path(__file__).resolve().parent / "config.yaml"
         )
         try:
-            config_dict = {
-                "robot_id": self.config.robot_id,
-                "broker_host": self.config.broker_host,
-                "broker_port": self.config.broker_port,
-                "status_interval": self.config.status_interval,
-                "default_freq_limit": self.config.default_freq_limit,
-                "http_stream_port": self.config.http_stream_port,
-                "auto_reconnect": self.config.auto_reconnect,
-                "reconnect_delay": self.config.reconnect_delay,
-                "subscriptions": self.config.subscriptions,
-                "fleet_rules": self.config.fleet_rules,
-            }
+            config_dict = {}
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    loaded = yaml.safe_load(f) or {}
+                    if isinstance(loaded, dict):
+                        config_dict = loaded
+            config_dict["subscriptions"] = self.config.subscriptions
+            config_dict["fleet_rules"] = self.config.fleet_rules
             with open(config_path, "w", encoding="utf-8") as f:
                 yaml.safe_dump(config_dict, f, default_flow_style=False, allow_unicode=True)
             logger.info(f"[Agent] Config saved to {config_path}")

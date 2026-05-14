@@ -200,18 +200,40 @@ class TestTopicConfigPanel:
 
         assert config["robots"] == {"legacy": {}}
         assert config["subscriptions"] == {
-            "old": {},
-            "robot_001": {
-                "/scan": {
+            "old": [],
+            "robot_001": [
+                {
+                    "topic": "/scan",
                     "msg_type": "sensor_msgs/LaserScan",
                     "freq_limit": 5.0,
                     "transport": "mqtt_json",
                     "compression": {},
                 }
-            },
+            ],
         }
 
-    def test_entries_from_transmit_config_for_robot(self):
+    def test_entries_from_transmit_config_for_robot_list_format(self):
+        entries = TopicConfigPanel.entries_from_transmit_config(
+            {
+                "subscriptions": {
+                    "robot_001": [
+                        {
+                            "topic": "/odom",
+                            "msg_type": "nav_msgs/Odometry",
+                            "freq_limit": 10.0,
+                            "transport": "mqtt_json",
+                        }
+                    ]
+                }
+            },
+            "robot_001",
+        )
+
+        assert len(entries) == 1
+        assert entries[0].topic == "/odom"
+        assert entries[0].status == "saved"
+
+    def test_entries_from_transmit_config_accepts_legacy_mapping_format(self):
         entries = TopicConfigPanel.entries_from_transmit_config(
             {
                 "subscriptions": {
@@ -229,7 +251,6 @@ class TestTopicConfigPanel:
 
         assert len(entries) == 1
         assert entries[0].topic == "/odom"
-        assert entries[0].status == "saved"
 
     def test_save_and_load_transmit_config_file(self, tmp_path):
         path = tmp_path / "transmit_config.yaml"
@@ -245,7 +266,8 @@ class TestTopicConfigPanel:
         TopicConfigPanel.save_transmit_config_file(path, "robot_001", panel_entries)
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
 
-        assert loaded["subscriptions"]["robot_001"]["/map"]["msg_type"] == (
+        assert loaded["subscriptions"]["robot_001"][0]["topic"] == "/map"
+        assert loaded["subscriptions"]["robot_001"][0]["msg_type"] == (
             "nav_msgs/OccupancyGrid"
         )
         assert TopicConfigPanel.load_transmit_config_file(path) == loaded
