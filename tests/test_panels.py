@@ -272,6 +272,37 @@ class TestTopicConfigPanel:
         )
         assert TopicConfigPanel.load_transmit_config_file(path) == loaded
 
+    def test_save_transmit_config_keeps_subscription_field_order(self, tmp_path):
+        path = tmp_path / "transmit_config.yaml"
+
+        TopicConfigPanel.save_transmit_config_file(
+            path,
+            "robot_001",
+            [
+                SubscriptionEntry(
+                    topic="/scan",
+                    msg_type="sensor_msgs/LaserScan",
+                    freq_limit=5.0,
+                    transport="mqtt_binary",
+                    compression={},
+                )
+            ],
+        )
+
+        text = path.read_text(encoding="utf-8")
+        assert text.index("  - topic: /scan") < text.index(
+            "    msg_type: sensor_msgs/LaserScan"
+        )
+        assert text.index("    msg_type: sensor_msgs/LaserScan") < text.index(
+            "    freq_limit: 5.0"
+        )
+        assert text.index("    freq_limit: 5.0") < text.index(
+            "    transport: mqtt_binary"
+        )
+        assert text.index("    transport: mqtt_binary") < text.index(
+            "    compression: {}"
+        )
+
     def test_build_config_sync_payload_omits_ui_status(self):
         entry = SubscriptionEntry(
             topic="/scan",
@@ -326,6 +357,17 @@ class TestTopicConfigPanel:
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_001") is False
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_002") is True
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "") is True
+
+    def test_mark_entries_saved_after_local_save(self):
+        entries = [
+            SubscriptionEntry(topic="/scan", msg_type="sensor_msgs/LaserScan", status="active"),
+            SubscriptionEntry(topic="/map", msg_type="nav_msgs/OccupancyGrid", status="pending"),
+            SubscriptionEntry(topic="/odom", msg_type="nav_msgs/Odometry", status="failed"),
+        ]
+
+        TopicConfigPanel.mark_entries_saved(entries)
+
+        assert [entry.status for entry in entries] == ["saved", "saved", "failed"]
 
 
 # ------------------------------------------------------------------

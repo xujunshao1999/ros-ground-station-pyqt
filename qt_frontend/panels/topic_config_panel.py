@@ -211,9 +211,13 @@ class TopicConfigPanel(QWidget):
 
     @staticmethod
     def entry_to_protocol_dict(entry: SubscriptionEntry) -> Dict[str, Any]:
-        data = entry.to_dict()
-        data.pop("status", None)
-        return data
+        return {
+            "topic": entry.topic,
+            "msg_type": entry.msg_type,
+            "freq_limit": entry.freq_limit,
+            "transport": entry.transport,
+            "compression": dict(entry.compression),
+        }
 
     @staticmethod
     def build_config_sync_payload(entries: List[SubscriptionEntry]) -> Dict[str, Any]:
@@ -332,7 +336,13 @@ class TopicConfigPanel(QWidget):
         config = TopicConfigPanel.build_transmit_config(existing, robot_id, entries)
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
-            yaml.safe_dump(config, f, default_flow_style=False, allow_unicode=True)
+            yaml.safe_dump(
+                config,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
         return config
 
     @staticmethod
@@ -356,6 +366,12 @@ class TopicConfigPanel(QWidget):
     @staticmethod
     def should_reload_saved_config(previous_robot_id: str, current_robot_id: str) -> bool:
         return previous_robot_id != current_robot_id
+
+    @staticmethod
+    def mark_entries_saved(entries: List[SubscriptionEntry]) -> None:
+        for entry in entries:
+            if entry.status != "failed":
+                entry.status = "saved"
 
     # ------------------------------------------------------------------
     # Slots
@@ -501,9 +517,7 @@ class TopicConfigPanel(QWidget):
         self.save_transmit_config_file(
             self._transmit_config_path, robot_id, self._entries
         )
-        for entry in self._entries:
-            if entry.status == "pending":
-                entry.status = "saved"
+        self.mark_entries_saved(self._entries)
         self._refresh_table()
         self.config_changed.emit()
 
@@ -518,9 +532,7 @@ class TopicConfigPanel(QWidget):
         self.save_transmit_config_file(
             self._transmit_config_path, robot_id, self._entries
         )
-        for entry in self._entries:
-            if entry.status in ("pending", "active", "available"):
-                entry.status = "saved"
+        self.mark_entries_saved(self._entries)
         self._refresh_table()
 
     def _pull_config(self) -> None:
