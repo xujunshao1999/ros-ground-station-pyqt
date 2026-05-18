@@ -186,7 +186,7 @@ class ROS1Agent(BaseAgent):
         topics = []
         try:
             # 获取当前 ROS 系统中所有活跃话题
-            published_topics, _ = rospy.get_published_topics("/")
+            published_topics = rospy.get_published_topics("/")
             for topic_name, msg_type in published_topics:
                 topics.append({
                     "topic": topic_name,

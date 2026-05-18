@@ -302,6 +302,7 @@ class BaseAgent(ABC):
         try:
             sub_info = self._subscribed_topics[ros_topic]
             options = sub_info.get("options", {})
+            qos = int(sub_info.get("qos", 1))
             processed = self._topic_handler.process(
                 ros_topic, data, **options
             )
@@ -313,7 +314,7 @@ class BaseAgent(ABC):
         mqtt_topic = self._get_sensor_mqtt_topic(ros_topic, processed.tier)
 
         if processed.mqtt_payload:
-            self._mqtt_publish(mqtt_topic, processed.mqtt_payload)
+            self._mqtt_publish(mqtt_topic, processed.mqtt_payload, qos=qos)
 
         # 重量话题额外处理
         if processed.tier == TopicTier.HEAVY and processed.stream_data:
@@ -329,7 +330,7 @@ class BaseAgent(ABC):
                     stream_url=f"http://{self._get_local_ip()}:{self.config.http_stream_port}/stream{ros_topic}",
                     size_bytes=processed.meta.get("size_bytes", 0),
                 ))
-                self._mqtt_publish(meta_topic, meta_msg.to_json().encode("utf-8"))
+                self._mqtt_publish(meta_topic, meta_msg.to_json().encode("utf-8"), qos=qos)
 
         self._rate_limiter.mark_sent(ros_topic)
 
@@ -599,6 +600,7 @@ class BaseAgent(ABC):
         topic = data.get("topic")
         msg_type = data.get("msg_type")
         freq_limit = data.get("freq_limit", self.config.default_freq_limit)
+        qos = int(data.get("qos", 1))
         # 兼容 options 和 compression 两种字段名
         options = data.get("options") or data.get("compression", {})
 
@@ -610,11 +612,12 @@ class BaseAgent(ABC):
             sub_info = {
                 "msg_type": msg_type,
                 "freq_limit": freq_limit,
+                "qos": qos,
                 "options": options,
             }
             self._subscribed_topics[topic] = sub_info
             self._upsert_subscription_config(
-                topic, msg_type, freq_limit, transport, options
+                topic, msg_type, freq_limit, transport, qos, options
             )
             self._save_config()
             self._rate_limiter.set_limit(topic, freq_limit)
@@ -741,11 +744,7 @@ class BaseAgent(ABC):
             options = sub.get("compression", {})
 
             if topic:
-                self._subscribed_topics[topic] = {
-                    "msg_type": msg_type,
-                    "freq_limit": freq_limit,
-                    "options": options,
-                }
+                self._subscribed_topics[topic] = self._subscription_runtime_info(sub)
                 self._rate_limiter.set_limit(topic, freq_limit)
                 self._on_topic_subscribed(topic, msg_type, options)
                 logger.info(f"[Agent] Restored subscription: {topic}")
@@ -764,6 +763,7 @@ class BaseAgent(ABC):
                 "msg_type": sub.get("msg_type", ""),
                 "freq_limit": sub.get("freq_limit", self.config.default_freq_limit),
                 "transport": sub.get("transport", "auto"),
+                "qos": int(sub.get("qos", 1)),
                 "compression": dict(sub.get("compression") or sub.get("options") or {}),
             })
         return normalized
@@ -772,6 +772,7 @@ class BaseAgent(ABC):
         return {
             "msg_type": sub.get("msg_type", ""),
             "freq_limit": sub.get("freq_limit", self.config.default_freq_limit),
+            "qos": int(sub.get("qos", 1)),
             "options": dict(sub.get("compression") or {}),
         }
 
@@ -783,6 +784,7 @@ class BaseAgent(ABC):
         return (
             current.get("msg_type") != desired["msg_type"]
             or current.get("freq_limit") != desired["freq_limit"]
+            or int(current.get("qos", 1)) != desired["qos"]
             or current.get("options", {}) != desired["options"]
         )
 
@@ -816,6 +818,7 @@ class BaseAgent(ABC):
         msg_type: str,
         freq_limit: float,
         transport: str,
+        qos: int,
         compression: Dict[str, Any],
     ) -> None:
         next_sub = {
@@ -823,6 +826,7 @@ class BaseAgent(ABC):
             "msg_type": msg_type,
             "freq_limit": freq_limit,
             "transport": transport,
+            "qos": int(qos),
             "compression": dict(compression),
         }
         remaining = [

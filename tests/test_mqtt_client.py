@@ -181,6 +181,32 @@ class TestOnMessageStatus:
         assert resp_signal.call_args[0][0] == "robot_001"
         assert resp_signal.call_args[0][1]["topic"] == "/odom"
 
+    def test_discover_response_received_on_station_topic_response(self, client, mock_paho):
+        discover_signal = MagicMock()
+        topic_signal = MagicMock()
+        client.signals.discover_response_received.connect(discover_signal)
+        client.signals.topic_response_received.connect(topic_signal)
+
+        msg = Message(
+            src="robot_001",
+            type="discover_resp",
+            data={
+                "robot_id": "robot_001",
+                "topics": [
+                    {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}
+                ],
+            },
+        )
+        mqtt_msg = _make_mqtt_msg("station/topic/response/robot_001", msg.to_json())
+
+        client.connect()
+        client._on_message(mock_paho, None, mqtt_msg)
+
+        discover_signal.assert_called_once()
+        topic_signal.assert_not_called()
+        assert discover_signal.call_args[0][0] == "robot_001"
+        assert discover_signal.call_args[0][1]["topics"][0]["topic"] == "/scan"
+
     def test_config_response_received(self, client, mock_paho):
         cfg_signal = MagicMock()
         client.signals.config_response_received.connect(cfg_signal)

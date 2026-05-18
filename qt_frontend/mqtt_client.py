@@ -226,7 +226,10 @@ class MqttClient:
 
             if stype == "topic_response":
                 robot_id = station_info.get("robot_id", "")
-                self.signals.topic_response_received.emit(robot_id, message.data)
+                if message.type == "discover_resp":
+                    self.signals.discover_response_received.emit(robot_id, message.data)
+                else:
+                    self.signals.topic_response_received.emit(robot_id, message.data)
             elif stype == "config_response":
                 robot_id = station_info.get("robot_id", "")
                 self.signals.config_response_received.emit(robot_id, message.data)

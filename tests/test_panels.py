@@ -110,6 +110,13 @@ class TestTopicConfigPanel:
         assert TopicConfigPanel.transport_from_tier("HEAVY") == "http_stream"
         assert TopicConfigPanel.transport_from_tier("UNKNOWN") == "mqtt_json"
 
+    def test_qos_options_describe_all_mqtt_levels(self):
+        assert TopicConfigPanel.qos_options() == [
+            ("QoS 0 - 最多一次：低延迟，允许丢包，适合高频传感器数据", 0),
+            ("QoS 1 - 至少一次：保证到达，可能重复，适合指令和配置", 1),
+            ("QoS 2 - 恰好一次：避免重复，开销最大，通常不建议高频使用", 2),
+        ]
+
     def test_subscription_entry_defaults(self):
         entry = SubscriptionEntry()
         assert entry.topic == ""
@@ -145,6 +152,7 @@ class TestTopicConfigPanel:
             msg_type="nav_msgs/Odometry",
             freq_limit=10.0,
             transport="mqtt_json",
+            qos=2,
             compression={"resize": [320, 240]},
         )
 
@@ -155,6 +163,7 @@ class TestTopicConfigPanel:
         assert req["msg_type"] == "nav_msgs/Odometry"
         assert req["freq_limit"] == 10.0
         assert req["transport"] == "mqtt_json"
+        assert req["qos"] == 2
         assert req["compression"] == {"resize": [320, 240]}
 
     def test_replace_entry_for_edit_keeps_single_topic(self):
@@ -194,6 +203,27 @@ class TestTopicConfigPanel:
         assert requests[0]["topic"] == "/scan"
         assert requests[1]["topic"] == "/map"
         assert requests[1]["msg_type"] == "nav_msgs/OccupancyGrid"
+
+    def test_apply_local_edit_marks_entry_pending(self):
+        entries = [
+            SubscriptionEntry(
+                topic="/scan",
+                msg_type="sensor_msgs/LaserScan",
+                status="saved",
+            )
+        ]
+        updated = SubscriptionEntry(
+            topic="/scan",
+            msg_type="sensor_msgs/LaserScan",
+            freq_limit=3.0,
+            status="saved",
+        )
+
+        result = TopicConfigPanel.apply_local_entry_change(entries, "/scan", updated)
+
+        assert len(result) == 1
+        assert result[0].freq_limit == 3.0
+        assert result[0].status == "pending"
 
     def test_topic_response_message_uses_pending_edit_operation(self):
         pending = {"/scan": "edit"}
@@ -270,6 +300,7 @@ class TestTopicConfigPanel:
                     "msg_type": "sensor_msgs/LaserScan",
                     "freq_limit": 5.0,
                     "transport": "mqtt_json",
+                    "qos": 1,
                     "compression": {},
                 }
             ],
@@ -384,6 +415,7 @@ class TestTopicConfigPanel:
                     "msg_type": "sensor_msgs/LaserScan",
                     "freq_limit": 5.0,
                     "transport": "mqtt_json",
+                    "qos": 1,
                     "compression": {},
                 }
             ]
@@ -407,19 +439,45 @@ class TestTopicConfigPanel:
         TopicConfigPanel.update_available_topics_cache(
             cache,
             "robot_001",
-            {"topics": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+            {
+                "topics": [
+                    {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
+                    {"topic": "/odom", "type": "nav_msgs/Odometry"},
+                ]
+            },
         )
 
         assert cache == {
             "robot_001": [
-                {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}
+                {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
+                {"topic": "/odom", "msg_type": "nav_msgs/Odometry"},
             ]
         }
+
+    def test_should_request_discover_when_available_topics_missing(self):
+        assert TopicConfigPanel.should_request_available_topics({}, "robot_001") is True
+        assert TopicConfigPanel.should_request_available_topics(
+            {"robot_001": []}, "robot_001"
+        ) is True
+        assert TopicConfigPanel.should_request_available_topics(
+            {"robot_001": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+            "robot_001",
+        ) is False
+        assert TopicConfigPanel.should_request_available_topics({}, "") is False
 
     def test_robot_list_refresh_only_reloads_when_selected_robot_changes(self):
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_001") is False
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_002") is True
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "") is True
+
+    def test_target_robot_after_refresh_auto_selects_single_robot(self):
+        assert TopicConfigPanel.target_robot_after_refresh("", "-- 选择 --", ["robot_001"]) == (
+            "robot_001"
+        )
+        assert TopicConfigPanel.target_robot_after_refresh("", "-- 选择 --", ["r1", "r2"]) == ""
+        assert TopicConfigPanel.target_robot_after_refresh("robot_001", "-- 选择 --", ["robot_001"]) == (
+            "robot_001"
+        )
 
     def test_mark_entries_saved_after_local_save(self):
         entries = [
@@ -434,12 +492,12 @@ class TestTopicConfigPanel:
 
     def test_operation_result_success_message(self):
         result = TopicConfigPanel.build_operation_result(
-            "success", "保存配置成功：robot_001，2 个话题"
+            "success", "保存草稿成功：robot_001，2 个话题"
         )
 
         assert result == {
             "level": "success",
-            "message": "保存配置成功：robot_001，2 个话题",
+            "message": "保存草稿成功：robot_001，2 个话题",
         }
 
     def test_operation_result_rejects_unknown_level(self):

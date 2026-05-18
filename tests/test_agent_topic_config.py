@@ -43,6 +43,7 @@ def test_topic_request_subscribe_updates_runtime_and_persistent_config():
             "msg_type": "sensor_msgs/LaserScan",
             "freq_limit": 5.0,
             "transport": "mqtt_json",
+            "qos": 2,
             "compression": {"quality": 80},
         },
     )
@@ -50,18 +51,38 @@ def test_topic_request_subscribe_updates_runtime_and_persistent_config():
     agent._handle_topic_request(message)
 
     assert agent._subscribed_topics["/scan"]["msg_type"] == "sensor_msgs/LaserScan"
+    assert agent._subscribed_topics["/scan"]["qos"] == 2
     assert agent.config.subscriptions == [
         {
             "topic": "/scan",
             "msg_type": "sensor_msgs/LaserScan",
             "freq_limit": 5.0,
             "transport": "mqtt_json",
+            "qos": 2,
             "compression": {"quality": 80},
         }
     ]
     assert agent.saved_count == 1
     assert agent.published[-1][1]["type"] == "topic_resp"
     assert agent.published[-1][1]["data"]["result"] == "ok"
+
+
+def test_publish_sensor_data_uses_subscription_qos():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
+    agent._subscribed_topics["/scan"] = {
+        "msg_type": "sensor_msgs/LaserScan",
+        "freq_limit": 0.0,
+        "qos": 2,
+        "options": {},
+    }
+
+    agent.publish_sensor_data(
+        "/scan",
+        "sensor_msgs/LaserScan",
+        {"ranges": [], "angle_min": 0.0, "angle_max": 0.0},
+    )
+
+    assert agent.published[-1][2] == 2
 
 
 def test_topic_request_unsubscribe_removes_runtime_and_persistent_config():

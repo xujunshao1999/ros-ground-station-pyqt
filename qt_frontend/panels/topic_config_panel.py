@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
 
@@ -30,6 +30,7 @@ class SubscriptionEntry:
     msg_type: str = ""
     freq_limit: float = 0.0
     transport: str = "auto"
+    qos: int = 1
     status: str = "pending"
     compression: Dict[str, Any] = field(default_factory=dict)
 
@@ -39,6 +40,7 @@ class SubscriptionEntry:
             "msg_type": self.msg_type,
             "freq_limit": self.freq_limit,
             "transport": self.transport,
+            "qos": self.qos,
             "status": self.status,
             "compression": dict(self.compression),
         }
@@ -50,6 +52,7 @@ class SubscriptionEntry:
             msg_type=data.get("msg_type", ""),
             freq_limit=float(data.get("freq_limit") or 0.0),
             transport=data.get("transport", "auto"),
+            qos=int(data.get("qos", 1)),
             status=data.get("status", status),
             compression=dict(data.get("compression") or data.get("options") or {}),
         )
@@ -60,6 +63,7 @@ class TopicConfigPanel(QWidget):
     topic_request_requested = pyqtSignal(str, dict)  # (robot_id, request)
     config_sync_requested = pyqtSignal(str, dict)  # (robot_id, config)
     config_query_requested = pyqtSignal(str)  # robot_id
+    discover_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -95,7 +99,7 @@ class TopicConfigPanel(QWidget):
         btn_row1 = QHBoxLayout()
         self._btn_add = QPushButton("+ 添加话题")
         self._btn_delete = QPushButton("删除")
-        self._btn_save = QPushButton("保存配置")
+        self._btn_save = QPushButton("保存草稿")
         self._btn_add.clicked.connect(self._show_add_form)
         self._btn_delete.clicked.connect(self._delete_selected_entry)
         self._btn_save.clicked.connect(self._save_config)
@@ -104,7 +108,7 @@ class TopicConfigPanel(QWidget):
         layout.addLayout(btn_row1)
 
         btn_row2 = QHBoxLayout()
-        self._btn_deploy = QPushButton("下发配置到机器人")
+        self._btn_deploy = QPushButton("保存并下发")
         self._btn_deploy.setStyleSheet("QPushButton { font-weight: bold; }")
         self._btn_deploy.clicked.connect(self._deploy_config)
         btn_row2.addWidget(self._btn_deploy)
@@ -173,7 +177,8 @@ class TopicConfigPanel(QWidget):
         f5 = QHBoxLayout()
         f5.addWidget(QLabel("QoS:"))
         self._combo_qos = QComboBox()
-        self._combo_qos.addItems(["AtMostOnce (0)", "AtLeastOnce (1)"])
+        for label, value in self.qos_options():
+            self._combo_qos.addItem(label, value)
         f5.addWidget(self._combo_qos)
         form.addLayout(f5)
 
@@ -211,6 +216,14 @@ class TopicConfigPanel(QWidget):
         elif tier_upper == "HEAVY":
             return "http_stream"
         return "mqtt_json"
+
+    @staticmethod
+    def qos_options() -> List[Tuple[str, int]]:
+        return [
+            ("QoS 0 - 最多一次：低延迟，允许丢包，适合高频传感器数据", 0),
+            ("QoS 1 - 至少一次：保证到达，可能重复，适合指令和配置", 1),
+            ("QoS 2 - 恰好一次：避免重复，开销最大，通常不建议高频使用", 2),
+        ]
 
     @staticmethod
     def build_topic_request(action: str, entry: SubscriptionEntry) -> Dict[str, Any]:
@@ -255,12 +268,26 @@ class TopicConfigPanel(QWidget):
         ]
 
     @staticmethod
+    def apply_local_entry_change(
+        entries: List[SubscriptionEntry],
+        original_topic: str,
+        updated_entry: SubscriptionEntry,
+    ) -> List[SubscriptionEntry]:
+        updated_entry.status = "pending"
+        if original_topic:
+            return TopicConfigPanel.replace_entry_for_edit(
+                entries, original_topic, updated_entry
+            )
+        return [e for e in entries if e.topic != updated_entry.topic] + [updated_entry]
+
+    @staticmethod
     def entry_to_protocol_dict(entry: SubscriptionEntry) -> Dict[str, Any]:
         return {
             "topic": entry.topic,
             "msg_type": entry.msg_type,
             "freq_limit": entry.freq_limit,
             "transport": entry.transport,
+            "qos": entry.qos,
             "compression": dict(entry.compression),
         }
 
@@ -300,9 +327,12 @@ class TopicConfigPanel(QWidget):
         data: Dict[str, Any],
     ) -> None:
         topics = [
-            {"topic": item.get("topic", ""), "msg_type": item.get("msg_type", "")}
+            {
+                "topic": item.get("topic", ""),
+                "msg_type": item.get("msg_type") or item.get("type", ""),
+            }
             for item in data.get("topics", [])
-            if item.get("topic") and item.get("msg_type")
+            if item.get("topic") and (item.get("msg_type") or item.get("type"))
         ]
         cache[robot_id] = topics
 
@@ -413,6 +443,24 @@ class TopicConfigPanel(QWidget):
         return previous_robot_id != current_robot_id
 
     @staticmethod
+    def target_robot_after_refresh(
+        previous_robot_id: str, current_text: str, robot_ids: List[str]
+    ) -> str:
+        if previous_robot_id:
+            return previous_robot_id
+        if current_text and not current_text.startswith("--"):
+            return current_text
+        if len(robot_ids) == 1:
+            return robot_ids[0]
+        return ""
+
+    @staticmethod
+    def should_request_available_topics(
+        cache: Dict[str, List[Dict[str, Any]]], robot_id: str
+    ) -> bool:
+        return bool(robot_id) and not cache.get(robot_id)
+
+    @staticmethod
     def mark_entries_saved(entries: List[SubscriptionEntry]) -> None:
         for entry in entries:
             if entry.status != "failed":
@@ -475,7 +523,9 @@ class TopicConfigPanel(QWidget):
 
     def on_robot_list_changed(self, robot_ids: List[str]) -> None:
         previous_robot_id = self._selected_robot_id()
-        current = previous_robot_id or self._robot_combo.currentText()
+        current = self.target_robot_after_refresh(
+            previous_robot_id, self._robot_combo.currentText(), robot_ids
+        )
         self._robot_combo.blockSignals(True)
         self._robot_combo.clear()
         self._robot_combo.addItem("-- 选择 --", "")
@@ -489,6 +539,8 @@ class TopicConfigPanel(QWidget):
         current_robot_id = self._selected_robot_id()
         if self.should_reload_saved_config(previous_robot_id, current_robot_id):
             self._load_selected_robot_config()
+        else:
+            self._refresh_available_topics()
 
     def on_topic_response(self, robot_id: str, data: dict) -> None:
         if robot_id != self._selected_robot_id():
@@ -518,7 +570,7 @@ class TopicConfigPanel(QWidget):
         count = len(self._entries)
         if self._pending_config_operation == "下发配置":
             self._set_operation_result(
-                "success", f"下发配置成功：{robot_id}，机器人确认 {count} 个话题"
+                "success", f"保存并下发成功：{robot_id}，机器人确认 {count} 个话题"
             )
         else:
             self._set_operation_result(
@@ -558,6 +610,12 @@ class TopicConfigPanel(QWidget):
     def _refresh_available_topics(self) -> None:
         robot_id = self._selected_robot_id()
         topics = self._available_topics_by_robot.get(robot_id, [])
+        if not topics:
+            topics = [
+                {"topic": entry.topic, "msg_type": entry.msg_type}
+                for entry in self._entries
+                if entry.topic and entry.msg_type
+            ]
         self._combo_available_topics.blockSignals(True)
         self._combo_available_topics.clear()
         self._combo_available_topics.addItem("-- 选择机器人话题 --", None)
@@ -570,12 +628,23 @@ class TopicConfigPanel(QWidget):
         self._editing_topic = ""
         self._form_group.setTitle("添加话题")
         self._btn_confirm.setText("确认")
+        self._refresh_available_topics()
+        robot_id = self._selected_robot_id()
+        if self.should_request_available_topics(
+            self._available_topics_by_robot, robot_id
+        ):
+            self.discover_requested.emit()
+            self._set_operation_result(
+                "info", f"正在获取 {robot_id} 的可订阅话题"
+            )
         self._edit_topic.clear()
         self._combo_msg_type.setCurrentText("")
         self._combo_transport.setCurrentIndex(0)
+        self._combo_qos.setCurrentIndex(1)
         self._spin_freq.setValue(0.0)
         self._form_group.setChecked(True)
-        self._clear_operation_result()
+        if not robot_id:
+            self._clear_operation_result()
 
     def _hide_form(self) -> None:
         self._editing_topic = ""
@@ -600,6 +669,7 @@ class TopicConfigPanel(QWidget):
             msg_type=msg_type,
             freq_limit=float(self._spin_freq.value()),
             transport=transport_value,
+            qos=int(self._combo_qos.currentData() or 1),
             status="pending",
             compression={},
         )
@@ -620,6 +690,10 @@ class TopicConfigPanel(QWidget):
         }
         self._combo_transport.setCurrentIndex(mapping.get(transport, 0))
 
+    def _set_qos_combo(self, qos: int) -> None:
+        idx = self._combo_qos.findData(qos)
+        self._combo_qos.setCurrentIndex(idx if idx >= 0 else 1)
+
     def _load_selected_entry_into_form(self) -> None:
         row = self._table.currentRow()
         if row < 0 or row >= len(self._entries):
@@ -631,6 +705,7 @@ class TopicConfigPanel(QWidget):
         self._edit_topic.setText(entry.topic)
         self._combo_msg_type.setCurrentText(entry.msg_type)
         self._set_transport_combo(entry.transport)
+        self._set_qos_combo(entry.qos)
         self._spin_freq.setValue(float(entry.freq_limit or 0.0))
         self._form_group.setChecked(True)
         self._set_operation_result("info", f"正在编辑话题：{entry.topic}")
@@ -658,24 +733,17 @@ class TopicConfigPanel(QWidget):
             return
 
         original_topic = self._editing_topic
-        if original_topic:
-            self._entries = self.replace_entry_for_edit(
-                self._entries, original_topic, entry
-            )
-            requests = self.build_edit_topic_requests(original_topic, entry)
-            if original_topic != entry.topic:
-                self._pending_topic_operations[original_topic] = "rename_remove"
-            self._pending_topic_operations[entry.topic] = "edit"
-        else:
-            self._entries = [e for e in self._entries if e.topic != entry.topic]
-            self._entries.append(entry)
-            requests = [self.build_topic_request("subscribe", entry)]
-            self._pending_topic_operations[entry.topic] = "add"
+        is_edit = bool(original_topic)
+        self._entries = self.apply_local_entry_change(
+            self._entries, original_topic, entry
+        )
         self._refresh_table()
         self._hide_form()
         self.config_changed.emit()
-        for request in requests:
-            self.topic_request_requested.emit(robot_id, request)
+        if is_edit:
+            self._set_operation_result("info", f"已更新本地话题配置：{entry.topic}，待下发")
+        else:
+            self._set_operation_result("info", f"已添加本地话题配置：{entry.topic}，待下发")
 
     def _delete_selected_entry(self) -> None:
         row = self._table.currentRow()
@@ -684,36 +752,34 @@ class TopicConfigPanel(QWidget):
             self._set_operation_result("error", "删除话题失败：请选择机器人和话题")
             return
         entry = self._entries.pop(row)
+        entry.status = "pending"
         self._refresh_table()
         self.config_changed.emit()
-        self._pending_topic_operations[entry.topic] = "delete"
-        self.topic_request_requested.emit(
-            robot_id, self.build_topic_request("unsubscribe", entry)
-        )
+        self._set_operation_result("info", f"已删除本地话题配置：{entry.topic}，待下发")
 
     def _save_config(self) -> None:
         robot_id = self._selected_robot_id()
         if not robot_id:
-            self._set_operation_result("error", "保存配置失败：请选择目标机器人")
+            self._set_operation_result("error", "保存草稿失败：请选择目标机器人")
             return
         try:
             self.save_transmit_config_file(
                 self._transmit_config_path, robot_id, self._entries
             )
         except Exception as e:
-            self._set_operation_result("error", f"保存配置失败：{e}")
+            self._set_operation_result("error", f"保存草稿失败：{e}")
             return
         self.mark_entries_saved(self._entries)
         self._refresh_table()
         self.config_changed.emit()
         self._set_operation_result(
-            "success", f"保存配置成功：{robot_id}，{len(self._entries)} 个话题"
+            "success", f"保存草稿成功：{robot_id}，{len(self._entries)} 个话题"
         )
 
     def _deploy_config(self) -> None:
         robot_id = self._selected_robot_id()
         if not robot_id:
-            self._set_operation_result("error", "下发配置失败：请选择目标机器人")
+            self._set_operation_result("error", "保存并下发失败：请选择目标机器人")
             return
         try:
             self.config_sync_requested.emit(
@@ -725,13 +791,13 @@ class TopicConfigPanel(QWidget):
             )
         except Exception as e:
             self._pending_config_operation = ""
-            self._set_operation_result("error", f"下发配置失败：{e}")
+            self._set_operation_result("error", f"保存并下发失败：{e}")
             return
         self._pending_config_operation = "下发配置"
         self.mark_entries_saved(self._entries)
         self._refresh_table()
         self._set_operation_result(
-            "info", f"下发配置已发送：{robot_id}，等待机器人确认"
+            "info", f"保存并下发已发送：{robot_id}，等待机器人确认"
         )
 
     def _pull_config(self) -> None:

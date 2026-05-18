@@ -206,6 +206,7 @@ class MainWindow(QMainWindow):
         self._act_disconnect.triggered.connect(self._mqtt_client.disconnect)
         self._act_discover.triggered.connect(self._mqtt_client.send_discover)
         self._robot_list.discover_requested.connect(self._mqtt_client.send_discover)
+        self._topic_config.discover_requested.connect(self._mqtt_client.send_discover)
         self._command.command_sent.connect(self._on_command)
         self._data_sender.send_json.connect(self._on_data_send)
         self._topic_config.topic_request_requested.connect(
