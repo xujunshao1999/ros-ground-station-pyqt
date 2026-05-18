@@ -479,6 +479,11 @@ class TestTopicConfigPanel:
             "robot_001"
         )
 
+    def test_should_load_selected_entry_by_valid_row(self):
+        assert TopicConfigPanel.should_load_selected_entry(row=-1, count=1) is False
+        assert TopicConfigPanel.should_load_selected_entry(row=1, count=1) is False
+        assert TopicConfigPanel.should_load_selected_entry(row=0, count=1) is True
+
     def test_mark_entries_saved_after_local_save(self):
         entries = [
             SubscriptionEntry(topic="/scan", msg_type="sensor_msgs/LaserScan", status="active"),

@@ -461,6 +461,10 @@ class TopicConfigPanel(QWidget):
         return bool(robot_id) and not cache.get(robot_id)
 
     @staticmethod
+    def should_load_selected_entry(row: int, count: int) -> bool:
+        return 0 <= row < count
+
+    @staticmethod
     def mark_entries_saved(entries: List[SubscriptionEntry]) -> None:
         for entry in entries:
             if entry.status != "failed":
@@ -628,6 +632,11 @@ class TopicConfigPanel(QWidget):
         self._editing_topic = ""
         self._form_group.setTitle("添加话题")
         self._btn_confirm.setText("确认")
+        self._table.blockSignals(True)
+        self._table.clearSelection()
+        self._table.setCurrentCell(-1, -1)
+        self._table.blockSignals(False)
+        self._clear_operation_result()
         self._refresh_available_topics()
         robot_id = self._selected_robot_id()
         if self.should_request_available_topics(
@@ -643,8 +652,6 @@ class TopicConfigPanel(QWidget):
         self._combo_qos.setCurrentIndex(1)
         self._spin_freq.setValue(0.0)
         self._form_group.setChecked(True)
-        if not robot_id:
-            self._clear_operation_result()
 
     def _hide_form(self) -> None:
         self._editing_topic = ""
@@ -696,7 +703,7 @@ class TopicConfigPanel(QWidget):
 
     def _load_selected_entry_into_form(self) -> None:
         row = self._table.currentRow()
-        if row < 0 or row >= len(self._entries):
+        if not self.should_load_selected_entry(row, len(self._entries)):
             return
         entry = self._entries[row]
         self._editing_topic = entry.topic
