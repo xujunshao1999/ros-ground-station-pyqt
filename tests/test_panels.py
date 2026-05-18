@@ -369,6 +369,33 @@ class TestTopicConfigPanel:
 
         assert [entry.status for entry in entries] == ["saved", "saved", "failed"]
 
+    def test_operation_result_success_message(self):
+        result = TopicConfigPanel.build_operation_result(
+            "success", "保存配置成功：robot_001，2 个话题"
+        )
+
+        assert result == {
+            "level": "success",
+            "message": "保存配置成功：robot_001，2 个话题",
+        }
+
+    def test_operation_result_rejects_unknown_level(self):
+        result = TopicConfigPanel.build_operation_result("unknown", "ignored")
+
+        assert result == {
+            "level": "error",
+            "message": "未知操作结果：ignored",
+        }
+
+    def test_config_response_result_failed(self):
+        assert TopicConfigPanel.config_response_failed(
+            {"result": "failed", "message": "write failed"}
+        ) == "write failed"
+        assert TopicConfigPanel.config_response_failed({"result": "error"}) == (
+            "机器人返回配置失败"
+        )
+        assert TopicConfigPanel.config_response_failed({"subscriptions": []}) == ""
+
 
 # ------------------------------------------------------------------
 # EventPanel formatters

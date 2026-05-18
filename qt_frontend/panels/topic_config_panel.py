@@ -65,6 +65,7 @@ class TopicConfigPanel(QWidget):
         super().__init__(parent)
         self._entries: List[SubscriptionEntry] = []
         self._available_topics_by_robot: Dict[str, List[Dict[str, Any]]] = {}
+        self._pending_config_operation = ""
         self._transmit_config_path = (
             Path(__file__).resolve().parents[1] / "config" / "transmit_config.yaml"
         )
@@ -108,6 +109,11 @@ class TopicConfigPanel(QWidget):
         self._btn_pull.clicked.connect(self._pull_config)
         btn_row2.addWidget(self._btn_pull)
         layout.addLayout(btn_row2)
+
+        self._operation_status = QLabel("")
+        self._operation_status.setWordWrap(True)
+        self._operation_status.setVisible(False)
+        layout.addWidget(self._operation_status)
 
         # 添加/编辑表单（可折叠）
         self._form_group = QGroupBox("添加/编辑话题")
@@ -373,6 +379,22 @@ class TopicConfigPanel(QWidget):
             if entry.status != "failed":
                 entry.status = "saved"
 
+    @staticmethod
+    def build_operation_result(level: str, message: str) -> Dict[str, str]:
+        if level not in ("success", "error", "info"):
+            return {
+                "level": "error",
+                "message": f"未知操作结果：{message}",
+            }
+        return {"level": level, "message": message}
+
+    @staticmethod
+    def config_response_failed(data: Dict[str, Any]) -> str:
+        result = str(data.get("result", "")).lower()
+        if result not in ("failed", "error"):
+            return ""
+        return str(data.get("message") or "机器人返回配置失败")
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
@@ -399,13 +421,40 @@ class TopicConfigPanel(QWidget):
             return
         self.apply_topic_response_to_entries(self._entries, data)
         self._refresh_table()
+        topic = data.get("topic", "")
+        result = data.get("result", "")
+        action = data.get("action", "")
+        if result == "ok":
+            if action == "unsubscribe":
+                self._set_operation_result("success", f"删除话题成功：{topic}")
+            elif action == "subscribe":
+                self._set_operation_result("success", f"添加话题成功：{topic}")
+        elif result:
+            message = data.get("message") or "机器人返回话题配置失败"
+            self._set_operation_result("error", f"话题配置失败：{topic}，{message}")
 
     def on_config_response(self, robot_id: str, data: dict) -> None:
         if robot_id != self._selected_robot_id():
             return
+        failed_message = self.config_response_failed(data)
+        if failed_message:
+            operation = self._pending_config_operation or "配置同步"
+            self._pending_config_operation = ""
+            self._set_operation_result("error", f"{operation}失败：{failed_message}")
+            return
         self._entries = self.entries_from_config_response(data)
         self._refresh_table()
         self.config_changed.emit()
+        count = len(self._entries)
+        if self._pending_config_operation == "下发配置":
+            self._set_operation_result(
+                "success", f"下发配置成功：{robot_id}，机器人确认 {count} 个话题"
+            )
+        else:
+            self._set_operation_result(
+                "success", f"拉取配置成功：{robot_id}，{count} 个话题"
+            )
+        self._pending_config_operation = ""
 
     def on_discover_response(self, robot_id: str, data: dict) -> None:
         self.update_available_topics_cache(
@@ -483,10 +532,22 @@ class TopicConfigPanel(QWidget):
         self._edit_topic.setText(data.get("topic", ""))
         self._combo_msg_type.setCurrentText(data.get("msg_type", ""))
 
+    def _set_operation_result(self, level: str, message: str) -> None:
+        result = self.build_operation_result(level, message)
+        styles = {
+            "success": "color: #0f7b3f;",
+            "error": "color: #b42318;",
+            "info": "color: #475467;",
+        }
+        self._operation_status.setText(result["message"])
+        self._operation_status.setStyleSheet(styles.get(result["level"], styles["error"]))
+        self._operation_status.setVisible(True)
+
     def _confirm_entry(self) -> None:
         entry = self._entry_from_form()
         robot_id = self._selected_robot_id()
         if entry is None or not robot_id:
+            self._set_operation_result("error", "添加话题失败：请选择机器人并填写有效话题")
             return
 
         self._entries = [e for e in self._entries if e.topic != entry.topic]
@@ -502,6 +563,7 @@ class TopicConfigPanel(QWidget):
         row = self._table.currentRow()
         robot_id = self._selected_robot_id()
         if row < 0 or row >= len(self._entries) or not robot_id:
+            self._set_operation_result("error", "删除话题失败：请选择机器人和话题")
             return
         entry = self._entries.pop(row)
         self._refresh_table()
@@ -513,32 +575,61 @@ class TopicConfigPanel(QWidget):
     def _save_config(self) -> None:
         robot_id = self._selected_robot_id()
         if not robot_id:
+            self._set_operation_result("error", "保存配置失败：请选择目标机器人")
             return
-        self.save_transmit_config_file(
-            self._transmit_config_path, robot_id, self._entries
-        )
+        try:
+            self.save_transmit_config_file(
+                self._transmit_config_path, robot_id, self._entries
+            )
+        except Exception as e:
+            self._set_operation_result("error", f"保存配置失败：{e}")
+            return
         self.mark_entries_saved(self._entries)
         self._refresh_table()
         self.config_changed.emit()
+        self._set_operation_result(
+            "success", f"保存配置成功：{robot_id}，{len(self._entries)} 个话题"
+        )
 
     def _deploy_config(self) -> None:
         robot_id = self._selected_robot_id()
         if not robot_id:
+            self._set_operation_result("error", "下发配置失败：请选择目标机器人")
             return
-        self.config_sync_requested.emit(
-            robot_id,
-            self.build_config_sync_payload(self._entries),
-        )
-        self.save_transmit_config_file(
-            self._transmit_config_path, robot_id, self._entries
-        )
+        try:
+            self.config_sync_requested.emit(
+                robot_id,
+                self.build_config_sync_payload(self._entries),
+            )
+            self.save_transmit_config_file(
+                self._transmit_config_path, robot_id, self._entries
+            )
+        except Exception as e:
+            self._pending_config_operation = ""
+            self._set_operation_result("error", f"下发配置失败：{e}")
+            return
+        self._pending_config_operation = "下发配置"
         self.mark_entries_saved(self._entries)
         self._refresh_table()
+        self._set_operation_result(
+            "info", f"下发配置已发送：{robot_id}，等待机器人确认"
+        )
 
     def _pull_config(self) -> None:
         robot_id = self._selected_robot_id()
-        if robot_id:
+        if not robot_id:
+            self._set_operation_result("error", "拉取配置失败：请选择目标机器人")
+            return
+        try:
             self.config_query_requested.emit(robot_id)
+        except Exception as e:
+            self._pending_config_operation = ""
+            self._set_operation_result("error", f"拉取配置失败：{e}")
+            return
+        self._pending_config_operation = "拉取配置"
+        self._set_operation_result(
+            "info", f"拉取配置请求已发送：{robot_id}，等待机器人响应"
+        )
 
     def _load_selected_robot_config(self) -> None:
         robot_id = self._selected_robot_id()
@@ -548,7 +639,8 @@ class TopicConfigPanel(QWidget):
             return
         try:
             config = self.load_transmit_config_file(self._transmit_config_path)
-        except Exception:
+        except Exception as e:
+            self._set_operation_result("error", f"加载本地配置失败：{e}")
             return
         self._entries = self.entries_from_transmit_config(config, robot_id)
         self._refresh_table()
