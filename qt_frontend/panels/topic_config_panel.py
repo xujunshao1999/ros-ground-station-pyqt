@@ -66,6 +66,8 @@ class TopicConfigPanel(QWidget):
         self._entries: List[SubscriptionEntry] = []
         self._available_topics_by_robot: Dict[str, List[Dict[str, Any]]] = {}
         self._pending_config_operation = ""
+        self._pending_topic_operations: Dict[str, str] = {}
+        self._editing_topic = ""
         self._transmit_config_path = (
             Path(__file__).resolve().parents[1] / "config" / "transmit_config.yaml"
         )
@@ -86,6 +88,7 @@ class TopicConfigPanel(QWidget):
         self._table.setHorizontalHeaderLabels(["话题", "类型", "频率(Hz)", "传输方式", "状态"])
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self._table.itemSelectionChanged.connect(self._load_selected_entry_into_form)
         layout.addWidget(self._table)
 
         # 按钮行
@@ -116,7 +119,7 @@ class TopicConfigPanel(QWidget):
         layout.addWidget(self._operation_status)
 
         # 添加/编辑表单（可折叠）
-        self._form_group = QGroupBox("添加/编辑话题")
+        self._form_group = QGroupBox("添加话题")
         self._form_group.setCheckable(True)
         self._form_group.setChecked(False)
         form = QVBoxLayout(self._form_group)
@@ -214,6 +217,42 @@ class TopicConfigPanel(QWidget):
         data = entry.to_dict()
         data["action"] = action
         return data
+
+    @staticmethod
+    def replace_entry_for_edit(
+        entries: List[SubscriptionEntry],
+        original_topic: str,
+        updated_entry: SubscriptionEntry,
+    ) -> List[SubscriptionEntry]:
+        replaced = False
+        result: List[SubscriptionEntry] = []
+        for entry in entries:
+            if entry.topic == original_topic and not replaced:
+                result.append(updated_entry)
+                replaced = True
+                continue
+            if entry.topic == updated_entry.topic:
+                continue
+            result.append(entry)
+        if not replaced:
+            result.append(updated_entry)
+        return result
+
+    @staticmethod
+    def build_edit_topic_requests(
+        original_topic: str, updated_entry: SubscriptionEntry
+    ) -> List[Dict[str, Any]]:
+        if original_topic and original_topic != updated_entry.topic:
+            return [
+                TopicConfigPanel.build_topic_request(
+                    "unsubscribe",
+                    SubscriptionEntry(topic=original_topic),
+                ),
+                TopicConfigPanel.build_topic_request("subscribe", updated_entry),
+            ]
+        return [
+            TopicConfigPanel.build_topic_request("subscribe", updated_entry),
+        ]
 
     @staticmethod
     def entry_to_protocol_dict(entry: SubscriptionEntry) -> Dict[str, Any]:
@@ -395,6 +434,41 @@ class TopicConfigPanel(QWidget):
             return ""
         return str(data.get("message") or "机器人返回配置失败")
 
+    @staticmethod
+    def topic_response_result(
+        pending_operations: Dict[str, str], data: Dict[str, Any]
+    ) -> Dict[str, str]:
+        topic = data.get("topic", "")
+        result = data.get("result", "")
+        action = data.get("action", "")
+        operation = pending_operations.pop(topic, "")
+
+        if result == "ok":
+            if operation == "rename_remove":
+                return {}
+            if action == "unsubscribe":
+                return {
+                    "level": "success",
+                    "message": f"删除话题成功：{topic}",
+                }
+            if operation == "edit":
+                return {
+                    "level": "success",
+                    "message": f"更新话题成功：{topic}",
+                }
+            if operation == "add" or action == "subscribe":
+                return {
+                    "level": "success",
+                    "message": f"添加话题成功：{topic}",
+                }
+        elif result:
+            message = data.get("message") or "机器人返回话题配置失败"
+            return {
+                "level": "error",
+                "message": f"话题配置失败：{topic}，{message}",
+            }
+        return {}
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
@@ -421,17 +495,13 @@ class TopicConfigPanel(QWidget):
             return
         self.apply_topic_response_to_entries(self._entries, data)
         self._refresh_table()
-        topic = data.get("topic", "")
-        result = data.get("result", "")
-        action = data.get("action", "")
-        if result == "ok":
-            if action == "unsubscribe":
-                self._set_operation_result("success", f"删除话题成功：{topic}")
-            elif action == "subscribe":
-                self._set_operation_result("success", f"添加话题成功：{topic}")
-        elif result:
-            message = data.get("message") or "机器人返回话题配置失败"
-            self._set_operation_result("error", f"话题配置失败：{topic}，{message}")
+        response_result = self.topic_response_result(
+            self._pending_topic_operations, data
+        )
+        if response_result:
+            self._set_operation_result(
+                response_result["level"], response_result["message"]
+            )
 
     def on_config_response(self, robot_id: str, data: dict) -> None:
         if robot_id != self._selected_robot_id():
@@ -471,6 +541,7 @@ class TopicConfigPanel(QWidget):
         return self._robot_combo.currentData() or ""
 
     def _refresh_table(self) -> None:
+        self._table.blockSignals(True)
         self._table.setRowCount(len(self._entries))
         for row, entry in enumerate(self._entries):
             values = [
@@ -482,6 +553,7 @@ class TopicConfigPanel(QWidget):
             ]
             for col, value in enumerate(values):
                 self._table.setItem(row, col, QTableWidgetItem(value))
+        self._table.blockSignals(False)
 
     def _refresh_available_topics(self) -> None:
         robot_id = self._selected_robot_id()
@@ -495,13 +567,20 @@ class TopicConfigPanel(QWidget):
         self._combo_available_topics.blockSignals(False)
 
     def _show_add_form(self) -> None:
+        self._editing_topic = ""
+        self._form_group.setTitle("添加话题")
+        self._btn_confirm.setText("确认")
         self._edit_topic.clear()
         self._combo_msg_type.setCurrentText("")
         self._combo_transport.setCurrentIndex(0)
         self._spin_freq.setValue(0.0)
         self._form_group.setChecked(True)
+        self._clear_operation_result()
 
     def _hide_form(self) -> None:
+        self._editing_topic = ""
+        self._form_group.setTitle("添加话题")
+        self._btn_confirm.setText("确认")
         self._form_group.setChecked(False)
 
     def _entry_from_form(self) -> Optional[SubscriptionEntry]:
@@ -532,6 +611,30 @@ class TopicConfigPanel(QWidget):
         self._edit_topic.setText(data.get("topic", ""))
         self._combo_msg_type.setCurrentText(data.get("msg_type", ""))
 
+    def _set_transport_combo(self, transport: str) -> None:
+        mapping = {
+            "auto": 0,
+            "mqtt_json": 1,
+            "mqtt_binary": 2,
+            "http_stream": 3,
+        }
+        self._combo_transport.setCurrentIndex(mapping.get(transport, 0))
+
+    def _load_selected_entry_into_form(self) -> None:
+        row = self._table.currentRow()
+        if row < 0 or row >= len(self._entries):
+            return
+        entry = self._entries[row]
+        self._editing_topic = entry.topic
+        self._form_group.setTitle("编辑话题")
+        self._btn_confirm.setText("更新")
+        self._edit_topic.setText(entry.topic)
+        self._combo_msg_type.setCurrentText(entry.msg_type)
+        self._set_transport_combo(entry.transport)
+        self._spin_freq.setValue(float(entry.freq_limit or 0.0))
+        self._form_group.setChecked(True)
+        self._set_operation_result("info", f"正在编辑话题：{entry.topic}")
+
     def _set_operation_result(self, level: str, message: str) -> None:
         result = self.build_operation_result(level, message)
         styles = {
@@ -543,6 +646,10 @@ class TopicConfigPanel(QWidget):
         self._operation_status.setStyleSheet(styles.get(result["level"], styles["error"]))
         self._operation_status.setVisible(True)
 
+    def _clear_operation_result(self) -> None:
+        self._operation_status.clear()
+        self._operation_status.setVisible(False)
+
     def _confirm_entry(self) -> None:
         entry = self._entry_from_form()
         robot_id = self._selected_robot_id()
@@ -550,14 +657,25 @@ class TopicConfigPanel(QWidget):
             self._set_operation_result("error", "添加话题失败：请选择机器人并填写有效话题")
             return
 
-        self._entries = [e for e in self._entries if e.topic != entry.topic]
-        self._entries.append(entry)
+        original_topic = self._editing_topic
+        if original_topic:
+            self._entries = self.replace_entry_for_edit(
+                self._entries, original_topic, entry
+            )
+            requests = self.build_edit_topic_requests(original_topic, entry)
+            if original_topic != entry.topic:
+                self._pending_topic_operations[original_topic] = "rename_remove"
+            self._pending_topic_operations[entry.topic] = "edit"
+        else:
+            self._entries = [e for e in self._entries if e.topic != entry.topic]
+            self._entries.append(entry)
+            requests = [self.build_topic_request("subscribe", entry)]
+            self._pending_topic_operations[entry.topic] = "add"
         self._refresh_table()
         self._hide_form()
         self.config_changed.emit()
-        self.topic_request_requested.emit(
-            robot_id, self.build_topic_request("subscribe", entry)
-        )
+        for request in requests:
+            self.topic_request_requested.emit(robot_id, request)
 
     def _delete_selected_entry(self) -> None:
         row = self._table.currentRow()
@@ -568,6 +686,7 @@ class TopicConfigPanel(QWidget):
         entry = self._entries.pop(row)
         self._refresh_table()
         self.config_changed.emit()
+        self._pending_topic_operations[entry.topic] = "delete"
         self.topic_request_requested.emit(
             robot_id, self.build_topic_request("unsubscribe", entry)
         )

@@ -157,6 +157,69 @@ class TestTopicConfigPanel:
         assert req["transport"] == "mqtt_json"
         assert req["compression"] == {"resize": [320, 240]}
 
+    def test_replace_entry_for_edit_keeps_single_topic(self):
+        entries = [
+            SubscriptionEntry(topic="/scan", msg_type="sensor_msgs/LaserScan"),
+            SubscriptionEntry(topic="/odom", msg_type="nav_msgs/Odometry"),
+        ]
+        updated = SubscriptionEntry(
+            topic="/odom",
+            msg_type="nav_msgs/Odometry",
+            freq_limit=5.0,
+            transport="mqtt_binary",
+        )
+
+        replaced = TopicConfigPanel.replace_entry_for_edit(
+            entries, "/scan", updated
+        )
+
+        assert [(entry.topic, entry.freq_limit) for entry in replaced] == [
+            ("/odom", 5.0)
+        ]
+
+    def test_build_edit_topic_requests_renamed_topic(self):
+        updated = SubscriptionEntry(
+            topic="/map",
+            msg_type="nav_msgs/OccupancyGrid",
+            freq_limit=1.0,
+            transport="mqtt_json",
+        )
+
+        requests = TopicConfigPanel.build_edit_topic_requests("/scan", updated)
+
+        assert [request["action"] for request in requests] == [
+            "unsubscribe",
+            "subscribe",
+        ]
+        assert requests[0]["topic"] == "/scan"
+        assert requests[1]["topic"] == "/map"
+        assert requests[1]["msg_type"] == "nav_msgs/OccupancyGrid"
+
+    def test_topic_response_message_uses_pending_edit_operation(self):
+        pending = {"/scan": "edit"}
+
+        result = TopicConfigPanel.topic_response_result(
+            pending,
+            {"action": "subscribe", "topic": "/scan", "result": "ok"},
+        )
+
+        assert result == {
+            "level": "success",
+            "message": "更新话题成功：/scan",
+        }
+        assert pending == {}
+
+    def test_topic_response_message_suppresses_rename_unsubscribe_success(self):
+        pending = {"/scan": "rename_remove"}
+
+        result = TopicConfigPanel.topic_response_result(
+            pending,
+            {"action": "unsubscribe", "topic": "/scan", "result": "ok"},
+        )
+
+        assert result == {}
+        assert pending == {}
+
     def test_apply_config_response_loads_subscriptions(self):
         entries = TopicConfigPanel.entries_from_config_response({
             "subscriptions": [
