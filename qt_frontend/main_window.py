@@ -65,6 +65,10 @@ class MainWindow(QMainWindow):
 
         self._robot_list.robot_selected.connect(self._command.on_robot_selected)
         self._robot_list.robot_deselected.connect(lambda: self._command.on_robot_selected(""))
+        self._topic_config.config_changed.connect(
+            self._refresh_robot_subscription_counts
+        )
+        self._refresh_robot_subscription_counts()
 
     def _init_menu_and_toolbar(self) -> None:
         menubar = self.menuBar()
@@ -199,7 +203,7 @@ class MainWindow(QMainWindow):
         sig.sensor_data_received.connect(self._on_sensor_data)
         sig.discover_response_received.connect(self._on_discover)
         sig.topic_response_received.connect(self._topic_config.on_topic_response)
-        sig.config_response_received.connect(self._topic_config.on_config_response)
+        sig.config_response_received.connect(self._on_config_response)
         sig.discover_response_received.connect(self._topic_config.on_discover_response)
 
         self._act_connect.triggered.connect(self._mqtt_client.connect)
@@ -304,6 +308,23 @@ class MainWindow(QMainWindow):
         self._topic_config.on_robot_list_changed(robots)
         self._data_sender.on_robot_list_changed(robots)
         self._lb_online.setText(f"在线: {len(robots)}")
+
+    def _on_config_response(self, robot_id: str, data: dict) -> None:
+        self._topic_config.on_config_response(robot_id, data)
+        subscriptions = data.get("subscriptions", [])
+        if isinstance(subscriptions, list):
+            self._robot_list.update_subscription_count(robot_id, len(subscriptions))
+
+    def _refresh_robot_subscription_counts(self) -> None:
+        try:
+            config = TopicConfigPanel.load_transmit_config_file(
+                Path(__file__).resolve().parent / "config" / "transmit_config.yaml"
+            )
+        except Exception as e:
+            logger.warning("Failed to load subscription counts: %s", e)
+            return
+        counts = RobotListPanel.subscription_counts_from_transmit_config(config)
+        self._robot_list.update_subscription_counts(counts)
 
     def _on_mqtt_connected(self) -> None:
         self._lb_conn.setText("● 已连接")

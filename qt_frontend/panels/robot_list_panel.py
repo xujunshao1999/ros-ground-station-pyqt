@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -40,6 +40,7 @@ class RobotListPanel(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._robots: dict[str, RobotInfo] = {}
+        self._subscription_counts: Dict[str, int] = {}
 
         layout = QVBoxLayout(self)
 
@@ -119,6 +120,9 @@ class RobotListPanel(QWidget):
             self._robots[robot_id] = RobotInfo(robot_id=robot_id)
 
         info = self._robots[robot_id]
+        info.subscriptions_count = self._subscription_counts.get(
+            robot_id, info.subscriptions_count
+        )
         info.online = True
         info.last_seen = now
         info.battery = data.get("battery", 0.0)
@@ -139,14 +143,54 @@ class RobotListPanel(QWidget):
         if robot_id not in self._robots:
             self._robots[robot_id] = RobotInfo(robot_id=robot_id)
 
-        info = self._robots[robot_id]
+        info = self.info_after_discover_response(
+            self._robots[robot_id], data, now
+        )
+        info.subscriptions_count = self._subscription_counts.get(
+            robot_id, info.subscriptions_count
+        )
+        self._robots[robot_id] = info
+        self._update_tree_item(robot_id, info)
+
+    def update_subscription_counts(self, counts: Dict[str, int]) -> None:
+        self._subscription_counts = dict(counts)
+        for robot_id, count in self._subscription_counts.items():
+            if robot_id not in self._robots:
+                continue
+            self._robots[robot_id].subscriptions_count = count
+            self._update_tree_item(robot_id, self._robots[robot_id])
+
+    def update_subscription_count(self, robot_id: str, count: int) -> None:
+        self._subscription_counts[robot_id] = count
+        if robot_id not in self._robots:
+            return
+        self._robots[robot_id].subscriptions_count = count
+        self._update_tree_item(robot_id, self._robots[robot_id])
+
+    @staticmethod
+    def info_after_discover_response(
+        info: RobotInfo, data: dict, now: float
+    ) -> RobotInfo:
         info.online = True
         info.last_seen = now
+        return info
 
-        topics = data.get("topics", [])
-        info.subscriptions_count = len(topics)
-
-        self._update_tree_item(robot_id, info)
+    @staticmethod
+    def subscription_counts_from_transmit_config(
+        config: Dict[str, Any]
+    ) -> Dict[str, int]:
+        raw = config.get("subscriptions") or {}
+        if not isinstance(raw, dict):
+            return {}
+        counts: Dict[str, int] = {}
+        for robot_id, subscriptions in raw.items():
+            if isinstance(subscriptions, list):
+                counts[robot_id] = len([
+                    item for item in subscriptions if isinstance(item, dict)
+                ])
+            elif isinstance(subscriptions, dict):
+                counts[robot_id] = len(subscriptions)
+        return counts
 
     # ------------------------------------------------------------------
     # 内部方法

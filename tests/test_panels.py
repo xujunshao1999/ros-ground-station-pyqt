@@ -2,10 +2,12 @@ from __future__ import annotations
 
 """面板纯逻辑测试 — 不涉及 Qt Widget 渲染"""
 
+import os
 import time
 
 import pytest
 import yaml
+from PyQt5.QtWidgets import QApplication
 
 from qt_frontend.panels.command_panel import CommandPanel
 from qt_frontend.panels.event_panel import EventPanel
@@ -17,6 +19,17 @@ from qt_frontend.panels.topic_config_panel import (
     TopicConfigPanel,
 )
 from qt_frontend.panels.traffic_monitor import BandwidthEntry, TrafficMonitor
+
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(scope="session")
+def qt_app():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 # ------------------------------------------------------------------
@@ -61,6 +74,69 @@ class TestRobotListHeartbeat:
         now = time.monotonic()
         info = RobotInfo(robot_id="r1", online=True, last_seen=now - 10.0)
         assert (now - info.last_seen) <= RobotListPanel._HEARTBEAT_TIMEOUT
+
+
+class TestRobotListSubscriptions:
+    def test_discover_response_does_not_change_subscription_count(self):
+        info = RobotInfo(robot_id="robot_001", subscriptions_count=7)
+
+        updated = RobotListPanel.info_after_discover_response(
+            info,
+            {
+                "topics": [
+                    {"topic": f"/topic_{i}", "msg_type": "std_msgs/String"}
+                    for i in range(22)
+                ]
+            },
+            now=100.0,
+        )
+
+        assert updated.subscriptions_count == 7
+        assert updated.online is True
+        assert updated.last_seen == 100.0
+
+    def test_subscription_counts_from_transmit_config(self):
+        config = {
+            "subscriptions": {
+                "turtlebot_001": [
+                    {"topic": "/odom"},
+                    {"topic": "/scan"},
+                ],
+                "robot_002": {"topic": {"msg_type": "std_msgs/String"}},
+            }
+        }
+
+        assert RobotListPanel.subscription_counts_from_transmit_config(config) == {
+            "turtlebot_001": 2,
+            "robot_002": 1,
+        }
+
+    def test_discover_response_keeps_displayed_subscription_count(self, qt_app):
+        panel = RobotListPanel()
+        panel.on_status_received("turtlebot_001", {"battery": 90.0})
+        panel.update_subscription_counts({"turtlebot_001": 7})
+
+        panel.on_discover_response(
+            "turtlebot_001",
+            {
+                "topics": [
+                    {"topic": f"/topic_{i}", "msg_type": "std_msgs/String"}
+                    for i in range(22)
+                ]
+            },
+        )
+
+        item = panel._tree.topLevelItem(0)
+        assert item.text(4) == "7"
+
+    def test_status_received_applies_cached_subscription_count(self, qt_app):
+        panel = RobotListPanel()
+        panel.update_subscription_counts({"turtlebot_001": 7})
+
+        panel.on_status_received("turtlebot_001", {"battery": 90.0})
+
+        item = panel._tree.topLevelItem(0)
+        assert item.text(4) == "7"
 
 
 # ------------------------------------------------------------------
