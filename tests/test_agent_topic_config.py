@@ -193,6 +193,14 @@ def test_agent_config_tracks_source_path_for_save(tmp_path):
     assert config.config_path == str(config_path)
 
 
+def test_agent_config_tracks_missing_source_path_for_first_save(tmp_path):
+    config_path = tmp_path / "missing-agent.yaml"
+
+    config = AgentConfig.from_yaml(str(config_path))
+
+    assert config.config_path == str(config_path)
+
+
 def test_save_config_only_updates_subscriptions(tmp_path):
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(

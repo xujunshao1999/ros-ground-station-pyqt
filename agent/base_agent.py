@@ -14,6 +14,7 @@ Agent 的核心职责：
 
 import json
 import logging
+import os
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -128,7 +129,7 @@ class AgentConfig:
         p = Path(path)
         if not p.exists():
             logger.warning(f"配置文件不存在: {path}，使用默认值")
-            return cls()
+            return cls(config_path=str(p))
 
         with open(p, "r", encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
@@ -861,9 +862,27 @@ class BaseAgent(ABC):
             )
             with open(config_path, "w", encoding="utf-8") as f:
                 f.write(updated)
+            self._match_config_owner_to_parent(config_path)
             logger.info(f"[Agent] Config saved to {config_path}")
         except Exception as e:
             logger.error(f"[Agent] Failed to save config: {e}")
+
+    @staticmethod
+    def _match_config_owner_to_parent(config_path: Path) -> None:
+        """Keep Docker bind-mounted config files editable on the host."""
+        try:
+            parent_stat = config_path.parent.stat()
+            if os.geteuid() != 0:
+                return
+            if parent_stat.st_uid == 0 and parent_stat.st_gid == 0:
+                return
+            os.chown(str(config_path), parent_stat.st_uid, parent_stat.st_gid)
+        except Exception as e:
+            logger.debug(
+                "[Agent] Could not adjust config file owner for %s: %s",
+                config_path,
+                e,
+            )
 
     @staticmethod
     def _dump_top_level_yaml_section(key: str, value: Any) -> List[str]:

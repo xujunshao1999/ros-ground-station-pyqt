@@ -80,3 +80,29 @@ services:
       - /dev/dri:/dev/dri
     stdin_open: true
     tty: true
+
+  # ------------------------------------------------------------------
+  # Turtlebot3 仿真 — turtlebot_002 (roscore + ROS1 Agent + Gazebo)
+  # ------------------------------------------------------------------
+  robot-turtlebot-002:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ros
+    container_name: turtlebot-002
+    environment:
+      - ROBOT_ID=turtlebot_002
+      - BROKER_HOST=host-gateway
+      - TURTLEBOT3_MODEL=burger
+      - DISPLAY=${DISPLAY}
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    restart: unless-stopped
+    volumes:
+      - ./protocol:/app/protocol:ro
+      - ./agent:/app/agent:rw
+      - ./docker/supervisord-turtlebot3.conf:/etc/supervisor/conf.d/ros-agent.conf:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/dri:/dev/dri
+    stdin_open: true
+    tty: true
