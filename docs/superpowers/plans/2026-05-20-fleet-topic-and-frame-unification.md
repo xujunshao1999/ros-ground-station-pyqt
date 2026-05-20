@@ -88,7 +88,7 @@ Robot B Agent 接收
 
 - 修改：`docker-compose.yml`
 
-- [ ] **步骤 1：新增 `robot-turtlebot-002` 服务**
+- [x] **步骤 1：新增 `robot-turtlebot-002` 服务**
 
 在 `robot-turtlebot-001` 后新增：
 
@@ -161,7 +161,7 @@ rostopic list | grep turtlebot
 - 修改：`protocol/messages.py`
 - 测试：`tests/test_protocol_messages.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_protocol_messages.py` 中增加：
 
@@ -189,7 +189,7 @@ def test_fleet_data_ros_topic_fields(factory):
     assert msg.data["stamp"] == 123.0
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -199,7 +199,7 @@ python3 -m pytest tests/test_protocol_messages.py::TestMessageFactory::test_flee
 
 预期：FAIL，提示 `FleetData.__init__()` 不接受新增字段。
 
-- [ ] **步骤 3：扩展 `FleetData`**
+- [x] **步骤 3：扩展 `FleetData`**
 
 在 `protocol/messages.py` 中将 `FleetData` 扩展为：
 
@@ -219,7 +219,7 @@ class FleetData:
 
 保持字段默认值，确保旧消息仍可解析。
 
-- [ ] **步骤 4：运行协议测试**
+- [x] **步骤 4：运行协议测试**
 
 运行：
 
@@ -236,7 +236,7 @@ python3 -m pytest tests/test_protocol_messages.py -v
 - 创建：`agent/frame_utils.py`
 - 测试：`tests/test_frame_utils.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 创建 `tests/test_frame_utils.py`：
 
@@ -287,7 +287,7 @@ def test_namespace_is_idempotent():
     assert data["header"]["frame_id"] == "turtlebot_001/odom"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -297,7 +297,7 @@ python3 -m pytest tests/test_frame_utils.py -v
 
 预期：FAIL，提示 `agent.frame_utils` 不存在。
 
-- [ ] **步骤 3：实现工具函数**
+- [x] **步骤 3：实现工具函数**
 
 创建 `agent/frame_utils.py`：
 
@@ -339,7 +339,7 @@ def namespace_message_frames(data: Dict[str, Any], robot_id: str) -> None:
                 namespace_message_frames(transform, robot_id)
 ```
 
-- [ ] **步骤 4：运行 frame 工具测试**
+- [x] **步骤 4：运行 frame 工具测试**
 
 运行：
 
@@ -356,7 +356,7 @@ python3 -m pytest tests/test_frame_utils.py -v
 - 修改：`bridge/mqtt_ros_bridge.py`
 - 测试：`tests/test_bridge_frame_namespace.py`
 
-- [ ] **步骤 1：编写 Bridge frame 测试**
+- [x] **步骤 1：编写 Bridge frame 测试**
 
 创建或扩展 `tests/test_bridge_frame_namespace.py`：
 
@@ -388,7 +388,7 @@ def test_namespace_odometry_frames():
     assert data["child_frame_id"] == "turtlebot_001/base_footprint"
 ```
 
-- [ ] **步骤 2：替换 Bridge 内部 `_prefix_tf_frames` 逻辑**
+- [x] **步骤 2：替换 Bridge 内部 `_prefix_tf_frames` 逻辑**
 
 在 `bridge/mqtt_ros_bridge.py` 引入：
 
@@ -405,7 +405,7 @@ if self._namespace_tf_frames:
 
 保留 `_prefix_tf_frames` 作为兼容包装也可以，但新逻辑必须覆盖所有带 frame 的消息，而不仅是 `tf2_msgs/TFMessage`。
 
-- [ ] **步骤 3：运行 Bridge 相关测试**
+- [x] **步骤 3：运行 Bridge 相关测试**
 
 运行：
 
@@ -423,7 +423,7 @@ python3 -m pytest tests/test_bridge_frame_namespace.py tests/test_frame_utils.py
 - 修改：`agent/ros1_agent.py`
 - 测试：`tests/test_agent_fleet_rules.py`
 
-- [ ] **步骤 1：编写规则规范化测试**
+- [x] **步骤 1：编写规则规范化测试**
 
 创建 `tests/test_agent_fleet_rules.py`，先覆盖纯逻辑函数：
 
@@ -459,7 +459,7 @@ def test_normalize_fleet_rule_targets():
     assert rules[0]["targets"][0]["dst_topic"] == "/fleet/turtlebot_001/odom"
 ```
 
-- [ ] **步骤 2：实现 `_normalize_fleet_rules`**
+- [x] **步骤 2：实现 `_normalize_fleet_rules`**
 
 在 `agent/base_agent.py` 增加静态方法，输出字段固定为：
 
@@ -477,7 +477,7 @@ def test_normalize_fleet_rule_targets():
 
 过滤缺少 `src_topic`、`msg_type` 或有效 target 的规则。
 
-- [ ] **步骤 3：配置同步时应用 fleet rules**
+- [x] **步骤 3：配置同步时应用 fleet rules**
 
 在 `_handle_config_sync()` 中，把：
 
@@ -506,7 +506,7 @@ def _apply_fleet_rules(self, fleet_rules: List[Dict[str, Any]]) -> None:
     return
 ```
 
-- [ ] **步骤 4：ROS1Agent 根据规则订阅出站 topic**
+- [x] **步骤 4：ROS1Agent 根据规则订阅出站 topic**
 
 在 `agent/ros1_agent.py` 增加 `_fleet_subscribers` 字典。`_apply_fleet_rules()` 应：
 
@@ -529,7 +529,7 @@ FleetData(
 )
 ```
 
-- [ ] **步骤 5：运行 Agent fleet 测试**
+- [x] **步骤 5：运行 Agent fleet 测试**
 
 运行：
 
@@ -546,7 +546,7 @@ python3 -m pytest tests/test_agent_fleet_rules.py -v
 - 修改：`agent/ros1_agent.py`
 - 测试：`tests/test_agent_fleet_rules.py`
 
-- [ ] **步骤 1：定义入站行为**
+- [x] **步骤 1：定义入站行为**
 
 当 `data.data_type == "ros_topic"` 时：
 
@@ -557,7 +557,7 @@ python3 -m pytest tests/test_agent_fleet_rules.py -v
 - 使用现有 ROS 消息转换工具将 dict 转为 ROS msg。
 - 发布到 `dst_topic`。
 
-- [ ] **步骤 2：实现发布者缓存**
+- [x] **步骤 2：实现发布者缓存**
 
 在 `ROS1Agent` 增加：
 
@@ -567,7 +567,7 @@ self._fleet_publishers = {}
 
 key 使用 `(dst_topic, msg_type)`，避免重复创建 publisher。
 
-- [ ] **步骤 3：保留 `/fleet/incoming` 调试发布**
+- [x] **步骤 3：保留 `/fleet/incoming` 调试发布**
 
 现有 `/fleet/incoming` 的 JSON String 发布保留，但类型化发布应先执行。类型化发布失败时，记录 error，并仍发布调试消息。
 
