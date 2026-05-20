@@ -595,3 +595,17 @@ class TestMiscHelpers:
         msg = MockString(42)
         result = MqttRosBridge._resolve_msg_data(msg)
         assert result == 42
+
+    def test_prefix_tf_frames_namespaces_regular_message_frames(
+        self, bridge: MqttRosBridge
+    ):
+        """Bridge frame prefixing also applies to non-TF ROS messages."""
+        data = {
+            "header": {"frame_id": "odom"},
+            "child_frame_id": "base_footprint",
+        }
+
+        bridge._prefix_tf_frames(data, "turtlebot_001")
+
+        assert data["header"]["frame_id"] == "turtlebot_001/odom"
+        assert data["child_frame_id"] == "turtlebot_001/base_footprint"

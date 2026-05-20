@@ -47,6 +47,7 @@ from protocol.topics import (
     station_topic_request,
     parse_robot_topic,
 )
+from agent.frame_utils import namespace_message_frames
 from bridge.dict_to_ros_msg import dict_to_ros_msg
 
 logger = logging.getLogger(__name__)
@@ -581,10 +582,7 @@ class MqttRosBridge:
         try:
             convert_start = time.monotonic()
             # Prefix frame_ids for multi-robot when enabled
-            if (
-                self._namespace_tf_frames
-                and msg_type == "tf2_msgs/TFMessage"
-            ):
+            if self._namespace_tf_frames:
                 self._prefix_tf_frames(data_dict, robot_id)
 
             ros_msg = dict_to_ros_msg(data_dict, msg_type)
@@ -1055,30 +1053,8 @@ class MqttRosBridge:
     def _prefix_tf_frames(
         self, data_dict: dict, robot_id: str
     ) -> None:
-        """Prefix frame_id and child_frame_id with robot namespace.
-
-        Modifies *data_dict* in place so that each transform's
-        ``header.frame_id`` and ``child_frame_id`` become e.g.
-        ``turtlebot_001/odom`` instead of ``odom``.
-
-        Idempotent: skips frames that already carry the prefix.
-        """
-        transforms = data_dict.get("transforms")
-        if not transforms:
-            return
-
-        prefix = f"{robot_id}/"
-        for tf in transforms:
-            if not isinstance(tf, dict):
-                continue
-            header = tf.get("header")
-            if isinstance(header, dict):
-                fid = header.get("frame_id")
-                if isinstance(fid, str) and fid and not fid.startswith(prefix):
-                    header["frame_id"] = prefix + fid
-            cid = tf.get("child_frame_id")
-            if isinstance(cid, str) and cid and not cid.startswith(prefix):
-                tf["child_frame_id"] = prefix + cid
+        """Prefix frame_id and child_frame_id with robot namespace."""
+        namespace_message_frames(data_dict, robot_id)
 
     @staticmethod
     def _resolve_msg_data(msg: String) -> Any:
