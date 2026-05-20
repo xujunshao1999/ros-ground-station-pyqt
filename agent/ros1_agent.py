@@ -59,6 +59,7 @@ class ROS1Agent(BaseAgent):
 
         # ROS 订阅句柄
         self._ros_subscribers: Dict[str, object] = {}  # {topic: rospy.Subscriber}
+        self._fleet_subscribers: Dict[str, object] = {}
 
         # ROS 发布器
         self._cmd_vel_pub: Optional[rospy.Publisher] = None
@@ -268,6 +269,95 @@ class ROS1Agent(BaseAgent):
         except Exception as e:
             logger.error(f"[ROS1Agent] Failed to publish fleet data to ROS: {e}")
 
+    def _apply_fleet_rules(self, fleet_rules: List[dict]) -> None:
+        """根据 fleet_rules 订阅本机 ROS topic，并转发给目标机器人。"""
+        for topic, sub in list(self._fleet_subscribers.items()):
+            try:
+                sub.unregister()
+            except Exception:
+                pass
+            logger.info(f"[ROS1Agent] Fleet rule unsubscribed from: {topic}")
+        self._fleet_subscribers.clear()
+
+        for rule in fleet_rules:
+            if not rule.get("enabled", True):
+                continue
+
+            src_topic = rule.get("src_topic", "")
+            msg_type = rule.get("msg_type", "")
+            targets = list(rule.get("targets", []))
+            if not src_topic or not msg_type or not targets:
+                continue
+
+            msg_class = self._get_ros_msg_class(msg_type)
+            if msg_class is None:
+                logger.error(f"[ROS1Agent] Unknown fleet message type: {msg_type}")
+                continue
+
+            callback = self._make_fleet_forward_callback(
+                src_topic=src_topic,
+                msg_type=msg_type,
+                targets=targets,
+                frame_policy=rule.get("frame_policy", "preserve"),
+                freq_limit=float(rule.get("freq_limit", 0.0)),
+            )
+            try:
+                self._fleet_subscribers[src_topic] = rospy.Subscriber(
+                    src_topic,
+                    msg_class,
+                    callback,
+                )
+                logger.info(
+                    "[ROS1Agent] Fleet rule subscribed to ROS topic: %s (%s)",
+                    src_topic,
+                    msg_type,
+                )
+            except Exception as e:
+                logger.error(
+                    "[ROS1Agent] Failed to subscribe fleet topic %s: %s",
+                    src_topic,
+                    e,
+                )
+
+    def _make_fleet_forward_callback(
+        self,
+        src_topic: str,
+        msg_type: str,
+        targets: List[dict],
+        frame_policy: str,
+        freq_limit: float = 0.0,
+    ):
+        last_pub_time = {"t": 0.0}
+        min_interval = 1.0 / freq_limit if freq_limit > 0 else 0.0
+
+        def callback(msg):
+            now = time.time()
+            if min_interval > 0 and (now - last_pub_time["t"]) < min_interval:
+                return
+            last_pub_time["t"] = now
+
+            payload = ros_msg_to_dict(msg)
+            for target in targets:
+                target_id = target.get("robot_id", "")
+                dst_topic = target.get("dst_topic", "")
+                if not target_id or not dst_topic:
+                    continue
+                self.send_to_robot(
+                    target_id,
+                    FleetData(
+                        data_type="ros_topic",
+                        src_topic=src_topic,
+                        dst_topic=dst_topic,
+                        msg_type=msg_type,
+                        frame_policy=frame_policy,
+                        payload=payload,
+                        stamp=now,
+                        ttl=1.0,
+                    ),
+                )
+
+        return callback
+
     # ============================================================
     # ROS 消息类型映射
     # ============================================================
@@ -318,6 +408,13 @@ class ROS1Agent(BaseAgent):
             except Exception:
                 pass
         self._ros_subscribers.clear()
+
+        for topic, sub in list(self._fleet_subscribers.items()):
+            try:
+                sub.unregister()
+            except Exception:
+                pass
+        self._fleet_subscribers.clear()
 
         # 停止 HTTP 流服务端
         self._stop_stream_server()

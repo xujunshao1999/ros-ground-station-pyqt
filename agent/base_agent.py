@@ -702,12 +702,15 @@ class BaseAgent(ABC):
 
         new_subscriptions = self._normalize_subscriptions(data.get("subscriptions", []))
         has_fleet_rules = "fleet_rules" in data
-        new_fleet_rules = data.get("fleet_rules", self.config.fleet_rules)
+        new_fleet_rules = self._normalize_fleet_rules(
+            data.get("fleet_rules", self.config.fleet_rules)
+        )
 
         self._apply_subscription_config(new_subscriptions)
         self.config.subscriptions = new_subscriptions
         if has_fleet_rules:
             self.config.fleet_rules = new_fleet_rules
+            self._apply_fleet_rules(self.config.fleet_rules)
         self._save_config()
 
         # 回复确认
@@ -738,6 +741,7 @@ class BaseAgent(ABC):
     def _load_subscriptions_from_config(self) -> None:
         """启动时恢复持久化订阅"""
         self.config.subscriptions = self._normalize_subscriptions(self.config.subscriptions)
+        self.config.fleet_rules = self._normalize_fleet_rules(self.config.fleet_rules)
         for sub in self.config.subscriptions:
             topic = sub.get("topic", "")
             msg_type = sub.get("msg_type", "")
@@ -749,6 +753,7 @@ class BaseAgent(ABC):
                 self._rate_limiter.set_limit(topic, freq_limit)
                 self._on_topic_subscribed(topic, msg_type, options)
                 logger.info(f"[Agent] Restored subscription: {topic}")
+        self._apply_fleet_rules(self.config.fleet_rules)
 
     def _normalize_subscriptions(self, subscriptions: List[dict]) -> List[dict]:
         """清洗订阅配置，保留协议字段并按 topic 去重。"""
@@ -768,6 +773,50 @@ class BaseAgent(ABC):
                 "compression": dict(sub.get("compression") or sub.get("options") or {}),
             })
         return normalized
+
+    @staticmethod
+    def _normalize_fleet_rules(fleet_rules: List[dict]) -> List[dict]:
+        """清洗编队转发规则，保留可执行的 ROS topic 转发配置。"""
+        normalized: List[dict] = []
+        if not isinstance(fleet_rules, list):
+            return normalized
+
+        for rule in fleet_rules:
+            if not isinstance(rule, dict):
+                continue
+            src_topic = rule.get("src_topic", "")
+            msg_type = rule.get("msg_type", "")
+            if not src_topic or not msg_type:
+                continue
+
+            targets = []
+            for target in rule.get("targets", []):
+                if not isinstance(target, dict):
+                    continue
+                robot_id = target.get("robot_id", "")
+                dst_topic = target.get("dst_topic", "")
+                if robot_id and dst_topic:
+                    targets.append({
+                        "robot_id": robot_id,
+                        "dst_topic": dst_topic,
+                    })
+            if not targets:
+                continue
+
+            normalized.append({
+                "enabled": bool(rule.get("enabled", True)),
+                "src_topic": src_topic,
+                "msg_type": msg_type,
+                "targets": targets,
+                "freq_limit": float(rule.get("freq_limit", 0.0)),
+                "transport": rule.get("transport", "mqtt_json"),
+                "frame_policy": rule.get("frame_policy", "preserve"),
+            })
+        return normalized
+
+    def _apply_fleet_rules(self, fleet_rules: List[dict]) -> None:
+        """Apply fleet forwarding rules. Subclasses can create ROS subscribers."""
+        return
 
     def _subscription_runtime_info(self, sub: Dict[str, Any]) -> Dict[str, Any]:
         return {

@@ -15,6 +15,7 @@ class RecordingAgent(MockAgent):
         super().__init__(config)
         self.subscribed: List[Tuple[str, str, dict]] = []
         self.unsubscribed: List[str] = []
+        self.applied_fleet_rules = []
         self.saved_count = 0
         self.published = []
 
@@ -23,6 +24,9 @@ class RecordingAgent(MockAgent):
 
     def _on_topic_unsubscribed(self, topic: str) -> None:
         self.unsubscribed.append(topic)
+
+    def _apply_fleet_rules(self, fleet_rules: list) -> None:
+        self.applied_fleet_rules.append(fleet_rules)
 
     def _save_config(self) -> None:
         self.saved_count += 1
@@ -139,6 +143,22 @@ def test_config_sync_converges_added_updated_and_removed_subscriptions():
     ))
     agent._load_subscriptions_from_config()
     agent.subscribed.clear()
+    agent.applied_fleet_rules.clear()
+
+    fleet_rule = {
+        "enabled": True,
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [
+            {
+                "robot_id": "robot_002",
+                "dst_topic": "/fleet/robot_001/odom",
+            }
+        ],
+        "freq_limit": 10.0,
+        "transport": "mqtt_json",
+        "frame_policy": "namespace",
+    }
 
     agent._handle_config_sync(Message(
         src="station",
@@ -161,7 +181,7 @@ def test_config_sync_converges_added_updated_and_removed_subscriptions():
                     "compression": {},
                 },
             ],
-            "fleet_rules": [{"name": "reserved"}],
+            "fleet_rules": [fleet_rule],
         },
     ))
 
@@ -173,9 +193,77 @@ def test_config_sync_converges_added_updated_and_removed_subscriptions():
         ("/scan", "sensor_msgs/LaserScan", {"quality": 70}),
         ("/map", "nav_msgs/OccupancyGrid", {}),
     ]
-    assert agent.config.fleet_rules == [{"name": "reserved"}]
+    assert agent.config.fleet_rules == [fleet_rule]
+    assert agent.applied_fleet_rules == [[fleet_rule]]
     assert agent.saved_count == 1
     assert agent.published[-1][1]["type"] == "config_response"
+
+
+def test_normalize_fleet_rules_filters_invalid_entries():
+    raw = [
+        {
+            "enabled": True,
+            "src_topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "targets": [
+                {
+                    "robot_id": "robot_002",
+                    "dst_topic": "/fleet/robot_001/odom",
+                },
+                {"robot_id": "", "dst_topic": "/bad"},
+            ],
+            "freq_limit": 10.0,
+            "transport": "mqtt_json",
+            "frame_policy": "namespace",
+        },
+        {"name": "invalid"},
+    ]
+
+    rules = MockAgent._normalize_fleet_rules(raw)
+
+    assert rules == [
+        {
+            "enabled": True,
+            "src_topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "targets": [
+                {
+                    "robot_id": "robot_002",
+                    "dst_topic": "/fleet/robot_001/odom",
+                }
+            ],
+            "freq_limit": 10.0,
+            "transport": "mqtt_json",
+            "frame_policy": "namespace",
+        }
+    ]
+
+
+def test_load_subscriptions_from_config_applies_fleet_rules():
+    fleet_rule = {
+        "enabled": True,
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [
+            {
+                "robot_id": "robot_002",
+                "dst_topic": "/fleet/robot_001/odom",
+            }
+        ],
+        "freq_limit": 10.0,
+        "transport": "mqtt_json",
+        "frame_policy": "namespace",
+    }
+    agent = RecordingAgent(AgentConfig(
+        robot_id="robot_001",
+        subscriptions=[],
+        fleet_rules=[fleet_rule],
+    ))
+
+    agent._load_subscriptions_from_config()
+
+    assert agent.config.fleet_rules == [fleet_rule]
+    assert agent.applied_fleet_rules == [[fleet_rule]]
 
 
 def test_agent_config_tracks_source_path_for_save(tmp_path):
