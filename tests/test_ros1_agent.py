@@ -141,3 +141,96 @@ def test_fleet_rule_callback_respects_freq_limit(monkeypatch):
     callback(object())
 
     assert len(sent) == 2
+
+
+def test_on_fleet_message_ros_topic_publishes_typed_dst_topic(monkeypatch):
+    mock_rospy = MagicMock()
+    typed_pub = MagicMock()
+    debug_pub = MagicMock()
+    mock_rospy.Publisher.side_effect = [typed_pub, debug_pub]
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.dict_to_ros_msg",
+        lambda payload, msg_type: {"msg_type": msg_type, "payload": payload},
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent._fleet_publishers = {}
+
+    ROS1Agent._on_fleet_message(agent, "turtlebot_001", FleetData(
+        data_type="ros_topic",
+        src_topic="/odom",
+        dst_topic="/fleet/turtlebot_001/odom",
+        msg_type="nav_msgs/Odometry",
+        payload={"header": {"frame_id": "odom"}},
+    ))
+
+    assert mock_rospy.Publisher.call_args_list[0][0][0] == "/fleet/turtlebot_001/odom"
+    assert mock_rospy.Publisher.call_args_list[0][0][1] is dict
+    typed_pub.publish.assert_called_once_with({
+        "msg_type": "nav_msgs/Odometry",
+        "payload": {"header": {"frame_id": "odom"}},
+    })
+    debug_pub.publish.assert_called_once()
+
+
+def test_on_fleet_message_namespaces_payload_when_requested(monkeypatch):
+    mock_rospy = MagicMock()
+    typed_pub = MagicMock()
+    debug_pub = MagicMock()
+    mock_rospy.Publisher.side_effect = [typed_pub, debug_pub]
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+
+    captured_payloads = []
+
+    def fake_dict_to_ros_msg(payload, msg_type):
+        captured_payloads.append(payload)
+        return object()
+
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", fake_dict_to_ros_msg)
+
+    agent = object.__new__(ROS1Agent)
+    agent._fleet_publishers = {}
+
+    ROS1Agent._on_fleet_message(agent, "turtlebot_001", FleetData(
+        data_type="ros_topic",
+        dst_topic="/fleet/turtlebot_001/odom",
+        msg_type="nav_msgs/Odometry",
+        frame_policy="namespace",
+        payload={
+            "header": {"frame_id": "odom"},
+            "child_frame_id": "base_footprint",
+        },
+    ))
+
+    assert captured_payloads[0]["header"]["frame_id"] == "turtlebot_001/odom"
+    assert captured_payloads[0]["child_frame_id"] == "turtlebot_001/base_footprint"
+
+
+def test_on_fleet_message_reuses_typed_publisher(monkeypatch):
+    mock_rospy = MagicMock()
+    typed_pub = MagicMock()
+    debug_pub_1 = MagicMock()
+    debug_pub_2 = MagicMock()
+    mock_rospy.Publisher.side_effect = [typed_pub, debug_pub_1, debug_pub_2]
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", lambda payload, msg_type: object())
+
+    agent = object.__new__(ROS1Agent)
+    agent._fleet_publishers = {}
+    data = FleetData(
+        data_type="ros_topic",
+        dst_topic="/fleet/turtlebot_001/odom",
+        msg_type="nav_msgs/Odometry",
+        payload={"header": {"frame_id": "odom"}},
+    )
+
+    ROS1Agent._on_fleet_message(agent, "turtlebot_001", data)
+    ROS1Agent._on_fleet_message(agent, "turtlebot_001", data)
+
+    typed_topic_calls = [
+        call for call in mock_rospy.Publisher.call_args_list
+        if call[0][0] == "/fleet/turtlebot_001/odom"
+    ]
+    assert len(typed_topic_calls) == 1
+    assert typed_pub.publish.call_count == 2

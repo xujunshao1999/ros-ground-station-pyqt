@@ -23,7 +23,9 @@ except ImportError:
     rospy = None  # 延迟到运行时报错
 
 from agent.base_agent import BaseAgent, AgentConfig, AgentState
+from agent.frame_utils import namespace_message_frames
 from agent.ros_msg_converter import ros_msg_to_dict
+from bridge.dict_to_ros_msg import dict_to_ros_msg
 from protocol.messages import (
     StatusData,
     Position,
@@ -63,6 +65,7 @@ class ROS1Agent(BaseAgent):
 
         # ROS 发布器
         self._cmd_vel_pub: Optional[rospy.Publisher] = None
+        self._fleet_publishers: Dict[tuple, object] = {}
 
         # 状态数据
         self._position = Position(x=0.0, y=0.0, theta=0.0)
@@ -256,6 +259,9 @@ class ROS1Agent(BaseAgent):
     def _on_fleet_message(self, src_id: str, data: FleetData) -> None:
         """处理其他机器人发来的 fleet 数据，发布到 ROS 话题"""
         try:
+            if data.data_type == "ros_topic":
+                self._publish_fleet_ros_topic(src_id, data)
+
             payload = {
                 "src_id": src_id,
                 "data_type": data.data_type,
@@ -268,6 +274,34 @@ class ROS1Agent(BaseAgent):
             logger.info(f"[ROS1Agent] Published fleet data from {src_id} to /fleet/incoming")
         except Exception as e:
             logger.error(f"[ROS1Agent] Failed to publish fleet data to ROS: {e}")
+
+    def _publish_fleet_ros_topic(self, src_id: str, data: FleetData) -> None:
+        if not data.dst_topic or not data.msg_type or not isinstance(data.payload, dict):
+            logger.warning(
+                "[ROS1Agent] Invalid fleet ros_topic from %s: dst_topic=%s msg_type=%s",
+                src_id,
+                data.dst_topic,
+                data.msg_type,
+            )
+            return
+
+        payload = dict(data.payload)
+        if data.frame_policy == "namespace":
+            namespace_message_frames(payload, src_id)
+
+        ros_msg = dict_to_ros_msg(payload, data.msg_type)
+        key = (data.dst_topic, data.msg_type)
+        pub = self._fleet_publishers.get(key)
+        if pub is None:
+            pub = rospy.Publisher(data.dst_topic, type(ros_msg), queue_size=10)
+            self._fleet_publishers[key] = pub
+        pub.publish(ros_msg)
+        logger.info(
+            "[ROS1Agent] Published fleet ROS topic from %s to %s (%s)",
+            src_id,
+            data.dst_topic,
+            data.msg_type,
+        )
 
     def _apply_fleet_rules(self, fleet_rules: List[dict]) -> None:
         """根据 fleet_rules 订阅本机 ROS topic，并转发给目标机器人。"""
@@ -415,6 +449,7 @@ class ROS1Agent(BaseAgent):
             except Exception:
                 pass
         self._fleet_subscribers.clear()
+        self._fleet_publishers.clear()
 
         # 停止 HTTP 流服务端
         self._stop_stream_server()
