@@ -259,6 +259,32 @@ class TestMessageFactory:
         assert msg.data["payload"]["x"] == 1.0
         assert msg.data["ttl"] == 30.0
 
+    def test_fleet_data_ros_topic_fields(self, factory):
+        """测试创建 ROS topic 转发类型的机器人间通信消息"""
+        fd = FleetData(
+            data_type="ros_topic",
+            src_topic="/odom",
+            dst_topic="/fleet/turtlebot_001/odom",
+            msg_type="nav_msgs/Odometry",
+            frame_policy="namespace",
+            payload={"header": {"frame_id": "odom"}},
+            stamp=123.0,
+            ttl=1.0,
+        )
+
+        msg = factory.fleet_data(fd, dst="turtlebot_002")
+
+        assert msg.type == MessageType.FLEET_DATA
+        assert msg.dst == "turtlebot_002"
+        assert msg.data["data_type"] == "ros_topic"
+        assert msg.data["src_topic"] == "/odom"
+        assert msg.data["dst_topic"] == "/fleet/turtlebot_001/odom"
+        assert msg.data["msg_type"] == "nav_msgs/Odometry"
+        assert msg.data["frame_policy"] == "namespace"
+        assert msg.data["payload"] == {"header": {"frame_id": "odom"}}
+        assert msg.data["stamp"] == 123.0
+        assert msg.data["ttl"] == 1.0
+
     def test_sequence_number_increment(self, factory):
         """测试序列号递增"""
         msg1 = factory.status(StatusData())

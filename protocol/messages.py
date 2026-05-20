@@ -215,6 +215,11 @@ class FleetData:
     data_type: str = "custom"        # "position" | "nav_goal" | "custom" | "pointcloud"
     payload: Dict[str, Any] = field(default_factory=dict)
     ttl: float = 30.0                # 有效时间（秒）
+    src_topic: str = ""              # 源 ROS topic
+    dst_topic: str = ""              # 目标机器人本地发布 topic
+    msg_type: str = ""               # ROS 消息类型
+    frame_policy: str = "preserve"   # "preserve" | "namespace"
+    stamp: float = 0.0               # 数据时间戳
 
 
 @dataclass
