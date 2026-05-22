@@ -31,9 +31,20 @@ class FleetCommPanel(QWidget):
 
         # 规则表
         self._table = QTableWidget()
-        self._table.setColumnCount(7)
-        self._table.setHorizontalHeaderLabels(["源", "目标", "话题", "类型", "频率", "状态", "操作"])
+        self._table.setColumnCount(9)
+        self._table.setHorizontalHeaderLabels([
+            "启用",
+            "源机器人",
+            "源话题",
+            "消息类型",
+            "目标机器人",
+            "目标话题",
+            "频率",
+            "Frame 策略",
+            "操作",
+        ])
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
         layout.addWidget(self._table)
 
         # 按钮行
@@ -63,10 +74,14 @@ class FleetCommPanel(QWidget):
         form.addLayout(f1)
 
         f2 = QHBoxLayout()
-        f2.addWidget(QLabel("ROS 话题:"))
-        self._edit_topic = QLineEdit()
-        self._edit_topic.setPlaceholderText("/odom")
-        f2.addWidget(self._edit_topic)
+        f2.addWidget(QLabel("源话题:"))
+        self._edit_src_topic = QLineEdit()
+        self._edit_src_topic.setPlaceholderText("/odom")
+        f2.addWidget(self._edit_src_topic)
+        f2.addWidget(QLabel("目标话题:"))
+        self._edit_dst_topic = QLineEdit()
+        self._edit_dst_topic.setPlaceholderText("/fleet/turtlebot_001/odom")
+        f2.addWidget(self._edit_dst_topic)
         form.addLayout(f2)
 
         f3 = QHBoxLayout()
@@ -87,6 +102,13 @@ class FleetCommPanel(QWidget):
         self._spin_freq.setValue(1.0)
         f4.addWidget(self._spin_freq)
         form.addLayout(f4)
+
+        f_policy = QHBoxLayout()
+        f_policy.addWidget(QLabel("Frame 策略:"))
+        self._combo_frame_policy = QComboBox()
+        self._combo_frame_policy.addItems(["namespace", "preserve"])
+        f_policy.addWidget(self._combo_frame_policy)
+        form.addLayout(f_policy)
 
         f5 = QHBoxLayout()
         f5.addWidget(QLabel("用途:"))
@@ -111,8 +133,49 @@ class FleetCommPanel(QWidget):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def validate_fleet_rule(src: str, dst: str, topic: str) -> bool:
-        return src != "" and dst != "" and src != dst and topic.startswith("/")
+    def validate_fleet_rule(
+        src_robot: str,
+        src_topic: str,
+        msg_type: str,
+        dst_robot: str,
+        dst_topic: str,
+        freq_limit: float,
+    ) -> bool:
+        return (
+            src_robot != ""
+            and dst_robot != ""
+            and src_robot != dst_robot
+            and src_topic.startswith("/")
+            and dst_topic.startswith("/")
+            and msg_type != ""
+            and freq_limit >= 0.0
+        )
+
+    @staticmethod
+    def rule_to_protocol_dict(rule: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "enabled": bool(rule.get("enabled", True)),
+            "src_topic": rule.get("src_topic", ""),
+            "msg_type": rule.get("msg_type", ""),
+            "targets": [
+                {
+                    "robot_id": rule.get("dst_robot", ""),
+                    "dst_topic": rule.get("dst_topic", ""),
+                }
+            ],
+            "freq_limit": float(rule.get("freq_limit") or 0.0),
+            "transport": rule.get("transport", "mqtt_json"),
+            "frame_policy": rule.get("frame_policy", "namespace"),
+        }
+
+    @staticmethod
+    def build_config_sync_payload(rules: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {
+            "fleet_rules": [
+                FleetCommPanel.rule_to_protocol_dict(rule)
+                for rule in rules
+            ]
+        }
 
     # ------------------------------------------------------------------
     # Slots

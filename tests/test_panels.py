@@ -640,17 +640,92 @@ class TestEventPanel:
 # ------------------------------------------------------------------
 class TestFleetCommPanel:
     def test_validate_rule_src_neq_dst(self):
-        assert FleetCommPanel.validate_fleet_rule("r1", "r2", "/odom") is True
-        assert FleetCommPanel.validate_fleet_rule("r1", "r1", "/odom") is False
+        assert FleetCommPanel.validate_fleet_rule(
+            "r1", "/odom", "nav_msgs/Odometry", "r2", "/fleet/r1/odom", 10.0
+        ) is True
+        assert FleetCommPanel.validate_fleet_rule(
+            "r1", "/odom", "nav_msgs/Odometry", "r1", "/fleet/r1/odom", 10.0
+        ) is False
 
     def test_validate_rule_topic_must_start_with_slash(self):
-        assert FleetCommPanel.validate_fleet_rule("r1", "r2", "/odom") is True
-        assert FleetCommPanel.validate_fleet_rule("r1", "r2", "odom") is False
+        assert FleetCommPanel.validate_fleet_rule(
+            "r1", "/odom", "nav_msgs/Odometry", "r2", "/fleet/r1/odom", 10.0
+        ) is True
+        assert FleetCommPanel.validate_fleet_rule(
+            "r1", "odom", "nav_msgs/Odometry", "r2", "/fleet/r1/odom", 10.0
+        ) is False
+        assert FleetCommPanel.validate_fleet_rule(
+            "r1", "/odom", "nav_msgs/Odometry", "r2", "fleet/r1/odom", 10.0
+        ) is False
 
     def test_validate_rule_empty_fields(self):
-        assert FleetCommPanel.validate_fleet_rule("", "r2", "/odom") is False
-        assert FleetCommPanel.validate_fleet_rule("r1", "", "/odom") is False
-        assert FleetCommPanel.validate_fleet_rule("", "", "") is False
+        assert FleetCommPanel.validate_fleet_rule(
+            "", "/odom", "nav_msgs/Odometry", "r2", "/fleet/r1/odom", 10.0
+        ) is False
+        assert FleetCommPanel.validate_fleet_rule(
+            "r1", "/odom", "nav_msgs/Odometry", "", "/fleet/r1/odom", 10.0
+        ) is False
+        assert FleetCommPanel.validate_fleet_rule(
+            "r1", "/odom", "", "r2", "/fleet/r1/odom", 10.0
+        ) is False
+
+    def test_validate_rule_rejects_negative_frequency(self):
+        assert FleetCommPanel.validate_fleet_rule(
+            "r1", "/odom", "nav_msgs/Odometry", "r2", "/fleet/r1/odom", -1.0
+        ) is False
+
+    def test_table_headers_match_fleet_rule_fields(self, qt_app):
+        panel = FleetCommPanel()
+
+        headers = [
+            panel._table.horizontalHeaderItem(index).text()
+            for index in range(panel._table.columnCount())
+        ]
+
+        assert headers == [
+            "启用",
+            "源机器人",
+            "源话题",
+            "消息类型",
+            "目标机器人",
+            "目标话题",
+            "频率",
+            "Frame 策略",
+            "操作",
+        ]
+
+    def test_build_config_sync_payload_generates_fleet_rules(self):
+        payload = FleetCommPanel.build_config_sync_payload([
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "frame_policy": "namespace",
+            }
+        ])
+
+        assert payload == {
+            "fleet_rules": [
+                {
+                    "enabled": True,
+                    "src_topic": "/odom",
+                    "msg_type": "nav_msgs/Odometry",
+                    "targets": [
+                        {
+                            "robot_id": "turtlebot_002",
+                            "dst_topic": "/fleet/turtlebot_001/odom",
+                        }
+                    ],
+                    "freq_limit": 10.0,
+                    "transport": "mqtt_json",
+                    "frame_policy": "namespace",
+                }
+            ]
+        }
 
 
 # ------------------------------------------------------------------

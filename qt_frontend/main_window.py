@@ -298,6 +298,7 @@ class MainWindow(QMainWindow):
         robots = self._robot_list.get_online_robots()
         self._command.on_robot_list_changed(robots)
         self._topic_config.on_robot_list_changed(robots)
+        self._fleet_comm.on_robot_list_changed(robots)
         self._data_sender.on_robot_list_changed(robots)
         self._lb_online.setText(f"在线: {len(robots)}")
 
@@ -306,6 +307,7 @@ class MainWindow(QMainWindow):
         robots = self._robot_list.get_online_robots()
         self._command.on_robot_list_changed(robots)
         self._topic_config.on_robot_list_changed(robots)
+        self._fleet_comm.on_robot_list_changed(robots)
         self._data_sender.on_robot_list_changed(robots)
         self._lb_online.setText(f"在线: {len(robots)}")
 

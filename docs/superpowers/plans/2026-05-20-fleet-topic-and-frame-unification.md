@@ -667,7 +667,7 @@ global_map
 - 修改：`qt_frontend/main_window.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：扩展规则字段校验**
+- [x] **步骤 1：扩展规则字段校验**
 
 将校验从 `(src, dst, topic)` 扩展到：
 
@@ -690,7 +690,7 @@ validate_fleet_rule(
 - `msg_type` 非空。
 - `freq_limit >= 0.0`。
 
-- [ ] **步骤 2：更新面板列**
+- [x] **步骤 2：更新面板列**
 
 表格列改为：
 
@@ -706,7 +706,7 @@ Frame 策略
 操作
 ```
 
-- [ ] **步骤 3：生成配置结构**
+- [x] **步骤 3：生成配置结构**
 
 保存时输出：
 
@@ -723,7 +723,7 @@ fleet_rules:
     frame_policy: namespace
 ```
 
-- [ ] **步骤 4：运行面板测试**
+- [x] **步骤 4：运行面板测试**
 
 运行：
 
