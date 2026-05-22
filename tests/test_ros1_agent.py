@@ -78,6 +78,97 @@ def test_apply_fleet_rules_subscribes_enabled_ros_topics(monkeypatch):
     assert agent._fleet_subscribers["/odom"] is mock_sub
 
 
+def test_on_topic_subscribed_replays_tf_static_latched_message(monkeypatch):
+    mock_rospy = MagicMock()
+    mock_msg = object()
+    mock_rospy.Subscriber.return_value = MagicMock()
+    mock_rospy.wait_for_message.return_value = mock_msg
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: {"transforms": [{"child_frame_id": "base_scan"}]},
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 10.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/tf_static",
+        "tf2_msgs/TFMessage",
+        {"freq_limit": 10.0},
+    )
+
+    mock_rospy.wait_for_message.assert_called_once_with(
+        "/tf_static",
+        object,
+        timeout=2.0,
+    )
+    agent.publish_sensor_data.assert_called_once_with(
+        "/tf_static",
+        "tf2_msgs/TFMessage",
+        {"transforms": [{"child_frame_id": "base_scan"}]},
+        bypass_rate_limit=True,
+        retain=True,
+    )
+
+
+def test_tf_static_callback_merges_multiple_latched_messages(monkeypatch):
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    mock_rospy.wait_for_message.side_effect = Exception("timeout")
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+
+    payloads = iter([
+        {"transforms": [{"child_frame_id": "base_link"}]},
+        {"transforms": [{"child_frame_id": "base_scan"}]},
+    ])
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: next(payloads),
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 10.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/tf_static",
+        "tf2_msgs/TFMessage",
+        {"freq_limit": 10.0},
+    )
+    captured_callback["callback"](object())
+    captured_callback["callback"](object())
+
+    published = agent.publish_sensor_data.call_args_list[-1]
+    assert published[0][0] == "/tf_static"
+    assert published[0][1] == "tf2_msgs/TFMessage"
+    assert published[1]["bypass_rate_limit"] is True
+    assert published[1]["retain"] is True
+    assert [
+        transform["child_frame_id"]
+        for transform in published[0][2]["transforms"]
+    ] == ["base_link", "base_scan"]
+
+
 def test_fleet_rule_callback_sends_fleet_data(monkeypatch):
     monkeypatch.setattr(
         "agent.ros1_agent.ros_msg_to_dict",

@@ -278,7 +278,14 @@ class BaseAgent(ABC):
         except Exception as e:
             logger.error(f"[Agent] Failed to publish event: {e}")
 
-    def publish_sensor_data(self, ros_topic: str, msg_type: str, data: dict) -> None:
+    def publish_sensor_data(
+        self,
+        ros_topic: str,
+        msg_type: str,
+        data: dict,
+        bypass_rate_limit: bool = False,
+        retain: bool = False,
+    ) -> None:
         """发布传感器数据
 
         由子类调用，将话题数据通过分层策略发送。
@@ -287,13 +294,15 @@ class BaseAgent(ABC):
             ros_topic: ROS 话题名，如 "/camera/image_raw/compressed"
             msg_type: 消息类型，如 "sensor_msgs/CompressedImage"
             data: 话题数据字典
+            bypass_rate_limit: 是否跳过发送限频
+            retain: 是否使用 MQTT retained 消息
         """
         # 检查是否被地面站订阅
         if ros_topic not in self._subscribed_topics:
             return
 
         # 检查限频
-        if not self._rate_limiter.can_send(ros_topic):
+        if not bypass_rate_limit and not self._rate_limiter.can_send(ros_topic):
             return
 
         # 添加消息类型信息
@@ -315,7 +324,12 @@ class BaseAgent(ABC):
         mqtt_topic = self._get_sensor_mqtt_topic(ros_topic, processed.tier)
 
         if processed.mqtt_payload:
-            self._mqtt_publish(mqtt_topic, processed.mqtt_payload, qos=qos)
+            self._mqtt_publish(
+                mqtt_topic,
+                processed.mqtt_payload,
+                qos=qos,
+                retain=retain,
+            )
 
         # 重量话题额外处理
         if processed.tier == TopicTier.HEAVY and processed.stream_data:
@@ -333,7 +347,8 @@ class BaseAgent(ABC):
                 ))
                 self._mqtt_publish(meta_topic, meta_msg.to_json().encode("utf-8"), qos=qos)
 
-        self._rate_limiter.mark_sent(ros_topic)
+        if not bypass_rate_limit:
+            self._rate_limiter.mark_sent(ros_topic)
 
     # ============================================================
     # 机器人间通信
@@ -1050,13 +1065,19 @@ class BaseAgent(ABC):
     # 工具方法
     # ============================================================
 
-    def _mqtt_publish(self, topic: str, payload: bytes, qos: int = 1) -> None:
+    def _mqtt_publish(
+        self,
+        topic: str,
+        payload: bytes,
+        qos: int = 1,
+        retain: bool = False,
+    ) -> None:
         """发布 MQTT 消息"""
         if self._mqtt_client and self.state in (
             AgentState.CONNECTED,
             AgentState.RUNNING,
         ):
-            self._mqtt_client.publish(topic, payload, qos=qos)
+            self._mqtt_client.publish(topic, payload, qos=qos, retain=retain)
             logger.debug(f"[Agent] Published to {topic} ({len(payload)} bytes)")
 
     def _reconnect_loop(self) -> None:

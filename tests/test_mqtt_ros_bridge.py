@@ -182,15 +182,32 @@ class MockMqttMsg:
         self.payload = payload
 
 
+def make_mock_rospy():
+    mock_rospy = MagicMock()
+    mock_rospy.Publisher = MagicMock()
+    mock_rospy.Subscriber = MagicMock()
+    mock_rospy.Time = MockTime
+    mock_rospy.Duration = MockDuration
+    mock_rospy.is_shutdown.return_value = False
+    return mock_rospy
+
+
 @pytest.fixture
-def bridge():
+def bridge(monkeypatch):
     """Create an MqttRosBridge instance with a mocked config loader.
 
     The bridge is created with ``_running = True`` so heartbeat-related
     methods can operate without needing a full ``start()`` call.
     """
+    import bridge.mqtt_ros_bridge as bridge_module
+
+    mock_rospy = make_mock_rospy()
+    monkeypatch.setattr(bridge_module, "rospy", mock_rospy)
+    monkeypatch.setattr(bridge_module, "TransformStamped", MockTransformStamped)
+
     with patch.object(MqttRosBridge, "_load_config", return_value=_TEST_CONFIG):
         br = MqttRosBridge()
+    br._test_rospy = mock_rospy
     br._running = True
     return br
 
@@ -655,7 +672,17 @@ class TestMiscHelpers:
         assert data["header"]["frame_id"] == "turtlebot_001/odom"
         assert data["child_frame_id"] == "turtlebot_001/base_footprint"
 
-    def test_build_fleet_static_transforms_from_config(self):
+    def test_get_or_create_typed_publisher_latches_tf_static(self, bridge: MqttRosBridge):
+        bridge._get_or_create_typed_publisher("/tf_static", object)
+
+        bridge._test_rospy.Publisher.assert_called_with(
+            "/tf_static",
+            object,
+            queue_size=10,
+            latch=True,
+        )
+
+    def test_build_fleet_static_transforms_from_config(self, bridge: MqttRosBridge):
         config = {
             "enabled": True,
             "global_frame": "global_map",
@@ -719,4 +746,32 @@ class TestMiscHelpers:
         assert [tf.child_frame_id for tf in transforms] == [
             "turtlebot_001/map",
             "turtlebot_002/map",
+        ]
+
+    def test_refresh_fleet_static_frames_includes_cached_robot_static_transforms(
+        self, bridge: MqttRosBridge
+    ):
+        bridge._config["fleet_frames"] = {
+            "enabled": True,
+            "global_frame": "global_map",
+            "robots": {
+                "turtlebot_001": {
+                    "local_root_frame": "map",
+                    "pose": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+            },
+        }
+        broadcaster = MagicMock()
+        bridge._fleet_static_tf_broadcaster = broadcaster
+        robot_tf = MockTransformStamped()
+        robot_tf.header.frame_id = "turtlebot_001/base_link"
+        robot_tf.child_frame_id = "turtlebot_001/base_scan"
+
+        bridge._cache_robot_static_transforms("turtlebot_001", [robot_tf])
+        bridge._refresh_fleet_static_frames(None)
+
+        transforms = broadcaster.sendTransform.call_args[0][0]
+        assert [tf.child_frame_id for tf in transforms] == [
+            "turtlebot_001/map",
+            "turtlebot_001/base_scan",
         ]

@@ -35,8 +35,19 @@ class RecordingAgent(MockAgent):
     def _save_config(self) -> None:
         self.saved_count += 1
 
-    def _mqtt_publish(self, topic: str, payload: bytes, qos: int = 1) -> None:
-        self.published.append((topic, json.loads(payload.decode("utf-8")), qos))
+    def _mqtt_publish(
+        self,
+        topic: str,
+        payload: bytes,
+        qos: int = 1,
+        retain: bool = False,
+    ) -> None:
+        self.published.append((
+            topic,
+            json.loads(payload.decode("utf-8")),
+            qos,
+            retain,
+        ))
 
 
 def test_topic_request_subscribe_updates_runtime_and_persistent_config():
@@ -91,6 +102,27 @@ def test_publish_sensor_data_uses_subscription_qos():
     )
 
     assert agent.published[-1][2] == 2
+
+
+def test_publish_sensor_data_can_retain_message():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
+    agent._subscribed_topics["/tf_static"] = {
+        "msg_type": "tf2_msgs/TFMessage",
+        "freq_limit": 0.0,
+        "qos": 1,
+        "options": {},
+    }
+
+    agent.publish_sensor_data(
+        "/tf_static",
+        "tf2_msgs/TFMessage",
+        {"transforms": []},
+        bypass_rate_limit=True,
+        retain=True,
+    )
+
+    assert agent.published[-1][0] == "robot/robot_001/sensor/tf_static"
+    assert agent.published[-1][3] is True
 
 
 def test_topic_request_unsubscribe_removes_runtime_and_persistent_config():

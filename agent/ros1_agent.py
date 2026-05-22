@@ -225,11 +225,22 @@ class ROS1Agent(BaseAgent):
 
         def callback(msg, t=topic, mt=msg_type, lpt=last_pub_time, mi=min_interval):
             now = time.time()
-            if mi > 0 and (now - lpt["t"]) < mi:
+            if t != "/tf_static" and mi > 0 and (now - lpt["t"]) < mi:
                 return  # 限频：跳过
             lpt["t"] = now
 
             data = ros_msg_to_dict(msg)
+            if t == "/tf_static":
+                data = self._merge_tf_static_data(data)
+                self.publish_sensor_data(
+                    t,
+                    mt,
+                    data,
+                    bypass_rate_limit=True,
+                    retain=True,
+                )
+                return
+
             with self._sensor_lock:
                 self._sensor_data[t] = data
             self.publish_sensor_data(t, mt, data)
@@ -238,8 +249,54 @@ class ROS1Agent(BaseAgent):
             sub = rospy.Subscriber(topic, msg_class, callback)
             self._ros_subscribers[topic] = sub
             logger.info(f"[ROS1Agent] Subscribed to ROS topic: {topic} ({msg_type}) @ {freq}Hz")
+            if topic == "/tf_static":
+                self._publish_latched_tf_static(msg_class, msg_type)
         except Exception as e:
             logger.error(f"[ROS1Agent] Failed to subscribe {topic}: {e}")
+
+    def _publish_latched_tf_static(self, msg_class: type, msg_type: str) -> None:
+        """Fetch and publish the current latched /tf_static message once."""
+        try:
+            msg = rospy.wait_for_message("/tf_static", msg_class, timeout=2.0)
+        except Exception as e:
+            logger.warning(f"[ROS1Agent] Failed to fetch latched /tf_static: {e}")
+            return
+
+        data = self._merge_tf_static_data(ros_msg_to_dict(msg))
+        self.publish_sensor_data(
+            "/tf_static",
+            msg_type,
+            data,
+            bypass_rate_limit=True,
+            retain=True,
+        )
+
+    def _merge_tf_static_data(self, data: dict) -> dict:
+        """Merge /tf_static transforms by child frame and return full cache."""
+        if not isinstance(data, dict):
+            data = {}
+        new_transforms = data.get("transforms", [])
+        if not isinstance(new_transforms, list):
+            new_transforms = []
+
+        with self._sensor_lock:
+            cached = self._sensor_data.get("/tf_static", {})
+            cached_transforms = cached.get("transforms", [])
+            if not isinstance(cached_transforms, list):
+                cached_transforms = []
+
+            merged = {}
+            for transform in cached_transforms + new_transforms:
+                if not isinstance(transform, dict):
+                    continue
+                child_frame_id = transform.get("child_frame_id", "")
+                if child_frame_id:
+                    merged[child_frame_id] = transform
+
+            merged_data = dict(data)
+            merged_data["transforms"] = list(merged.values())
+            self._sensor_data["/tf_static"] = merged_data
+            return merged_data
 
     def _on_topic_unsubscribed(self, topic: str) -> None:
         """地面站取消订阅 → 注销 ROS 订阅"""

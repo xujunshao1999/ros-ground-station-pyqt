@@ -102,6 +102,7 @@ class MqttRosBridge:
         self._publisher_ready_topics: set[str] = set()
         self._fleet_static_tf_broadcaster = None
         self._fleet_static_tf_timer = None
+        self._robot_static_transforms: Dict[str, Dict[str, TransformStamped]] = {}
 
         # Resolve config paths
         self._bridge_dir = Path(__file__).resolve().parent
@@ -209,8 +210,8 @@ class MqttRosBridge:
         if not transforms:
             return
 
-        self._fleet_static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
-        self._fleet_static_tf_broadcaster.sendTransform(transforms)
+        self._ensure_static_tf_broadcaster()
+        self._send_static_transforms(transforms)
         logger.info("[Bridge] Published %d fleet static TF frames", len(transforms))
 
     def _refresh_fleet_static_frames(self, event) -> None:
@@ -218,11 +219,46 @@ class MqttRosBridge:
         if self._fleet_static_tf_broadcaster is None:
             return
 
+        transforms = self._build_all_static_transforms()
+        if transforms:
+            self._send_static_transforms(transforms)
+
+    def _ensure_static_tf_broadcaster(self) -> None:
+        if self._fleet_static_tf_broadcaster is None:
+            self._fleet_static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
+        if self._fleet_static_tf_timer is None:
+            self._fleet_static_tf_timer = rospy.Timer(
+                rospy.Duration(1.0),
+                self._refresh_fleet_static_frames,
+            )
+
+    def _build_all_static_transforms(self) -> List[TransformStamped]:
         transforms = self._build_fleet_static_transforms(
             self._config.get("fleet_frames", {})
         )
-        if transforms:
-            self._fleet_static_tf_broadcaster.sendTransform(transforms)
+        with self._lock:
+            for robot_transforms in self._robot_static_transforms.values():
+                transforms.extend(robot_transforms.values())
+        return transforms
+
+    def _send_static_transforms(self, transforms: List[TransformStamped]) -> None:
+        if self._fleet_static_tf_broadcaster is None or not transforms:
+            return
+        self._fleet_static_tf_broadcaster.sendTransform(transforms)
+
+    def _cache_robot_static_transforms(
+        self,
+        robot_id: str,
+        transforms: List[TransformStamped],
+    ) -> None:
+        if not transforms:
+            return
+        with self._lock:
+            robot_cache = self._robot_static_transforms.setdefault(robot_id, {})
+            for transform in transforms:
+                child_frame_id = getattr(transform, "child_frame_id", "")
+                if child_frame_id:
+                    robot_cache[child_frame_id] = transform
 
     @staticmethod
     def _build_fleet_static_transforms(config: dict) -> List[TransformStamped]:
@@ -331,11 +367,6 @@ class MqttRosBridge:
 
         rospy.init_node(node_name, anonymous=False, disable_signals=True)
         self._publish_fleet_static_frames()
-        if self._fleet_static_tf_broadcaster is not None:
-            self._fleet_static_tf_timer = rospy.Timer(
-                rospy.Duration(1.0),
-                self._refresh_fleet_static_frames,
-            )
 
         # Subscribers: each ROS topic forwards to MQTT
         self._ros_subscribers = [
@@ -390,8 +421,11 @@ class MqttRosBridge:
         key = f"{msg_class.__name__}::{topic}"
         with self._publishers_lock:
             if key not in self._ros_publishers:
+                publisher_kwargs = {"queue_size": 10}
+                if topic == "/tf_static":
+                    publisher_kwargs["latch"] = True
                 self._ros_publishers[key] = rospy.Publisher(
-                    topic, msg_class, queue_size=10
+                    topic, msg_class, **publisher_kwargs
                 )
             return self._ros_publishers[key]
 
@@ -694,6 +728,13 @@ class MqttRosBridge:
             pub = self._get_or_create_typed_publisher(
                 full_topic, type(ros_msg)
             )
+            if full_topic == "/tf_static":
+                self._ensure_static_tf_broadcaster()
+                self._cache_robot_static_transforms(
+                    robot_id,
+                    list(getattr(ros_msg, "transforms", [])),
+                )
+                self._send_static_transforms(self._build_all_static_transforms())
             if is_large_payload:
                 logger.debug(
                     "[Bridge] Large sensor payload: mqtt=%s/%s size=%.1fKB "
@@ -711,7 +752,8 @@ class MqttRosBridge:
             self._wait_for_publisher_connection(full_topic, pub)
 
             publish_start = time.monotonic()
-            pub.publish(ros_msg)
+            if full_topic != "/tf_static":
+                pub.publish(ros_msg)
             publish_ms = (time.monotonic() - publish_start) * 1000.0
 
             if is_large_payload:
