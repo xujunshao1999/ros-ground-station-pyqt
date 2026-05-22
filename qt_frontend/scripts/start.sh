@@ -113,6 +113,7 @@ fi
 # 7. 静态 TF（通过 launch 文件）
 # ------------------------------------------------------------------
 roslaunch "$PROJECT_ROOT/qt_frontend/launch/station.launch" &
+STATION_LAUNCH_PID=$!
 sleep 1
 echo_green "Static transforms published"
 
@@ -139,7 +140,9 @@ cleanup() {
     echo ""
     echo "Shutting down..."
     kill "$BRIDGE_PID" 2>/dev/null || true
+    kill "$STATION_LAUNCH_PID" 2>/dev/null || true
     wait "$BRIDGE_PID" 2>/dev/null || true
+    wait "$STATION_LAUNCH_PID" 2>/dev/null || true
     echo "Done."
 }
 trap cleanup SIGINT SIGTERM

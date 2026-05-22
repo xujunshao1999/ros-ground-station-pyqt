@@ -4,15 +4,27 @@
     Static transforms for Turtlebot3 Burger URDF.
     Workaround: /tf_static from the container does not reach
     the host roscore via MQTT, so we publish the static link
-    frames here so that RViz can resolve the full TF tree.
+    frames here with robot namespaces so RViz can resolve
+    the full multi-robot TF tree.
   -->
+
   <node pkg="tf2_ros" type="static_transform_publisher"
-        name="turtlebot3_base_footprint_to_base_link"
-        args="0 0 0.010 0 0 0 base_footprint base_link" />
+        name="turtlebot_001_base_footprint_to_base_link"
+        args="0 0 0.010 0 0 0 turtlebot_001/base_footprint turtlebot_001/base_link" />
   <node pkg="tf2_ros" type="static_transform_publisher"
-        name="turtlebot3_base_link_to_base_scan"
-        args="-0.032 0 0.172 0 0 0 base_link base_scan" />
+        name="turtlebot_001_base_link_to_base_scan"
+        args="-0.032 0 0.172 0 0 0 turtlebot_001/base_link turtlebot_001/base_scan" />
   <node pkg="tf2_ros" type="static_transform_publisher"
-        name="turtlebot3_base_link_to_imu_link"
-        args="-0.032 0 0.068 0 0 0 base_link imu_link" />
+        name="turtlebot_001_base_link_to_imu_link"
+        args="-0.032 0 0.068 0 0 0 turtlebot_001/base_link turtlebot_001/imu_link" />
+
+  <node pkg="tf2_ros" type="static_transform_publisher"
+        name="turtlebot_002_base_footprint_to_base_link"
+        args="0 0 0.010 0 0 0 turtlebot_002/base_footprint turtlebot_002/base_link" />
+  <node pkg="tf2_ros" type="static_transform_publisher"
+        name="turtlebot_002_base_link_to_base_scan"
+        args="-0.032 0 0.172 0 0 0 turtlebot_002/base_link turtlebot_002/base_scan" />
+  <node pkg="tf2_ros" type="static_transform_publisher"
+        name="turtlebot_002_base_link_to_imu_link"
+        args="-0.032 0 0.068 0 0 0 turtlebot_002/base_link turtlebot_002/imu_link" />
 </launch>

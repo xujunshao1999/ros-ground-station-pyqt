@@ -740,7 +740,7 @@ python3 -m pytest tests/test_panels.py -v
 - 修改：`qt_frontend/config/transmit_config.yaml`
 - 修改：`bridge/bridge_config.yaml`
 
-- [ ] **步骤 1：配置两个 Turtlebot 的基础订阅**
+- [x] **步骤 1：配置两个 Turtlebot 的基础订阅**
 
 确保 `qt_frontend/config/transmit_config.yaml` 中有：
 
@@ -762,7 +762,7 @@ subscriptions:
       compression: {}
 ```
 
-- [ ] **步骤 2：开启 frame namespace 和 fleet frames**
+- [x] **步骤 2：开启 frame namespace 和 fleet frames**
 
 在 `bridge/bridge_config.yaml` 中设置：
 
@@ -774,7 +774,7 @@ fleet_frames:
   enabled: true
 ```
 
-- [ ] **步骤 3：启动环境**
+- [x] **步骤 3：启动环境**
 
 运行：
 
@@ -783,7 +783,7 @@ docker compose up -d robot-turtlebot-001 robot-turtlebot-002
 ./qt_frontend/scripts/start.sh
 ```
 
-- [ ] **步骤 4：验证地面站 ROS topic**
+- [x] **步骤 4：验证地面站 ROS topic**
 
 运行：
 
@@ -793,7 +793,7 @@ rostopic list | grep turtlebot
 
 预期能看到两个机器人各自的 `odom`、`scan`、`map` 等话题。
 
-- [ ] **步骤 5：验证 TF**
+- [x] **步骤 5：验证 TF**
 
 运行：
 

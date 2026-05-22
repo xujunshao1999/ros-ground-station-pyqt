@@ -101,6 +101,7 @@ class MqttRosBridge:
         self._ros_subscribers: List[rospy.Subscriber] = []
         self._publisher_ready_topics: set[str] = set()
         self._fleet_static_tf_broadcaster = None
+        self._fleet_static_tf_timer = None
 
         # Resolve config paths
         self._bridge_dir = Path(__file__).resolve().parent
@@ -212,6 +213,17 @@ class MqttRosBridge:
         self._fleet_static_tf_broadcaster.sendTransform(transforms)
         logger.info("[Bridge] Published %d fleet static TF frames", len(transforms))
 
+    def _refresh_fleet_static_frames(self, event) -> None:
+        """Re-send fleet static transforms for late TF listeners."""
+        if self._fleet_static_tf_broadcaster is None:
+            return
+
+        transforms = self._build_fleet_static_transforms(
+            self._config.get("fleet_frames", {})
+        )
+        if transforms:
+            self._fleet_static_tf_broadcaster.sendTransform(transforms)
+
     @staticmethod
     def _build_fleet_static_transforms(config: dict) -> List[TransformStamped]:
         """Build configured static TF transforms for the fleet root frame."""
@@ -319,6 +331,11 @@ class MqttRosBridge:
 
         rospy.init_node(node_name, anonymous=False, disable_signals=True)
         self._publish_fleet_static_frames()
+        if self._fleet_static_tf_broadcaster is not None:
+            self._fleet_static_tf_timer = rospy.Timer(
+                rospy.Duration(1.0),
+                self._refresh_fleet_static_frames,
+            )
 
         # Subscribers: each ROS topic forwards to MQTT
         self._ros_subscribers = [

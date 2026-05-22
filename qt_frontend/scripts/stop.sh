@@ -6,5 +6,6 @@
 
 pkill -f "qt_frontend/main.py" 2>/dev/null || true
 pkill -f "mqtt_ros_bridge" 2>/dev/null || true
+pkill -f "qt_frontend/launch/station.launch" 2>/dev/null || true
 pkill -f "static_transform_publisher" 2>/dev/null || true
 echo "Stopped."

@@ -692,3 +692,31 @@ class TestMiscHelpers:
 
     def test_build_fleet_static_transforms_disabled_returns_empty(self):
         assert MqttRosBridge._build_fleet_static_transforms({"enabled": False}) == []
+
+    def test_refresh_fleet_static_frames_reuses_broadcaster(self, bridge: MqttRosBridge):
+        bridge._config["fleet_frames"] = {
+            "enabled": True,
+            "global_frame": "global_map",
+            "robots": {
+                "turtlebot_001": {
+                    "local_root_frame": "map",
+                    "pose": {"x": 0.0, "y": 0.0, "z": 0.0},
+                },
+                "turtlebot_002": {
+                    "local_root_frame": "map",
+                    "pose": {"x": 2.0, "y": 0.0, "z": 0.0},
+                },
+            },
+        }
+        broadcaster = MagicMock()
+        bridge._fleet_static_tf_broadcaster = broadcaster
+
+        bridge._refresh_fleet_static_frames(None)
+
+        broadcaster.sendTransform.assert_called_once()
+        transforms = broadcaster.sendTransform.call_args[0][0]
+        assert [tf.header.frame_id for tf in transforms] == ["global_map", "global_map"]
+        assert [tf.child_frame_id for tf in transforms] == [
+            "turtlebot_001/map",
+            "turtlebot_002/map",
+        ]
