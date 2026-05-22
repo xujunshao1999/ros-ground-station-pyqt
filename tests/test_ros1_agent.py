@@ -6,6 +6,12 @@ from agent.ros1_agent import ROS1Agent
 from protocol.messages import FleetData
 
 
+def test_ros1_agent_uses_agent_local_dict_to_ros_msg():
+    import agent.ros1_agent as ros1_agent
+
+    assert ros1_agent.dict_to_ros_msg.__module__ == "agent.dict_to_ros_msg"
+
+
 def test_get_available_topics_uses_rospy_published_topics(monkeypatch):
     mock_rospy = MagicMock()
     mock_rospy.is_shutdown.return_value = False

@@ -571,7 +571,7 @@ key 使用 `(dst_topic, msg_type)`，避免重复创建 publisher。
 
 现有 `/fleet/incoming` 的 JSON String 发布保留，但类型化发布应先执行。类型化发布失败时，记录 error，并仍发布调试消息。
 
-- [ ] **步骤 4：手动验证**
+- [x] **步骤 4：手动验证**
 
 启动两个 Turtlebot 后，下发一条规则：
 

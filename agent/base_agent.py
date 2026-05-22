@@ -681,6 +681,11 @@ class BaseAgent(ABC):
                     data_type=data_type,
                     payload=payload,
                     ttl=fleet_data.get("ttl", 30.0),
+                    src_topic=fleet_data.get("src_topic", ""),
+                    dst_topic=fleet_data.get("dst_topic", ""),
+                    msg_type=fleet_data.get("msg_type", ""),
+                    frame_policy=fleet_data.get("frame_policy", "preserve"),
+                    stamp=float(fleet_data.get("stamp", 0.0)),
                 ))
             return
 
@@ -689,6 +694,11 @@ class BaseAgent(ABC):
             data_type=data_type,
             payload=fleet_data.get("payload", {}),
             ttl=fleet_data.get("ttl", 30.0),
+            src_topic=fleet_data.get("src_topic", ""),
+            dst_topic=fleet_data.get("dst_topic", ""),
+            msg_type=fleet_data.get("msg_type", ""),
+            frame_policy=fleet_data.get("frame_policy", "preserve"),
+            stamp=float(fleet_data.get("stamp", 0.0)),
         ))
 
     # ============================================================

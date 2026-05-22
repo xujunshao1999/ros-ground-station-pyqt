@@ -6,6 +6,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG_PATH="$PROJECT_ROOT/broker/mosquitto.conf"
+
 echo "[ROS Ground Station] Starting MQTT Broker..."
 
 # 检查 mosquitto 是否安装
@@ -25,9 +29,10 @@ else
 fi
 
 echo "[ROS Ground Station] Found Mosquitto: $MOSQUITTO_PATH"
-echo "[ROS Ground Station] Config: broker/mosquitto.conf"
+echo "[ROS Ground Station] Config: $CONFIG_PATH"
 echo "[ROS Ground Station] Press Ctrl+C to stop"
 echo ""
 
 # Linux 下可能需要 sudo 运行（默认使用 1883 端口）
-mosquitto -c broker/mosquitto.conf -v
+cd "$PROJECT_ROOT"
+mosquitto -c "$CONFIG_PATH" -v

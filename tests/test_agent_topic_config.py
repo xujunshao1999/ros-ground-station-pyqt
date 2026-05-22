@@ -16,6 +16,7 @@ class RecordingAgent(MockAgent):
         self.subscribed: List[Tuple[str, str, dict]] = []
         self.unsubscribed: List[str] = []
         self.applied_fleet_rules = []
+        self.fleet_messages = []
         self.saved_count = 0
         self.published = []
 
@@ -27,6 +28,9 @@ class RecordingAgent(MockAgent):
 
     def _apply_fleet_rules(self, fleet_rules: list) -> None:
         self.applied_fleet_rules.append(fleet_rules)
+
+    def _on_fleet_message(self, src_id: str, data) -> None:
+        self.fleet_messages.append((src_id, data))
 
     def _save_config(self) -> None:
         self.saved_count += 1
@@ -237,6 +241,37 @@ def test_normalize_fleet_rules_filters_invalid_entries():
             "frame_policy": "namespace",
         }
     ]
+
+
+def test_handle_fleet_message_preserves_ros_topic_fields():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_002"))
+
+    agent._handle_fleet_message(Message(
+        src="robot_001",
+        dst="robot_002",
+        type=MessageType.FLEET_DATA,
+        data={
+            "data_type": "ros_topic",
+            "src_topic": "/odom",
+            "dst_topic": "/fleet/robot_001/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "frame_policy": "namespace",
+            "payload": {"header": {"frame_id": "odom"}},
+            "stamp": 123.0,
+            "ttl": 1.0,
+        },
+    ))
+
+    src_id, data = agent.fleet_messages[-1]
+    assert src_id == "robot_001"
+    assert data.data_type == "ros_topic"
+    assert data.src_topic == "/odom"
+    assert data.dst_topic == "/fleet/robot_001/odom"
+    assert data.msg_type == "nav_msgs/Odometry"
+    assert data.frame_policy == "namespace"
+    assert data.payload == {"header": {"frame_id": "odom"}}
+    assert data.stamp == 123.0
+    assert data.ttl == 1.0
 
 
 def test_load_subscriptions_from_config_applies_fleet_rules():

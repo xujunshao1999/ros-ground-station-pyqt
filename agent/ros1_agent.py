@@ -1,13 +1,11 @@
 from __future__ import annotations
-"""
-ROS 1 Agent — 连接 ROS 1 和 MQTT 的桥接代理
 
-在 Linux 环境中运行，将 ROS 1 话题数据转发到 MQTT，
-并将 MQTT 控制指令翻译为 ROS 话题发布。
-
-依赖：rospy（ROS 1 Noetic / Melodic）
-"""
-
+# ROS 1 Agent — 连接 ROS 1 和 MQTT 的桥接代理
+#
+# 在 Linux 环境中运行，将 ROS 1 话题数据转发到 MQTT，
+# 并将 MQTT 控制指令翻译为 ROS 话题发布。
+#
+# 依赖：rospy（ROS 1 Noetic / Melodic）
 import json
 import logging
 import math
@@ -22,18 +20,18 @@ try:
 except ImportError:
     rospy = None  # 延迟到运行时报错
 
-from agent.base_agent import BaseAgent, AgentConfig, AgentState
+from agent.base_agent import AgentConfig, BaseAgent
+from agent.dict_to_ros_msg import dict_to_ros_msg
 from agent.frame_utils import namespace_message_frames
 from agent.ros_msg_converter import ros_msg_to_dict
-from bridge.dict_to_ros_msg import dict_to_ros_msg
 from protocol.messages import (
-    StatusData,
-    Position,
-    Velocity,
-    CmdData,
     CmdAction,
-    RobotMode,
+    CmdData,
     FleetData,
+    Position,
+    RobotMode,
+    StatusData,
+    Velocity,
 )
 
 logger = logging.getLogger(__name__)
