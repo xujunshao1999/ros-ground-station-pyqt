@@ -28,6 +28,7 @@ Architecture overview:
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -37,7 +38,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as mqtt
 import rospy
+import tf2_ros
 import yaml
+from geometry_msgs.msg import TransformStamped
 from std_msgs.msg import String
 
 from protocol.messages import Message, MessageType, TopicResponseResult
@@ -97,6 +100,7 @@ class MqttRosBridge:
         self._ros_publishers: Dict[str, rospy.Publisher] = {}
         self._ros_subscribers: List[rospy.Subscriber] = []
         self._publisher_ready_topics: set[str] = set()
+        self._fleet_static_tf_broadcaster = None
 
         # Resolve config paths
         self._bridge_dir = Path(__file__).resolve().parent
@@ -196,6 +200,82 @@ class MqttRosBridge:
             logger.error("Failed to load config %s: %s", config_path, e)
             return {}
 
+    def _publish_fleet_static_frames(self) -> None:
+        """Publish configured global -> robot local-root static transforms."""
+        transforms = self._build_fleet_static_transforms(
+            self._config.get("fleet_frames", {})
+        )
+        if not transforms:
+            return
+
+        self._fleet_static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
+        self._fleet_static_tf_broadcaster.sendTransform(transforms)
+        logger.info("[Bridge] Published %d fleet static TF frames", len(transforms))
+
+    @staticmethod
+    def _build_fleet_static_transforms(config: dict) -> List[TransformStamped]:
+        """Build configured static TF transforms for the fleet root frame."""
+        if not isinstance(config, dict) or not config.get("enabled", False):
+            return []
+
+        global_frame = config.get("global_frame", "global_map")
+        robots = config.get("robots", {})
+        if not isinstance(robots, dict):
+            return []
+
+        transforms: List[TransformStamped] = []
+        for robot_id, robot_cfg in robots.items():
+            if not isinstance(robot_cfg, dict):
+                continue
+
+            local_root_frame = robot_cfg.get("local_root_frame", "map")
+            if not robot_id or not local_root_frame:
+                continue
+
+            pose = robot_cfg.get("pose", {})
+            if not isinstance(pose, dict):
+                pose = {}
+
+            transform = TransformStamped()
+            transform.header.stamp = rospy.Time.now()
+            transform.header.frame_id = global_frame
+            transform.child_frame_id = f"{robot_id}/{local_root_frame}"
+            transform.transform.translation.x = float(pose.get("x", 0.0))
+            transform.transform.translation.y = float(pose.get("y", 0.0))
+            transform.transform.translation.z = float(pose.get("z", 0.0))
+
+            qx, qy, qz, qw = MqttRosBridge._quaternion_from_rpy(
+                float(pose.get("roll", 0.0)),
+                float(pose.get("pitch", 0.0)),
+                float(pose.get("yaw", 0.0)),
+            )
+            transform.transform.rotation.x = qx
+            transform.transform.rotation.y = qy
+            transform.transform.rotation.z = qz
+            transform.transform.rotation.w = qw
+            transforms.append(transform)
+
+        return transforms
+
+    @staticmethod
+    def _quaternion_from_rpy(
+        roll: float, pitch: float, yaw: float
+    ) -> Tuple[float, float, float, float]:
+        """Convert roll/pitch/yaw in radians to a quaternion."""
+        cy = math.cos(yaw * 0.5)
+        sy = math.sin(yaw * 0.5)
+        cp = math.cos(pitch * 0.5)
+        sp = math.sin(pitch * 0.5)
+        cr = math.cos(roll * 0.5)
+        sr = math.sin(roll * 0.5)
+
+        return (
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy,
+        )
+
     # ================================================================
     # MQTT initialization
     # ================================================================
@@ -238,6 +318,7 @@ class MqttRosBridge:
         os.environ["ROS_MASTER_URI"] = master_uri
 
         rospy.init_node(node_name, anonymous=False, disable_signals=True)
+        self._publish_fleet_static_frames()
 
         # Subscribers: each ROS topic forwards to MQTT
         self._ros_subscribers = [

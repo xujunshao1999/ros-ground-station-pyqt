@@ -12,3 +12,26 @@ ros:
 
 heartbeat_timeout: 30.0  # seconds before marking robot offline
 transmit_config_path: "../config/transmit_config.yaml"
+
+fleet_frames:
+  enabled: false
+  global_frame: "global_map"
+  robots:
+    turtlebot_001:
+      local_root_frame: "map"
+      pose:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+        roll: 0.0
+        pitch: 0.0
+        yaw: 0.0
+    turtlebot_002:
+      local_root_frame: "map"
+      pose:
+        x: 2.0
+        y: 0.0
+        z: 0.0
+        roll: 0.0
+        pitch: 0.0
+        yaw: 0.0

@@ -11,6 +11,7 @@ response handling, config loading, and miscellaneous helper methods.
 import json
 import os
 import sys
+import types
 import threading
 import time
 from pathlib import Path
@@ -33,6 +34,10 @@ class MockTime:
     def __init__(self, secs=0, nsecs=0):
         self.secs = secs
         self.nsecs = nsecs
+
+    @classmethod
+    def now(cls):
+        return cls()
 
     def __eq__(self, other):
         if isinstance(other, MockTime):
@@ -95,6 +100,46 @@ else:
     # Ensure String is available on an existing std_msgs mock
     if not hasattr(sys.modules["std_msgs"].msg, "String"):
         sys.modules["std_msgs"].msg.String = MockString
+
+
+class MockTwist:
+    def __init__(self):
+        self.linear = types.SimpleNamespace(x=0.0, y=0.0, z=0.0)
+        self.angular = types.SimpleNamespace(x=0.0, y=0.0, z=0.0)
+
+
+class MockTransformStamped:
+    def __init__(self):
+        self.header = types.SimpleNamespace(
+            stamp=None,
+            frame_id="",
+        )
+        self.child_frame_id = ""
+        self.transform = types.SimpleNamespace(
+            translation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            rotation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        )
+
+
+if "geometry_msgs" not in sys.modules:
+    _mock_geometry_msgs = types.ModuleType("geometry_msgs")
+    _mock_geometry_msgs_msg = types.ModuleType("geometry_msgs.msg")
+
+    _mock_geometry_msgs_msg.Twist = MockTwist
+    _mock_geometry_msgs_msg.TransformStamped = MockTransformStamped
+    _mock_geometry_msgs.msg = _mock_geometry_msgs_msg
+    sys.modules["geometry_msgs"] = _mock_geometry_msgs
+    sys.modules["geometry_msgs.msg"] = _mock_geometry_msgs_msg
+else:
+    if not hasattr(sys.modules["geometry_msgs"].msg, "Twist"):
+        sys.modules["geometry_msgs"].msg.Twist = MockTwist
+    if not hasattr(sys.modules["geometry_msgs"].msg, "TransformStamped"):
+        sys.modules["geometry_msgs"].msg.TransformStamped = MockTransformStamped
+
+if "tf2_ros" not in sys.modules:
+    _mock_tf2_ros = types.ModuleType("tf2_ros")
+    _mock_tf2_ros.StaticTransformBroadcaster = MagicMock()
+    sys.modules["tf2_ros"] = _mock_tf2_ros
 
 # Now import the module under test
 from protocol.messages import Message, MessageType, TopicResponseResult  # noqa: E402
@@ -609,3 +654,41 @@ class TestMiscHelpers:
 
         assert data["header"]["frame_id"] == "turtlebot_001/odom"
         assert data["child_frame_id"] == "turtlebot_001/base_footprint"
+
+    def test_build_fleet_static_transforms_from_config(self):
+        config = {
+            "enabled": True,
+            "global_frame": "global_map",
+            "robots": {
+                "turtlebot_001": {
+                    "local_root_frame": "map",
+                    "pose": {
+                        "x": 1.0,
+                        "y": 2.0,
+                        "z": 0.0,
+                        "roll": 0.0,
+                        "pitch": 0.0,
+                        "yaw": 1.57079632679,
+                    },
+                },
+                "turtlebot_002": {
+                    "local_root_frame": "map",
+                    "pose": {"x": 3.0, "y": 0.0, "z": 0.0},
+                },
+            },
+        }
+
+        transforms = MqttRosBridge._build_fleet_static_transforms(config)
+
+        assert [tf.header.frame_id for tf in transforms] == ["global_map", "global_map"]
+        assert [tf.child_frame_id for tf in transforms] == [
+            "turtlebot_001/map",
+            "turtlebot_002/map",
+        ]
+        assert transforms[0].transform.translation.x == 1.0
+        assert transforms[0].transform.translation.y == 2.0
+        assert round(transforms[0].transform.rotation.z, 6) == 0.707107
+        assert round(transforms[0].transform.rotation.w, 6) == 0.707107
+
+    def test_build_fleet_static_transforms_disabled_returns_empty(self):
+        assert MqttRosBridge._build_fleet_static_transforms({"enabled": False}) == []

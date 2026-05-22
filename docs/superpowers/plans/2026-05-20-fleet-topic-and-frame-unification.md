@@ -603,9 +603,9 @@ rostopic echo -n 1 /fleet/turtlebot_001/odom/header
 
 - 修改：`bridge/bridge_config.yaml`
 - 修改：`bridge/mqtt_ros_bridge.py`
-- 测试：`tests/test_bridge_frame_namespace.py`
+- 测试：`tests/test_mqtt_ros_bridge.py`
 
-- [ ] **步骤 1：添加配置样例**
+- [x] **步骤 1：添加配置样例**
 
 在 `bridge/bridge_config.yaml` 增加：
 
@@ -634,7 +634,7 @@ fleet_frames:
         yaw: 0.0
 ```
 
-- [ ] **步骤 2：实现静态 TF 发布**
+- [x] **步骤 2：实现静态 TF 发布**
 
 在 Bridge 初始化时，如果 `fleet_frames.enabled` 为 true，发布：
 
@@ -649,7 +649,7 @@ global_map -> turtlebot_002/map
 f"{robot_id}/{local_root_frame}"
 ```
 
-- [ ] **步骤 3：验证 RViz fixed frame**
+- [x] **步骤 3：验证 RViz fixed frame**
 
 开启配置后，启动地面站链路，在 RViz 中将 fixed frame 设置为：
 
