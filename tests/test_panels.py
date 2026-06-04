@@ -694,6 +694,47 @@ class TestFleetCommPanel:
             "操作",
         ]
 
+    def test_add_rule_button_opens_form(self, qt_app):
+        panel = FleetCommPanel()
+
+        assert panel._form_group.isChecked() is False
+
+        panel._btn_add.click()
+
+        assert panel._form_group.isChecked() is True
+
+    def test_confirm_adds_rule_from_form(self, qt_app):
+        panel = FleetCommPanel()
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+        panel._btn_add.click()
+        panel._combo_src.setCurrentText("turtlebot_001")
+        panel._combo_dst.setCurrentText("turtlebot_002")
+        panel._edit_src_topic.setText("/odom")
+        panel._edit_dst_topic.setText("/fleet/turtlebot_001/odom")
+        panel._combo_msg_type.setCurrentText("nav_msgs/Odometry")
+        panel._spin_freq.setValue(10.0)
+        panel._combo_frame_policy.setCurrentText("namespace")
+
+        panel._btn_confirm.click()
+
+        assert len(panel._rules) == 1
+        assert panel._rules[0] == {
+            "enabled": True,
+            "src_robot": "turtlebot_001",
+            "src_topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "dst_robot": "turtlebot_002",
+            "dst_topic": "/fleet/turtlebot_001/odom",
+            "freq_limit": 10.0,
+            "transport": "mqtt_json",
+            "frame_policy": "namespace",
+        }
+        assert panel._table.rowCount() == 1
+        assert panel._table.item(0, 1).text() == "turtlebot_001"
+        assert panel._table.item(0, 2).text() == "/odom"
+        assert panel._table.item(0, 4).text() == "turtlebot_002"
+        assert panel._form_group.isChecked() is False
+
     def test_build_config_sync_payload_generates_fleet_rules(self):
         payload = FleetCommPanel.build_config_sync_payload([
             {
