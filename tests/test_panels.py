@@ -794,6 +794,358 @@ class TestFleetCommPanel:
         assert panel._table.item(0, 4).text() == "turtlebot_002"
         assert panel._form_group.isChecked() is False
 
+    def test_deploy_rules_groups_config_sync_by_source_robot(self, qt_app, tmp_path):
+        panel = FleetCommPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        emitted = []
+        panel.config_sync_requested.connect(
+            lambda robot_id, payload: emitted.append((robot_id, payload))
+        )
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+        panel._rules = [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            }
+        ]
+
+        panel._btn_deploy.click()
+
+        assert emitted == [
+            (
+                "turtlebot_001",
+                {
+                    "fleet_rules": [
+                        {
+                            "enabled": True,
+                            "src_topic": "/odom",
+                            "msg_type": "nav_msgs/Odometry",
+                            "targets": [
+                                {
+                                    "robot_id": "turtlebot_002",
+                                    "dst_topic": "/fleet/turtlebot_001/odom",
+                                }
+                            ],
+                            "freq_limit": 10.0,
+                            "transport": "mqtt_json",
+                            "frame_policy": "namespace",
+                        }
+                    ]
+                },
+            )
+        ]
+
+    def test_deploy_rules_sends_each_source_robot_own_rules(self, qt_app, tmp_path):
+        panel = FleetCommPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        emitted = []
+        panel.config_sync_requested.connect(
+            lambda robot_id, payload: emitted.append((robot_id, payload))
+        )
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+        panel._rules = [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            },
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_002",
+                "src_topic": "/scan",
+                "msg_type": "sensor_msgs/LaserScan",
+                "dst_robot": "turtlebot_001",
+                "dst_topic": "/fleet/turtlebot_002/scan",
+                "freq_limit": 5.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            },
+        ]
+
+        panel._btn_deploy.click()
+
+        assert [robot_id for robot_id, _payload in emitted] == [
+            "turtlebot_001",
+            "turtlebot_002",
+        ]
+        assert emitted[0][1]["fleet_rules"][0]["src_topic"] == "/odom"
+        assert emitted[1][1]["fleet_rules"][0]["src_topic"] == "/scan"
+
+    def test_pull_rules_queries_all_known_robots(self, qt_app):
+        panel = FleetCommPanel()
+        emitted = []
+        panel.config_query_requested.connect(lambda robot_id: emitted.append(robot_id))
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+
+        panel._btn_pull.click()
+
+        assert emitted == ["turtlebot_001", "turtlebot_002"]
+
+    def test_config_response_loads_fleet_rules_into_table(self, qt_app, tmp_path):
+        panel = FleetCommPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+
+        panel.on_config_response(
+            "turtlebot_001",
+            {
+                "fleet_rules": [
+                    {
+                        "enabled": True,
+                        "src_topic": "/odom",
+                        "msg_type": "nav_msgs/Odometry",
+                        "targets": [
+                            {
+                                "robot_id": "turtlebot_002",
+                                "dst_topic": "/fleet/turtlebot_001/odom",
+                            }
+                        ],
+                        "freq_limit": 10.0,
+                        "transport": "mqtt_json",
+                        "frame_policy": "namespace",
+                    }
+                ]
+            },
+        )
+
+        assert panel._rules == [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            }
+        ]
+        assert panel._table.rowCount() == 1
+        assert panel._table.item(0, 1).text() == "turtlebot_001"
+        assert panel._table.item(0, 4).text() == "turtlebot_002"
+
+    def test_config_response_replaces_only_matching_source_robot_rules(
+        self, qt_app, tmp_path
+    ):
+        panel = FleetCommPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+        panel._rules = [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/old",
+                "msg_type": "std_msgs/String",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/old",
+                "freq_limit": 1.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            },
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_002",
+                "src_topic": "/scan",
+                "msg_type": "sensor_msgs/LaserScan",
+                "dst_robot": "turtlebot_001",
+                "dst_topic": "/fleet/turtlebot_002/scan",
+                "freq_limit": 5.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            },
+        ]
+
+        panel.on_config_response(
+            "turtlebot_001",
+            {
+                "fleet_rules": [
+                    {
+                        "enabled": True,
+                        "src_topic": "/odom",
+                        "msg_type": "nav_msgs/Odometry",
+                        "targets": [
+                            {
+                                "robot_id": "turtlebot_002",
+                                "dst_topic": "/fleet/turtlebot_001/odom",
+                            }
+                        ],
+                        "freq_limit": 10.0,
+                        "transport": "mqtt_json",
+                        "frame_policy": "namespace",
+                    }
+                ]
+            },
+        )
+
+        assert [(rule["src_robot"], rule["src_topic"]) for rule in panel._rules] == [
+            ("turtlebot_002", "/scan"),
+            ("turtlebot_001", "/odom"),
+        ]
+
+    def test_config_response_without_fleet_rules_keeps_existing_rules(
+        self, qt_app, tmp_path
+    ):
+        panel = FleetCommPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        panel._rules = [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            }
+        ]
+
+        panel.on_config_response("turtlebot_001", {"subscriptions": []})
+
+        assert panel._rules == [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            }
+        ]
+
+    def test_build_transmit_config_preserves_subscriptions(self):
+        rules = [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            }
+        ]
+
+        config = FleetCommPanel.build_transmit_config(
+            {
+                "subscriptions": {
+                    "turtlebot_001": [
+                        {
+                            "topic": "/scan",
+                            "msg_type": "sensor_msgs/LaserScan",
+                        }
+                    ]
+                },
+                "robots": {"legacy": {}},
+            },
+            rules,
+        )
+
+        assert config["subscriptions"]["turtlebot_001"][0]["topic"] == "/scan"
+        assert config["robots"] == {"legacy": {}}
+        assert config["fleet_rules"] == rules
+
+    def test_save_and_load_fleet_rules_from_transmit_config(self, tmp_path):
+        path = tmp_path / "transmit_config.yaml"
+        path.write_text(
+            "subscriptions:\n"
+            "  turtlebot_001:\n"
+            "    - topic: /scan\n"
+            "      msg_type: sensor_msgs/LaserScan\n",
+            encoding="utf-8",
+        )
+        rules = [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            }
+        ]
+
+        FleetCommPanel.save_transmit_config_file(path, rules)
+
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert loaded["subscriptions"]["turtlebot_001"][0]["topic"] == "/scan"
+        assert loaded["fleet_rules"] == rules
+        assert FleetCommPanel.rules_from_transmit_config(loaded) == rules
+
+    def test_load_saved_rules_refreshes_table(self, qt_app, tmp_path):
+        path = tmp_path / "transmit_config.yaml"
+        rules = [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            }
+        ]
+        FleetCommPanel.save_transmit_config_file(path, rules)
+        panel = FleetCommPanel()
+        panel._transmit_config_path = path
+
+        panel._load_saved_rules()
+
+        assert panel._rules == rules
+        assert panel._table.rowCount() == 1
+        assert panel._table.item(0, 1).text() == "turtlebot_001"
+
+    def test_deploy_rules_saves_ground_station_config_before_emit(
+        self, qt_app, tmp_path
+    ):
+        path = tmp_path / "transmit_config.yaml"
+        panel = FleetCommPanel()
+        panel._transmit_config_path = path
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+        panel._rules = [
+            {
+                "enabled": True,
+                "src_robot": "turtlebot_001",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "turtlebot_002",
+                "dst_topic": "/fleet/turtlebot_001/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_json",
+                "frame_policy": "namespace",
+            }
+        ]
+
+        panel._btn_deploy.click()
+
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert loaded["fleet_rules"] == panel._rules
+
     def test_build_config_sync_payload_generates_fleet_rules(self):
         payload = FleetCommPanel.build_config_sync_payload([
             {

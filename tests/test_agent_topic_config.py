@@ -356,7 +356,7 @@ def test_agent_config_tracks_missing_source_path_for_first_save(tmp_path):
     assert config.config_path == str(config_path)
 
 
-def test_save_config_only_updates_subscriptions(tmp_path):
+def test_save_config_updates_subscriptions_and_fleet_rules(tmp_path):
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         "# keep header\n"
@@ -383,7 +383,22 @@ def test_save_config_only_updates_subscriptions(tmp_path):
             "compression": {},
         }
     ]
-    agent.config.fleet_rules = []
+    agent.config.fleet_rules = [
+        {
+            "enabled": True,
+            "src_topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "targets": [
+                {
+                    "robot_id": "robot_002",
+                    "dst_topic": "/fleet/robot_001/odom",
+                }
+            ],
+            "freq_limit": 10.0,
+            "transport": "mqtt_json",
+            "frame_policy": "namespace",
+        }
+    ]
 
     agent._save_config()
 
@@ -394,10 +409,10 @@ def test_save_config_only_updates_subscriptions(tmp_path):
     assert saved["status_interval"] == 3.0
     assert saved["unknown_runtime_key"] == "keep-me"
     assert saved["subscriptions"] == agent.config.subscriptions
-    assert saved["fleet_rules"] == [{"name": "old-rule"}]
+    assert saved["fleet_rules"] == agent.config.fleet_rules
 
 
-def test_save_config_preserves_yaml_text_outside_subscriptions(tmp_path):
+def test_save_config_preserves_yaml_text_outside_runtime_sections(tmp_path):
     config_path = tmp_path / "agent.yaml"
     config_path.write_text(
         "# keep header\n"
@@ -425,6 +440,22 @@ def test_save_config_preserves_yaml_text_outside_subscriptions(tmp_path):
             "compression": {},
         }
     ]
+    agent.config.fleet_rules = [
+        {
+            "enabled": True,
+            "src_topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "targets": [
+                {
+                    "robot_id": "robot_002",
+                    "dst_topic": "/fleet/robot_001/odom",
+                }
+            ],
+            "freq_limit": 10.0,
+            "transport": "mqtt_json",
+            "frame_policy": "namespace",
+        }
+    ]
 
     agent._save_config()
 
@@ -434,9 +465,10 @@ def test_save_config_preserves_yaml_text_outside_subscriptions(tmp_path):
     assert "# custom comment before broker\n" in text
     assert "broker_host: \"custom-broker\"\n" in text
     assert "# 编队通信规则（应保留）\n" in text
-    assert "  - name: old-rule\n" in text
     assert "topic: /old" not in text
     assert "topic: /scan" in text
+    assert "src_topic: /odom" in text
+    assert "name: old-rule" not in text
 
 
 def test_config_sync_without_fleet_rules_keeps_existing_fleet_rules():
@@ -463,3 +495,55 @@ def test_config_sync_without_fleet_rules_keeps_existing_fleet_rules():
 
     assert agent.config.subscriptions == []
     assert agent.config.fleet_rules == [{"name": "keep-rule"}]
+
+
+def test_config_sync_with_only_fleet_rules_keeps_existing_subscriptions():
+    existing_subscription = {
+        "topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "freq_limit": 10.0,
+        "transport": "mqtt_json",
+        "compression": {},
+    }
+    fleet_rule = {
+        "enabled": True,
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [
+            {
+                "robot_id": "robot_002",
+                "dst_topic": "/fleet/robot_001/odom",
+            }
+        ],
+        "freq_limit": 10.0,
+        "transport": "mqtt_json",
+        "frame_policy": "namespace",
+    }
+    agent = RecordingAgent(AgentConfig(
+        robot_id="robot_001",
+        subscriptions=[existing_subscription],
+    ))
+    agent._load_subscriptions_from_config()
+    agent.subscribed.clear()
+
+    agent._handle_config_sync(Message(
+        src="station",
+        dst="robot_001",
+        type=MessageType.CONFIG_SYNC,
+        data={"fleet_rules": [fleet_rule]},
+    ))
+
+    assert agent.config.subscriptions == [
+        {
+            "topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "freq_limit": 10.0,
+            "transport": "mqtt_json",
+            "qos": 1,
+            "compression": {},
+        }
+    ]
+    assert set(agent._subscribed_topics.keys()) == {"/odom"}
+    assert agent.unsubscribed == []
+    assert agent.subscribed == []
+    assert agent.config.fleet_rules == [fleet_rule]

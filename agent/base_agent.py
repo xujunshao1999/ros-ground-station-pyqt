@@ -725,14 +725,18 @@ class BaseAgent(ABC):
         logger.info(f"[Agent] Received config sync from station")
         data = message.data
 
-        new_subscriptions = self._normalize_subscriptions(data.get("subscriptions", []))
+        has_subscriptions = "subscriptions" in data
+        new_subscriptions = self._normalize_subscriptions(
+            data.get("subscriptions", self.config.subscriptions)
+        )
         has_fleet_rules = "fleet_rules" in data
         new_fleet_rules = self._normalize_fleet_rules(
             data.get("fleet_rules", self.config.fleet_rules)
         )
 
-        self._apply_subscription_config(new_subscriptions)
-        self.config.subscriptions = new_subscriptions
+        if has_subscriptions:
+            self._apply_subscription_config(new_subscriptions)
+            self.config.subscriptions = new_subscriptions
         if has_fleet_rules:
             self.config.fleet_rules = new_fleet_rules
             self._apply_fleet_rules(self.config.fleet_rules)
@@ -933,6 +937,9 @@ class BaseAgent(ABC):
                 original = ""
             updated = self._replace_top_level_yaml_section(
                 original, "subscriptions", self.config.subscriptions
+            )
+            updated = self._replace_top_level_yaml_section(
+                updated, "fleet_rules", self.config.fleet_rules
             )
             with open(config_path, "w", encoding="utf-8") as f:
                 f.write(updated)

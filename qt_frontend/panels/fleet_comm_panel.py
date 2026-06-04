@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
+import yaml
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -24,13 +26,19 @@ from qt_frontend.panels.topic_config_panel import TopicConfigPanel
 class FleetCommPanel(QWidget):
     config_changed = pyqtSignal()
     discover_requested = pyqtSignal()
+    config_sync_requested = pyqtSignal(str, dict)
+    config_query_requested = pyqtSignal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._rules: List[Dict[str, Any]] = []
         self._editing_row: Optional[int] = None
+        self._robot_ids: List[str] = []
         self._available_topics_by_robot: Dict[str, List[Dict[str, str]]] = {}
         self._pending_discover_robot_ids: set = set()
+        self._transmit_config_path = (
+            Path(__file__).resolve().parents[1] / "config" / "transmit_config.yaml"
+        )
 
         layout = QVBoxLayout(self)
 
@@ -68,6 +76,8 @@ class FleetCommPanel(QWidget):
         btn_row2 = QHBoxLayout()
         self._btn_deploy = QPushButton("下发全部规则")
         self._btn_pull = QPushButton("拉取当前规则")
+        self._btn_deploy.clicked.connect(self._deploy_rules)
+        self._btn_pull.clicked.connect(self._pull_rules)
         btn_row2.addWidget(self._btn_deploy)
         btn_row2.addWidget(self._btn_pull)
         layout.addLayout(btn_row2)
@@ -143,6 +153,7 @@ class FleetCommPanel(QWidget):
         form.addLayout(confirm_row)
 
         layout.addWidget(self._form_group)
+        self._load_saved_rules()
 
     # ------------------------------------------------------------------
     # 纯逻辑方法（可测试）
@@ -193,11 +204,117 @@ class FleetCommPanel(QWidget):
             ]
         }
 
+    @staticmethod
+    def rules_from_config_response(
+        src_robot: str,
+        data: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        rules: List[Dict[str, Any]] = []
+        for rule in data.get("fleet_rules", []):
+            if not isinstance(rule, dict):
+                continue
+            targets = rule.get("targets", [])
+            if not isinstance(targets, list):
+                continue
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+                dst_robot = target.get("robot_id", "")
+                dst_topic = target.get("dst_topic", "")
+                if not dst_robot or not dst_topic:
+                    continue
+                rules.append({
+                    "enabled": bool(rule.get("enabled", True)),
+                    "src_robot": src_robot,
+                    "src_topic": rule.get("src_topic", ""),
+                    "msg_type": rule.get("msg_type", ""),
+                    "dst_robot": dst_robot,
+                    "dst_topic": dst_topic,
+                    "freq_limit": float(rule.get("freq_limit") or 0.0),
+                    "transport": rule.get("transport", "mqtt_json"),
+                    "frame_policy": rule.get("frame_policy", "namespace"),
+                })
+        return [
+            rule for rule in rules
+            if FleetCommPanel.validate_fleet_rule(
+                rule["src_robot"],
+                rule["src_topic"],
+                rule["msg_type"],
+                rule["dst_robot"],
+                rule["dst_topic"],
+                rule["freq_limit"],
+            )
+        ]
+
+    @staticmethod
+    def normalize_transmit_rules(raw: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+
+        rules: List[Dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            rule = {
+                "enabled": bool(item.get("enabled", True)),
+                "src_robot": item.get("src_robot", ""),
+                "src_topic": item.get("src_topic", ""),
+                "msg_type": item.get("msg_type", ""),
+                "dst_robot": item.get("dst_robot", ""),
+                "dst_topic": item.get("dst_topic", ""),
+                "freq_limit": float(item.get("freq_limit") or 0.0),
+                "transport": item.get("transport", "mqtt_json"),
+                "frame_policy": item.get("frame_policy", "namespace"),
+            }
+            if FleetCommPanel.validate_fleet_rule(
+                rule["src_robot"],
+                rule["src_topic"],
+                rule["msg_type"],
+                rule["dst_robot"],
+                rule["dst_topic"],
+                rule["freq_limit"],
+            ):
+                rules.append(rule)
+        return rules
+
+    @staticmethod
+    def build_transmit_config(
+        existing: Dict[str, Any],
+        rules: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        config = dict(existing)
+        config["fleet_rules"] = FleetCommPanel.normalize_transmit_rules(rules)
+        return config
+
+    @staticmethod
+    def rules_from_transmit_config(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return FleetCommPanel.normalize_transmit_rules(config.get("fleet_rules", []))
+
+    @staticmethod
+    def save_transmit_config_file(
+        path: Union[str, Path],
+        rules: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        p = Path(path)
+        existing = TopicConfigPanel.load_transmit_config_file(p)
+        config = FleetCommPanel.build_transmit_config(existing, rules)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                config,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+        return config
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
 
     def on_robot_list_changed(self, robot_ids: List[str]) -> None:
+        self._robot_ids = list(robot_ids)
         current_src = self._combo_src.currentText()
         current_dst = self._combo_dst.currentText()
         for combo in [self._combo_src, self._combo_dst]:
@@ -223,6 +340,18 @@ class FleetCommPanel(QWidget):
         self._pending_discover_robot_ids.discard(robot_id)
         if robot_id == self._combo_src.currentText():
             self._refresh_source_topics()
+
+    def on_config_response(self, robot_id: str, data: Dict[str, Any]) -> None:
+        if "fleet_rules" not in data:
+            return
+        other_rules = [
+            rule for rule in self._rules
+            if rule.get("src_robot", "") != robot_id
+        ]
+        self._rules = other_rules + self.rules_from_config_response(robot_id, data)
+        self._refresh_table()
+        self._save_rules()
+        self.config_changed.emit()
 
     def _refresh_table(self) -> None:
         self._table.setRowCount(len(self._rules))
@@ -371,3 +500,29 @@ class FleetCommPanel(QWidget):
         self._rules[row]["enabled"] = not bool(self._rules[row].get("enabled", True))
         self._refresh_table()
         self.config_changed.emit()
+
+    def _load_saved_rules(self) -> None:
+        config = TopicConfigPanel.load_transmit_config_file(self._transmit_config_path)
+        self._rules = self.rules_from_transmit_config(config)
+        self._refresh_table()
+
+    def _save_rules(self) -> None:
+        self.save_transmit_config_file(self._transmit_config_path, self._rules)
+
+    def _deploy_rules(self) -> None:
+        self._save_rules()
+        rules_by_source: Dict[str, List[Dict[str, Any]]] = {}
+        for rule in self._rules:
+            robot_id = rule.get("src_robot", "")
+            if robot_id:
+                rules_by_source.setdefault(robot_id, []).append(rule)
+        for robot_id in sorted(rules_by_source):
+            self.config_sync_requested.emit(
+                robot_id,
+                self.build_config_sync_payload(rules_by_source[robot_id]),
+            )
+
+    def _pull_rules(self) -> None:
+        for robot_id in self._robot_ids:
+            if robot_id:
+                self.config_query_requested.emit(robot_id)

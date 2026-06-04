@@ -224,6 +224,12 @@ class MainWindow(QMainWindow):
         self._topic_config.config_query_requested.connect(
             self._mqtt_client.send_config_query
         )
+        self._fleet_comm.config_sync_requested.connect(
+            self._mqtt_client.send_config_sync
+        )
+        self._fleet_comm.config_query_requested.connect(
+            self._mqtt_client.send_config_query
+        )
 
     def _init_ros_monitor(self) -> None:
         self._ros_timer = QTimer(self); self._ros_timer.timeout.connect(self._check_ros)
@@ -315,6 +321,7 @@ class MainWindow(QMainWindow):
 
     def _on_config_response(self, robot_id: str, data: dict) -> None:
         self._topic_config.on_config_response(robot_id, data)
+        self._fleet_comm.on_config_response(robot_id, data)
         subscriptions = data.get("subscriptions", [])
         if isinstance(subscriptions, list):
             self._robot_list.update_subscription_count(robot_id, len(subscriptions))
