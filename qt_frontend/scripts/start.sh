@@ -7,6 +7,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="$PROJECT_ROOT/logs"
+ROSCORE_LOG="$LOG_DIR/roscore.log"
+BROKER_LOG="$LOG_DIR/mosquitto-start.log"
+STATION_LAUNCH_LOG="$LOG_DIR/station.launch.log"
+BRIDGE_LOG="$LOG_DIR/bridge.log"
+
+mkdir -p "$LOG_DIR"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -27,6 +34,7 @@ if [ "$PYTHON_MINOR" -lt 8 ]; then
     exit 1
 fi
 echo_green "Python $(python3 --version)"
+echo_green "Background logs: $LOG_DIR"
 
 # ------------------------------------------------------------------
 # 2. librviz_widget.so 检查
@@ -60,10 +68,10 @@ fi
 
 if ! rostopic list &>/dev/null; then
     echo_warn "roscore is not running. Starting..."
-    roscore &
+    roscore > "$ROSCORE_LOG" 2>&1 &
     sleep 3
     if ! rostopic list &>/dev/null; then
-        echo_fail "Failed to start roscore"
+        echo_fail "Failed to start roscore. See: $ROSCORE_LOG"
         exit 1
     fi
 fi
@@ -75,7 +83,7 @@ echo_green "roscore OK"
 if ! pgrep -x mosquitto >/dev/null 2>&1; then
     echo_warn "Mosquitto broker is not running. Starting..."
     if [ -f "$PROJECT_ROOT/broker/start.sh" ]; then
-        bash "$PROJECT_ROOT/broker/start.sh" &
+        bash "$PROJECT_ROOT/broker/start.sh" > "$BROKER_LOG" 2>&1 &
         sleep 2
     else
         mosquitto -d
@@ -86,7 +94,7 @@ fi
 if pgrep -x mosquitto >/dev/null 2>&1; then
     echo_green "Mosquitto broker running"
 else
-    echo_fail "Failed to start Mosquitto broker"
+    echo_fail "Failed to start Mosquitto broker. See: $BROKER_LOG"
     exit 1
 fi
 
@@ -112,25 +120,25 @@ fi
 # ------------------------------------------------------------------
 # 7. 静态 TF（通过 launch 文件）
 # ------------------------------------------------------------------
-roslaunch "$PROJECT_ROOT/qt_frontend/launch/station.launch" &
+roslaunch "$PROJECT_ROOT/qt_frontend/launch/station.launch" > "$STATION_LAUNCH_LOG" 2>&1 &
 STATION_LAUNCH_PID=$!
 sleep 1
-echo_green "Static transforms published"
+echo_green "Station launch log: $STATION_LAUNCH_LOG"
 
 # ------------------------------------------------------------------
 # 8. 启动 bridge（后台）
 # ------------------------------------------------------------------
 echo_green "Starting MQTT-ROS bridge..."
 cd "$PROJECT_ROOT"
-python3 -m bridge.mqtt_ros_bridge &
+python3 -m bridge.mqtt_ros_bridge > "$BRIDGE_LOG" 2>&1 &
 BRIDGE_PID=$!
 sleep 2
 
 if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
-    echo_fail "Bridge failed to start"
+    echo_fail "Bridge failed to start. See: $BRIDGE_LOG"
     exit 1
 fi
-echo_green "Bridge PID: $BRIDGE_PID"
+echo_green "Bridge PID: $BRIDGE_PID (log: $BRIDGE_LOG)"
 
 # ------------------------------------------------------------------
 # 9. 启动 Qt 前端（前台）
