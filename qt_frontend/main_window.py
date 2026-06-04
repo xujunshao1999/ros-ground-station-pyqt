@@ -205,12 +205,14 @@ class MainWindow(QMainWindow):
         sig.topic_response_received.connect(self._topic_config.on_topic_response)
         sig.config_response_received.connect(self._on_config_response)
         sig.discover_response_received.connect(self._topic_config.on_discover_response)
+        sig.discover_response_received.connect(self._fleet_comm.on_discover_response)
 
         self._act_connect.triggered.connect(self._mqtt_client.connect)
         self._act_disconnect.triggered.connect(self._mqtt_client.disconnect)
         self._act_discover.triggered.connect(self._mqtt_client.send_discover)
         self._robot_list.discover_requested.connect(self._mqtt_client.send_discover)
         self._topic_config.discover_requested.connect(self._mqtt_client.send_discover)
+        self._fleet_comm.discover_requested.connect(self._mqtt_client.send_discover)
         self._command.command_sent.connect(self._on_command)
         self._data_sender.send_json.connect(self._on_data_send)
         self._topic_config.topic_request_requested.connect(

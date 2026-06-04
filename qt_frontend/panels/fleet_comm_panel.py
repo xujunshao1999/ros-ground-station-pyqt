@@ -12,21 +12,25 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QRadioButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from qt_frontend.panels.topic_config_panel import TopicConfigPanel
+
 
 class FleetCommPanel(QWidget):
     config_changed = pyqtSignal()
+    discover_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._rules: List[Dict[str, Any]] = []
         self._editing_row: Optional[int] = None
+        self._available_topics_by_robot: Dict[str, List[Dict[str, str]]] = {}
+        self._pending_discover_robot_ids: set = set()
 
         layout = QVBoxLayout(self)
 
@@ -44,8 +48,9 @@ class FleetCommPanel(QWidget):
             "Frame 策略",
             "操作",
         ])
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents
+        )
         layout.addWidget(self._table)
 
         # 按钮行
@@ -76,22 +81,33 @@ class FleetCommPanel(QWidget):
         f1 = QHBoxLayout()
         f1.addWidget(QLabel("源机器人:"))
         self._combo_src = QComboBox()
+        self._combo_src.currentTextChanged.connect(
+            lambda _text: self._refresh_source_topics()
+        )
         f1.addWidget(self._combo_src)
         f1.addWidget(QLabel("目标:"))
         self._combo_dst = QComboBox()
         f1.addWidget(self._combo_dst)
         form.addLayout(f1)
 
-        f2 = QHBoxLayout()
-        f2.addWidget(QLabel("源话题:"))
-        self._edit_src_topic = QLineEdit()
-        self._edit_src_topic.setPlaceholderText("/odom")
-        f2.addWidget(self._edit_src_topic)
-        f2.addWidget(QLabel("目标话题:"))
+        self._source_topic_row = QHBoxLayout()
+        self._source_topic_row.setObjectName("sourceTopicRow")
+        self._source_topic_row.addWidget(QLabel("源话题:"))
+        self._combo_src_topic = QComboBox()
+        self._combo_src_topic.setEditable(True)
+        self._combo_src_topic.currentTextChanged.connect(
+            self._on_source_topic_selected
+        )
+        self._source_topic_row.addWidget(self._combo_src_topic)
+        form.addLayout(self._source_topic_row)
+
+        self._destination_topic_row = QHBoxLayout()
+        self._destination_topic_row.setObjectName("destinationTopicRow")
+        self._destination_topic_row.addWidget(QLabel("目标话题:"))
         self._edit_dst_topic = QLineEdit()
         self._edit_dst_topic.setPlaceholderText("/fleet/turtlebot_001/odom")
-        f2.addWidget(self._edit_dst_topic)
-        form.addLayout(f2)
+        self._destination_topic_row.addWidget(self._edit_dst_topic)
+        form.addLayout(self._destination_topic_row)
 
         f3 = QHBoxLayout()
         f3.addWidget(QLabel("消息类型:"))
@@ -104,36 +120,18 @@ class FleetCommPanel(QWidget):
         f3.addWidget(self._combo_msg_type)
         form.addLayout(f3)
 
-        f4 = QHBoxLayout()
-        f4.addWidget(QLabel("频率上限(Hz):"))
+        self._frequency_policy_row = QHBoxLayout()
+        self._frequency_policy_row.setObjectName("frequencyPolicyRow")
+        self._frequency_policy_row.addWidget(QLabel("频率上限(Hz):"))
         self._spin_freq = QDoubleSpinBox()
         self._spin_freq.setRange(0, 100)
         self._spin_freq.setValue(1.0)
-        f4.addWidget(self._spin_freq)
-        form.addLayout(f4)
-
-        f_policy = QHBoxLayout()
-        f_policy.addWidget(QLabel("Frame 策略:"))
+        self._frequency_policy_row.addWidget(self._spin_freq)
+        self._frequency_policy_row.addWidget(QLabel("Frame 策略:"))
         self._combo_frame_policy = QComboBox()
         self._combo_frame_policy.addItems(["namespace", "preserve"])
-        f_policy.addWidget(self._combo_frame_policy)
-        form.addLayout(f_policy)
-
-        f5 = QHBoxLayout()
-        f5.addWidget(QLabel("用途:"))
-        self._radio_position = QRadioButton("位置共享")
-        self._radio_nav = QRadioButton("导航目标")
-        self._radio_custom = QRadioButton("自定义")
-        self._radio_pointcloud = QRadioButton("点云(重量)")
-        self._radio_position.setChecked(True)
-        for rb in [
-            self._radio_position,
-            self._radio_nav,
-            self._radio_custom,
-            self._radio_pointcloud,
-        ]:
-            f5.addWidget(rb)
-        form.addLayout(f5)
+        self._frequency_policy_row.addWidget(self._combo_frame_policy)
+        form.addLayout(self._frequency_policy_row)
 
         confirm_row = QHBoxLayout()
         self._btn_confirm = QPushButton("确认")
@@ -216,6 +214,15 @@ class FleetCommPanel(QWidget):
             idx = self._combo_dst.findText(current_dst)
             if idx >= 0:
                 self._combo_dst.setCurrentIndex(idx)
+        self._refresh_source_topics()
+
+    def on_discover_response(self, robot_id: str, data: Dict[str, Any]) -> None:
+        TopicConfigPanel.update_available_topics_cache(
+            self._available_topics_by_robot, robot_id, data
+        )
+        self._pending_discover_robot_ids.discard(robot_id)
+        if robot_id == self._combo_src.currentText():
+            self._refresh_source_topics()
 
     def _refresh_table(self) -> None:
         self._table.setRowCount(len(self._rules))
@@ -233,6 +240,7 @@ class FleetCommPanel(QWidget):
             ]
             for col, value in enumerate(values):
                 self._table.setItem(row, col, QTableWidgetItem(value))
+        self._table.resizeColumnsToContents()
 
     def _show_add_form(self) -> None:
         self._editing_row = None
@@ -240,6 +248,7 @@ class FleetCommPanel(QWidget):
         self._btn_confirm.setText("确认")
         self._clear_form()
         self._form_group.setChecked(True)
+        self._request_source_topics_if_missing()
 
     def _hide_form(self) -> None:
         self._editing_row = None
@@ -252,17 +261,61 @@ class FleetCommPanel(QWidget):
             self._combo_dst.setCurrentIndex(1)
         elif self._combo_dst.count() > 0:
             self._combo_dst.setCurrentIndex(0)
-        self._edit_src_topic.clear()
+        self._refresh_source_topics()
+        self._combo_src_topic.setCurrentText("")
         self._edit_dst_topic.clear()
         self._combo_msg_type.setCurrentText("nav_msgs/Odometry")
         self._spin_freq.setValue(1.0)
         self._combo_frame_policy.setCurrentText("namespace")
-        self._radio_position.setChecked(True)
+
+    def _refresh_source_topics(self) -> None:
+        current_topic = self._combo_src_topic.currentText()
+        src_robot = self._combo_src.currentText()
+        topics = self._available_topics_by_robot.get(src_robot, [])
+        self._combo_src_topic.blockSignals(True)
+        self._combo_src_topic.clear()
+        for entry in topics:
+            self._combo_src_topic.addItem(entry["topic"], entry)
+        if current_topic:
+            idx = self._combo_src_topic.findText(current_topic)
+            if idx >= 0:
+                self._combo_src_topic.setCurrentIndex(idx)
+            else:
+                self._combo_src_topic.setCurrentText(current_topic)
+        self._combo_src_topic.blockSignals(False)
+        self._on_source_topic_selected()
+        self._request_source_topics_if_missing()
+
+    def _request_source_topics_if_missing(self) -> None:
+        src_robot = self._combo_src.currentText()
+        if TopicConfigPanel.should_request_available_topics(
+            self._available_topics_by_robot, src_robot
+        ) and src_robot not in self._pending_discover_robot_ids:
+            self._pending_discover_robot_ids.add(src_robot)
+            self.discover_requested.emit()
+
+    def _on_source_topic_selected(self) -> None:
+        topic = self._combo_src_topic.currentText().strip()
+        data = self._combo_src_topic.currentData()
+        if isinstance(data, dict):
+            self._combo_msg_type.setCurrentText(data.get("msg_type", ""))
+        if topic:
+            self._edit_dst_topic.setText(
+                self.default_dst_topic(self._combo_src.currentText(), topic)
+            )
+
+    @staticmethod
+    def default_dst_topic(src_robot: str, src_topic: str) -> str:
+        robot = src_robot.strip().strip("/")
+        topic = src_topic.strip().lstrip("/")
+        if not robot or not topic:
+            return ""
+        return f"/fleet/{robot}/{topic}"
 
     def _rule_from_form(self) -> Optional[Dict[str, Any]]:
         src_robot = self._combo_src.currentText().strip()
         dst_robot = self._combo_dst.currentText().strip()
-        src_topic = self._edit_src_topic.text().strip()
+        src_topic = self._combo_src_topic.currentText().strip()
         dst_topic = self._edit_dst_topic.text().strip()
         msg_type = self._combo_msg_type.currentText().strip()
         freq_limit = float(self._spin_freq.value())

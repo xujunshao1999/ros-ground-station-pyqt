@@ -7,7 +7,7 @@ import time
 
 import pytest
 import yaml
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QHeaderView
 
 from qt_frontend.panels.command_panel import CommandPanel
 from qt_frontend.panels.event_panel import EventPanel
@@ -694,6 +694,65 @@ class TestFleetCommPanel:
             "操作",
         ]
 
+        for index in range(panel._table.columnCount()):
+            assert panel._table.horizontalHeader().sectionResizeMode(index) == (
+                QHeaderView.ResizeToContents
+            )
+
+    def test_discover_response_populates_source_topic_options(self, qt_app):
+        panel = FleetCommPanel()
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+
+        panel.on_discover_response(
+            "turtlebot_001",
+            {
+                "topics": [
+                    {"topic": "/odom", "msg_type": "nav_msgs/Odometry"},
+                    {"topic": "/scan", "type": "sensor_msgs/LaserScan"},
+                ]
+            },
+        )
+
+        assert [
+            panel._combo_src_topic.itemText(index)
+            for index in range(panel._combo_src_topic.count())
+        ] == ["/odom", "/scan"]
+
+    def test_source_topic_selection_autofills_type_and_destination(self, qt_app):
+        panel = FleetCommPanel()
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+        panel.on_discover_response(
+            "turtlebot_001",
+            {"topics": [{"topic": "/odom", "msg_type": "nav_msgs/Odometry"}]},
+        )
+
+        panel._combo_src.setCurrentText("turtlebot_001")
+        panel._combo_src_topic.setCurrentText("/odom")
+
+        assert panel._combo_msg_type.currentText() == "nav_msgs/Odometry"
+        assert panel._edit_dst_topic.text() == "/fleet/turtlebot_001/odom"
+
+    def test_show_add_form_requests_discover_when_source_topics_missing(self, qt_app):
+        panel = FleetCommPanel()
+        requested = []
+        panel.discover_requested.connect(lambda: requested.append(True))
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+
+        panel._btn_add.click()
+
+        assert requested == [True]
+
+    def test_form_layout_groups_destination_and_frequency_policy_rows(self, qt_app):
+        panel = FleetCommPanel()
+
+        assert panel._source_topic_row.objectName() == "sourceTopicRow"
+        assert panel._destination_topic_row.objectName() == "destinationTopicRow"
+        assert panel._frequency_policy_row.objectName() == "frequencyPolicyRow"
+        assert panel._source_topic_row.indexOf(panel._combo_src_topic) >= 0
+        assert panel._destination_topic_row.indexOf(panel._edit_dst_topic) >= 0
+        assert panel._frequency_policy_row.indexOf(panel._spin_freq) >= 0
+        assert panel._frequency_policy_row.indexOf(panel._combo_frame_policy) >= 0
+
     def test_add_rule_button_opens_form(self, qt_app):
         panel = FleetCommPanel()
 
@@ -709,7 +768,7 @@ class TestFleetCommPanel:
         panel._btn_add.click()
         panel._combo_src.setCurrentText("turtlebot_001")
         panel._combo_dst.setCurrentText("turtlebot_002")
-        panel._edit_src_topic.setText("/odom")
+        panel._combo_src_topic.setCurrentText("/odom")
         panel._edit_dst_topic.setText("/fleet/turtlebot_001/odom")
         panel._combo_msg_type.setCurrentText("nav_msgs/Odometry")
         panel._spin_freq.setValue(10.0)
