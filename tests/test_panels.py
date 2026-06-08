@@ -7,7 +7,7 @@ import time
 
 import pytest
 import yaml
-from PyQt5.QtWidgets import QApplication, QHeaderView
+from PyQt5.QtWidgets import QApplication, QHeaderView, QLabel
 
 from qt_frontend.panels.command_panel import CommandPanel
 from qt_frontend.panels.event_panel import EventPanel
@@ -137,6 +137,38 @@ class TestRobotListSubscriptions:
 
         item = panel._tree.topLevelItem(0)
         assert item.text(4) == "7"
+
+    def test_selected_robot_detail_refreshes_when_status_updates(self, qt_app):
+        panel = RobotListPanel()
+        panel.on_status_received(
+            "turtlebot_001",
+            {
+                "battery": 50.0,
+                "position": {"x": 1.0, "y": 2.0, "theta": 0.3},
+                "velocity": {"linear": 0.1, "angular": 0.2},
+            },
+        )
+        item = panel._tree.topLevelItem(0)
+        item.setSelected(True)
+        panel._on_selection_changed()
+
+        panel.on_status_received(
+            "turtlebot_001",
+            {
+                "battery": 75.0,
+                "position": {"x": 3.0, "y": 4.0, "theta": 0.6},
+                "velocity": {"linear": 0.5, "angular": 0.7},
+            },
+        )
+
+        assert panel._lb_position.text() == "位姿: x=3.00, y=4.00, θ=0.60"
+        assert panel._lb_velocity.text() == "速度: linear=0.50, angular=0.70"
+        assert panel._battery_bar.value() == 75
+
+    def test_detail_battery_uses_progress_bar_without_duplicate_label(self, qt_app):
+        panel = RobotListPanel()
+
+        assert all(label.text() != "电量:" for label in panel.findChildren(QLabel))
 
 
 # ------------------------------------------------------------------

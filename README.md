@@ -1,6 +1,6 @@
 # ROS Ground Station
 
-基于 MQTT 的 ROS 地面站控制系统，PyQt5 + RViz 嵌入式 3D 可视化，实现一对多机器人管理。Station 与 ROS 版本的解耦——仅通过 MQTT 协议通信。
+基于 MQTT 的 ROS 多机器人地面站控制系统，PyQt5 + RViz 嵌入式 3D 可视化，实现机器人发现、话题传输配置、命令控制、传感器数据展示、编队通信规则下发和统一 TF 可视化。Station 与机器人 ROS 网络保持隔离，仅通过 MQTT 协议通信。
 
 ## 架构
 
@@ -9,9 +9,18 @@ Robot (ROS) ──► Agent ──MQTT──► Mosquitto Broker ──MQTT─�
 ```
 
 - **Agent**：运行在机器人端（Docker 容器或物理机），桥接 ROS 话题 ↔ MQTT
-- **Bridge** (`mqtt_ros_bridge`)：宿主机 MQTT ↔ ROS 双向翻译，自动类型检测
-- **Qt 前端**：PyQt5 桌面应用，嵌入式 RViz 3D 渲染，话题订阅、命令控制面板
+- **Bridge** (`mqtt_ros_bridge`)：宿主机 MQTT ↔ ROS 双向翻译，自动类型检测，并负责地面站本地 ROS topic 与 TF 重发布
+- **Qt 前端**：PyQt5 桌面应用，嵌入式 RViz 3D 渲染，话题订阅、命令控制、编队通信配置
 - **MQTT Broker**：Mosquitto，消息中枢
+
+## 主要能力
+
+- 多机器人在线发现、状态显示、命令控制和事件告警。
+- 通过前端传输面板配置每台机器人需要上报的 ROS topic，支持保存、下发和从机器人拉取当前配置。
+- 通过编队通信面板配置机器人之间的 ROS topic 转发规则，支持按源机器人分组下发、拉取、合并和本地持久化。
+- Agent 端支持 `subscriptions` 和 `fleet_rules` 启动恢复，并将运行态配置写回机器人自己的 `config.yaml`。
+- Bridge 端将 MQTT 数据重新发布到地面站本地 roscore，RViz 只依赖地面站本地 ROS master。
+- 支持多机器人 TF 命名空间化和 `global_map -> robot/map` 统一坐标根，机器人 `/tf_static` 通过 MQTT retained 消息转发并在 Bridge 侧缓存重发。
 
 ## 快速开始（Ubuntu 20.04 + ROS Noetic）
 
@@ -23,16 +32,64 @@ pip install -e ".[qt,dev]"
 # 2. 构建 RViz C++ 胶水库
 cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(nproc) && cd ../../..
 
-# 3. Docker 混合测试（Turtlebot3 仿真 + 地面站）
-docker compose up -d robot-turtlebot-001        # 启动仿真容器（Gazebo + gmapping + RViz）
+# 3. Docker 混合测试（TurtleBot3 仿真 + 地面站）
+docker compose up -d robot-turtlebot-001        # 启动单机器人仿真容器
 ./qt_frontend/scripts/start.sh                  # 启动地面站（自动拉起 roscore + broker + bridge）
 
-# 4. 停止
+# 4. 可选：启动第二台 TurtleBot3，用于多机器人和编队通信测试
+docker compose up -d robot-turtlebot-002
+
+# 5. 停止
 ./qt_frontend/scripts/stop.sh
-docker compose stop robot-turtlebot-001
+docker compose stop robot-turtlebot-001 robot-turtlebot-002
 ```
 
 > 仿真容器首次构建约需 20 分钟（需下载 Gazebo 等依赖）。详见 `docs/work-log-2026-05-08.md`。
+
+## 配置文件
+
+| 路径 | 作用 |
+|------|------|
+| `qt_frontend/config/transmit_config.yaml` | 地面站侧配置，保存每台机器人的 `subscriptions` 和跨机器人视角的 `fleet_rules` |
+| `agent/config.yaml` | 默认机器人端配置，适合单 Agent 或物理机器人部署 |
+| `agent/configs/<robot_id>.yaml` | 多容器仿真时每台 TurtleBot 的独立 Agent 配置，避免不同机器人互相覆盖 |
+| `bridge/bridge_config.yaml` | Bridge 配置，包括 MQTT、ROS topic 发布和 fleet TF 配置 |
+
+实际机器人部署时，每台机器人仍使用自己的 `agent/config.yaml` 或等价配置文件；地面站维护跨机器人视角的 `transmit_config.yaml`，并通过 MQTT `config_sync` / `config_query` 与机器人端同步。
+
+## 编队通信规则
+
+编队通信面板用于描述“源机器人某个 ROS topic 转发给目标机器人某个 ROS topic”。地面站保存规则时会保留 `src_robot`，便于按源机器人分组下发：
+
+```yaml
+fleet_rules:
+  - enabled: true
+    src_robot: turtlebot_001
+    src_topic: /odom
+    msg_type: nav_msgs/Odometry
+    dst_robot: turtlebot_002
+    dst_topic: /fleet/turtlebot_001/odom
+    freq_limit: 10.0
+    transport: mqtt_json
+    frame_policy: namespace
+```
+
+下发到源机器人后，Agent 端配置只保留自身需要执行的协议规则：
+
+```yaml
+fleet_rules:
+  - enabled: true
+    src_topic: /odom
+    msg_type: nav_msgs/Odometry
+    targets:
+      - robot_id: turtlebot_002
+        dst_topic: /fleet/turtlebot_001/odom
+    freq_limit: 10.0
+    transport: mqtt_json
+    frame_policy: namespace
+```
+
+下发时按源机器人合并发送。例如 `turtlebot_001` 有 3 条规则、`turtlebot_002` 有 2 条规则，地面站会发送 2 次 `config_sync`，而不是逐条发送 5 次。
 
 ## 目录结构
 
@@ -69,7 +126,7 @@ ros-ground-station-pyqt/
 │   │   └── CMakeLists.txt
 │   ├── config/                   #   配置文件
 │   ├── launch/                   #   ROS launch
-│   │   └── station.launch        #     静态 TF 变换
+│   │   └── station.launch        #     地面站 ROS 启动入口
 │   └── scripts/
 │       ├── start.sh              #     一键启动
 │       └── stop.sh               #     一键停止
@@ -82,7 +139,8 @@ ros-ground-station-pyqt/
 ├── docs/                         # 文档 + 工作日志
 ├── docker-compose.yml            # Docker 编排
 ├── pyproject.toml                # 依赖/构建配置
-└── CLAUDE.md                     # 项目指南（AI 开发用）
+├── AGENTS.md                     # 项目指南（AI 开发用）
+└── CLAUDE.md                     # 兼容旧工具的项目指南
 ```
 
 ## 常用命令
@@ -94,17 +152,26 @@ python3 -m pytest tests/ -v
 # 仅启模拟 Agent（无 ROS）
 python -m agent.main --agent-type mock
 
+# 启动双 TurtleBot3 仿真容器
+docker compose up -d robot-turtlebot-001 robot-turtlebot-002
+
 # 查看宿主机话题
 source /opt/ros/noetic/setup.bash && rostopic list
+
+# 查看地面站本地 TF
+source /opt/ros/noetic/setup.bash && rosrun tf view_frames
 ```
 
 ## 文档
 
 | 文档 | 内容 |
 |------|------|
-| [`CLAUDE.md`](CLAUDE.md) | 项目架构、开发规范、命令速查 |
-| [`docs/work-log-2026-05-08.md`](docs/work-log-2026-05-08.md) | Docker Turtlebot3 仿真搭建 |
+| [`AGENTS.md`](AGENTS.md) | 项目架构、开发规范、命令速查 |
+| [`docs/work-log-2026-05-08.md`](docs/work-log-2026-05-08.md) | Docker TurtleBot3 仿真搭建 |
 | [`docs/work-log-2026-05-09.md`](docs/work-log-2026-05-09.md) | Bridge 数据流修复 + 命令/LaserScan 修复 |
+| [`docs/work-log-2026-05-20.md`](docs/work-log-2026-05-20.md) | 多机器人 topic 转发和编队通信基础能力 |
+| [`docs/work-log-2026-05-22.md`](docs/work-log-2026-05-22.md) | 双 TurtleBot、统一 TF 和 `/tf_static` 转发修复 |
+| [`docs/work-log-2026-06-04.md`](docs/work-log-2026-06-04.md) | 编队通信规则 UI、下发/拉取和持久化完善 |
 | [`docs/protocol.md`](docs/protocol.md) | MQTT 通信协议文档 |
 | [`docs/tech-stack.md`](docs/tech-stack.md) | 技术栈详情 |
 

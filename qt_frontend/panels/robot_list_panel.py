@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QProgressBar,
     QPushButton,
@@ -83,7 +82,6 @@ class RobotListPanel(QWidget):
         self._battery_bar.setFormat("电量 %v%")
         detail_layout.addWidget(self._lb_position)
         detail_layout.addWidget(self._lb_velocity)
-        detail_layout.addWidget(QLabel("电量:"))
         detail_layout.addWidget(self._battery_bar)
 
         layout.addWidget(detail_group)
@@ -203,7 +201,6 @@ class RobotListPanel(QWidget):
             item.setData(0, Qt.UserRole, robot_id)
 
         status_indicator = "●" if info.online else "○"
-        color = "green" if info.online else "gray"
         item.setText(0, status_indicator)
         item.setForeground(0, Qt.green if info.online else Qt.gray)
         item.setText(1, robot_id)
@@ -212,6 +209,8 @@ class RobotListPanel(QWidget):
         item.setText(4, str(info.subscriptions_count))
 
         self._update_empty_state()
+        if self.selected_robot() == robot_id:
+            self._update_detail(info)
 
     def _find_tree_item(self, robot_id: str) -> Optional[QTreeWidgetItem]:
         for i in range(self._tree.topLevelItemCount()):
@@ -228,18 +227,27 @@ class RobotListPanel(QWidget):
     def _on_selection_changed(self) -> None:
         robot_id = self.selected_robot()
         if robot_id and robot_id in self._robots:
-            info = self._robots[robot_id]
-            x, y, theta = info.position
-            lin, ang = info.velocity
-            self._lb_position.setText(f"位姿: x={x:.2f}, y={y:.2f}, θ={theta:.2f}")
-            self._lb_velocity.setText(f"速度: linear={lin:.2f}, angular={ang:.2f}")
-            self._battery_bar.setValue(int(info.battery))
+            self._update_detail(self._robots[robot_id])
             self.robot_selected.emit(robot_id)
         else:
-            self._lb_position.setText("位姿: --")
-            self._lb_velocity.setText("速度: --")
-            self._battery_bar.setValue(0)
+            self._clear_detail()
             self.robot_deselected.emit()
+
+    def _update_detail(self, info: RobotInfo) -> None:
+        x, y, theta = info.position
+        lin, ang = info.velocity
+        self._lb_position.setText(f"位姿: x={x:.2f}, y={y:.2f}, θ={theta:.2f}")
+        self._lb_velocity.setText(f"速度: linear={lin:.2f}, angular={ang:.2f}")
+        self._battery_bar.setValue(self._battery_percent(info.battery))
+
+    def _clear_detail(self) -> None:
+        self._lb_position.setText("位姿: --")
+        self._lb_velocity.setText("速度: --")
+        self._battery_bar.setValue(0)
+
+    @staticmethod
+    def _battery_percent(value: float) -> int:
+        return max(0, min(100, int(round(value))))
 
     def _check_heartbeats(self) -> None:
         import time
