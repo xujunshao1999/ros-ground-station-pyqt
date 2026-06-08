@@ -143,24 +143,63 @@ class TestRobotListSubscriptions:
 # CommandPanel slider value mapping
 # ------------------------------------------------------------------
 class TestCommandPanel:
-    def test_slider_to_value_positive(self):
-        assert CommandPanel.slider_to_value(100) == 1.0
-        assert CommandPanel.slider_to_value(50) == 0.5
-        assert CommandPanel.slider_to_value(0) == 0.0
+    def test_velocity_step_defaults_to_medium(self):
+        assert CommandPanel.velocity_step("medium") == (0.30, 0.75)
 
-    def test_slider_to_value_negative(self):
-        assert CommandPanel.slider_to_value(-100) == -1.0
-        assert CommandPanel.slider_to_value(-50) == -0.5
+    def test_velocity_step_falls_back_to_medium_for_unknown_level(self):
+        assert CommandPanel.velocity_step("bad") == (0.30, 0.75)
 
-    def test_value_to_slider(self):
-        assert CommandPanel.value_to_slider(1.0) == 100
-        assert CommandPanel.value_to_slider(0.0) == 0
-        assert CommandPanel.value_to_slider(-1.0) == -100
-        assert CommandPanel.value_to_slider(0.75) == 75
+    def test_direction_velocity_forward_left(self):
+        assert CommandPanel.direction_velocity("forward_left", "medium") == (0.30, 0.75)
 
-    def test_value_to_slider_clamping(self):
-        assert CommandPanel.value_to_slider(2.0) == 100
-        assert CommandPanel.value_to_slider(-2.0) == -100
+    def test_direction_velocity_backward_right(self):
+        assert CommandPanel.direction_velocity("backward_right", "high") == (-0.50, -1.20)
+
+    def test_direction_velocity_turn_left(self):
+        assert CommandPanel.direction_velocity("left", "low") == (0.0, 0.40)
+
+    def test_direction_velocity_stop_and_unknown_direction(self):
+        assert CommandPanel.direction_velocity("stop", "medium") == (0.0, 0.0)
+        assert CommandPanel.direction_velocity("bad", "medium") == (0.0, 0.0)
+
+    def test_direction_button_emits_velocity(self, qt_app):
+        panel = CommandPanel()
+        panel.on_robot_selected("turtlebot_001")
+
+        sent = []
+        panel.command_sent.connect(lambda *args: sent.append(args))
+
+        panel._send_direction_velocity("forward_right")
+
+        assert sent == [
+            (
+                "turtlebot_001",
+                "velocity",
+                {"linear": 0.30, "angular": -0.75},
+            )
+        ]
+
+    def test_direction_buttons_disabled_without_selected_robot(self, qt_app):
+        panel = CommandPanel()
+
+        assert all(not btn.isEnabled() for btn in panel._direction_buttons)
+
+    def test_release_direction_button_emits_stop(self, qt_app):
+        panel = CommandPanel()
+        panel.on_robot_selected("turtlebot_001")
+
+        sent = []
+        panel.command_sent.connect(lambda *args: sent.append(args))
+
+        panel._stop_direction_velocity()
+
+        assert sent == [
+            (
+                "turtlebot_001",
+                "velocity",
+                {"linear": 0.0, "angular": 0.0},
+            )
+        ]
 
 
 # ------------------------------------------------------------------

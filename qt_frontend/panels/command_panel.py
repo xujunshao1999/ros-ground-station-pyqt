@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
+    QRadioButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -18,9 +20,33 @@ from PyQt5.QtWidgets import (
 class CommandPanel(QWidget):
     command_sent = pyqtSignal(str, str, dict)  # (robot_id, action, params)
 
+    _SPEED_STEPS: Dict[str, Tuple[float, float]] = {
+        "low": (0.15, 0.40),
+        "medium": (0.30, 0.75),
+        "high": (0.50, 1.20),
+    }
+    _DIRECTION_FACTORS: Dict[str, Tuple[float, float]] = {
+        "forward_left": (1.0, 1.0),
+        "forward": (1.0, 0.0),
+        "forward_right": (1.0, -1.0),
+        "left": (0.0, 1.0),
+        "stop": (0.0, 0.0),
+        "right": (0.0, -1.0),
+        "backward_left": (-1.0, 1.0),
+        "backward": (-1.0, 0.0),
+        "backward_right": (-1.0, -1.0),
+    }
+    _REPEAT_INTERVAL_MS = 200
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._selected_robot: Optional[str] = None
+        self._active_direction = ""
+        self._direction_buttons: List[QPushButton] = []
+        self._speed_buttons: Dict[str, QRadioButton] = {}
+        self._repeat_timer = QTimer(self)
+        self._repeat_timer.setInterval(self._REPEAT_INTERVAL_MS)
+        self._repeat_timer.timeout.connect(self._repeat_active_direction)
 
         layout = QVBoxLayout(self)
 
@@ -36,34 +62,55 @@ class CommandPanel(QWidget):
         vel_group = QGroupBox("速度控制")
         vel_layout = QVBoxLayout(vel_group)
 
-        linear_row = QHBoxLayout()
-        linear_row.addWidget(QLabel("线速度:"))
-        self._linear_slider = QSlider(Qt.Horizontal)
-        self._linear_slider.setRange(-100, 100)
-        self._linear_slider.setValue(0)
-        self._linear_slider.valueChanged.connect(self._on_linear_changed)
-        linear_row.addWidget(self._linear_slider)
-        self._lb_linear = QLabel("0.00 m/s")
-        self._lb_linear.setFixedWidth(80)
-        linear_row.addWidget(self._lb_linear)
-        vel_layout.addLayout(linear_row)
+        speed_row = QHBoxLayout()
+        speed_row.addWidget(QLabel("速度档位:"))
+        for level, text in [
+            ("low", "低速"),
+            ("medium", "中速"),
+            ("high", "高速"),
+        ]:
+            btn = QRadioButton(text)
+            btn.setProperty("speed_level", level)
+            btn.toggled.connect(self._update_velocity_preview)
+            self._speed_buttons[level] = btn
+            speed_row.addWidget(btn)
+        speed_row.addStretch()
+        vel_layout.addLayout(speed_row)
 
-        angular_row = QHBoxLayout()
-        angular_row.addWidget(QLabel("角速度:"))
-        self._angular_slider = QSlider(Qt.Horizontal)
-        self._angular_slider.setRange(-100, 100)
-        self._angular_slider.setValue(0)
-        self._angular_slider.valueChanged.connect(self._on_angular_changed)
-        angular_row.addWidget(self._angular_slider)
-        self._lb_angular = QLabel("0.00 rad/s")
-        self._lb_angular.setFixedWidth(80)
-        angular_row.addWidget(self._lb_angular)
-        vel_layout.addLayout(angular_row)
+        pad_row = QHBoxLayout()
+        pad_grid = QGridLayout()
+        pad_grid.setSpacing(6)
+        for row, col, text, direction in [
+            (0, 0, "↖", "forward_left"),
+            (0, 1, "↑", "forward"),
+            (0, 2, "↗", "forward_right"),
+            (1, 0, "←", "left"),
+            (1, 1, "■", "stop"),
+            (1, 2, "→", "right"),
+            (2, 0, "↙", "backward_left"),
+            (2, 1, "↓", "backward"),
+            (2, 2, "↘", "backward_right"),
+        ]:
+            btn = QPushButton(text)
+            btn.setFixedSize(44, 36)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            btn.setToolTip(self._direction_tooltip(direction))
+            btn.pressed.connect(lambda d=direction: self._start_direction_velocity(d))
+            btn.released.connect(self._stop_direction_velocity)
+            self._direction_buttons.append(btn)
+            pad_grid.addWidget(btn, row, col)
+        pad_row.addLayout(pad_grid)
 
-        self._btn_send_vel = QPushButton("发送速度")
-        self._btn_send_vel.clicked.connect(self._send_velocity)
-        self._btn_send_vel.setEnabled(False)
-        vel_layout.addWidget(self._btn_send_vel)
+        preview_layout = QVBoxLayout()
+        self._lb_linear = QLabel("线速度: 0.30 m/s")
+        self._lb_angular = QLabel("角速度: 0.75 rad/s")
+        self._lb_hint = QLabel("按住方向按钮，松开停车")
+        self._lb_hint.setProperty("muted", True)
+        for label in [self._lb_linear, self._lb_angular, self._lb_hint]:
+            preview_layout.addWidget(label)
+        preview_layout.addStretch()
+        pad_row.addLayout(preview_layout)
+        vel_layout.addLayout(pad_row)
 
         layout.addWidget(vel_group)
 
@@ -97,18 +144,32 @@ class CommandPanel(QWidget):
 
         layout.addWidget(mode_group)
         layout.addStretch()
+        self._speed_buttons["medium"].setChecked(True)
+        self._update_velocity_preview()
+        self.on_robot_selected("")
 
     # ------------------------------------------------------------------
     # 纯逻辑方法（可测试）
     # ------------------------------------------------------------------
 
     @staticmethod
-    def slider_to_value(slider_val: int) -> float:
-        return slider_val / 100.0
+    def velocity_step(level: str) -> Tuple[float, float]:
+        return CommandPanel._SPEED_STEPS.get(
+            level,
+            CommandPanel._SPEED_STEPS["medium"],
+        )
 
     @staticmethod
-    def value_to_slider(value: float) -> int:
-        return max(-100, min(100, int(value * 100)))
+    def direction_velocity(direction: str, level: str) -> Tuple[float, float]:
+        linear_base, angular_base = CommandPanel.velocity_step(level)
+        linear_factor, angular_factor = CommandPanel._DIRECTION_FACTORS.get(
+            direction,
+            (0.0, 0.0),
+        )
+        return (
+            round(linear_base * linear_factor, 2),
+            round(angular_base * angular_factor, 2),
+        )
 
     # ------------------------------------------------------------------
     # Slots
@@ -117,7 +178,8 @@ class CommandPanel(QWidget):
     def on_robot_selected(self, robot_id: str) -> None:
         self._selected_robot = robot_id
         has_target = robot_id is not None and robot_id != ""
-        self._btn_send_vel.setEnabled(has_target)
+        for btn in self._direction_buttons:
+            btn.setEnabled(has_target)
         self._btn_manual.setEnabled(has_target)
         self._btn_auto.setEnabled(has_target)
         self._btn_stop.setEnabled(has_target)
@@ -150,22 +212,64 @@ class CommandPanel(QWidget):
         else:
             self.on_robot_selected("")
 
-    def _on_linear_changed(self, val: int) -> None:
-        self._lb_linear.setText(f"{self.slider_to_value(val):.2f} m/s")
+    def _selected_speed_level(self) -> str:
+        for level, btn in self._speed_buttons.items():
+            if btn.isChecked():
+                return level
+        return "medium"
 
-    def _on_angular_changed(self, val: int) -> None:
-        self._lb_angular.setText(f"{self.slider_to_value(val):.2f} rad/s")
+    def _update_velocity_preview(self) -> None:
+        linear, angular = self.velocity_step(self._selected_speed_level())
+        self._lb_linear.setText(f"线速度: {linear:.2f} m/s")
+        self._lb_angular.setText(f"角速度: {angular:.2f} rad/s")
 
-    def _send_velocity(self) -> None:
+    def _start_direction_velocity(self, direction: str) -> None:
+        self._active_direction = direction
+        self._send_direction_velocity(direction)
+        if direction == "stop":
+            self._repeat_timer.stop()
+            return
+        self._repeat_timer.start()
+
+    def _repeat_active_direction(self) -> None:
+        if self._active_direction:
+            self._send_direction_velocity(self._active_direction)
+
+    def _send_direction_velocity(self, direction: str) -> None:
         if not self._selected_robot:
             return
-        lin = self.slider_to_value(self._linear_slider.value())
-        ang = self.slider_to_value(self._angular_slider.value())
+        lin, ang = self.direction_velocity(direction, self._selected_speed_level())
         self.command_sent.emit(
             self._selected_robot,
             "velocity",
             {"linear": lin, "angular": ang},
         )
+
+    def _stop_direction_velocity(self) -> None:
+        self._repeat_timer.stop()
+        self._active_direction = ""
+        if not self._selected_robot:
+            return
+        self.command_sent.emit(
+            self._selected_robot,
+            "velocity",
+            {"linear": 0.0, "angular": 0.0},
+        )
+
+    @staticmethod
+    def _direction_tooltip(direction: str) -> str:
+        labels = {
+            "forward_left": "前进左转",
+            "forward": "前进",
+            "forward_right": "前进右转",
+            "left": "原地左转",
+            "stop": "停止",
+            "right": "原地右转",
+            "backward_left": "后退左转",
+            "backward": "后退",
+            "backward_right": "后退右转",
+        }
+        return labels.get(direction, "")
 
     def _send_mode(self, mode: str) -> None:
         if not self._selected_robot:
