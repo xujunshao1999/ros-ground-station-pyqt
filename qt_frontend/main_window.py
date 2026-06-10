@@ -10,7 +10,7 @@ from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QAction, QDockWidget, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QAction, QDockWidget, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPushButton, QSizePolicy, QSplitter, QStatusBar, QTabWidget,
     QToolBar, QVBoxLayout, QWidget,
 )
@@ -98,7 +98,14 @@ class MainWindow(QMainWindow):
         # --- 视图 ---
         m = menubar.addMenu("&视图")
         self._act_reset_layout = QAction("重置布局", self)
+        self._act_load_rviz_config = QAction("加载 RViz 配置...", self)
+        self._act_save_rviz_config = QAction("保存 RViz 配置...", self)
+        self._act_load_rviz_config.triggered.connect(self._load_rviz_config_from_dialog)
+        self._act_save_rviz_config.triggered.connect(self._save_rviz_config_from_dialog)
         m.addAction(self._act_reset_layout)
+        m.addSeparator()
+        m.addAction(self._act_load_rviz_config)
+        m.addAction(self._act_save_rviz_config)
 
         # --- 帮助 ---
         m = menubar.addMenu("&帮助")
@@ -124,6 +131,15 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         self._lb_rec = QLabel("录制: 00:00:00"); toolbar.addWidget(self._lb_rec)
+        toolbar.addSeparator()
+
+        btn_load_rviz = QPushButton("加载 RViz")
+        btn_load_rviz.clicked.connect(self._load_rviz_config_from_dialog)
+        toolbar.addWidget(btn_load_rviz)
+
+        btn_save_rviz = QPushButton("保存 RViz")
+        btn_save_rviz.clicked.connect(self._save_rviz_config_from_dialog)
+        toolbar.addWidget(btn_save_rviz)
         toolbar.addSeparator()
 
         btn = QPushButton("全部急停")
@@ -257,6 +273,10 @@ class MainWindow(QMainWindow):
             lib = ctypes.CDLL(lib_path)
             lib.create_rviz_widget.argtypes = [ctypes.c_void_p]
             lib.create_rviz_widget.restype = ctypes.c_void_p
+            lib.load_config.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            lib.load_config.restype = ctypes.c_int
+            lib.save_config.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            lib.save_config.restype = ctypes.c_int
             lib.set_fixed_frame.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
             lib.set_fixed_frame.restype = None
             lib.get_display_panel.argtypes = [ctypes.c_void_p]
@@ -280,7 +300,15 @@ class MainWindow(QMainWindow):
         self._splitter.setStretchFactor(1, 1)
         self._apply_splitter_layout()
 
-        lib.set_fixed_frame(rviz_ptr, b"map")
+        config_path = Path(__file__).resolve().parent / "config" / "default.rviz"
+        load_result = lib.load_config(rviz_ptr, str(config_path).encode("utf-8"))
+        if load_result != 0:
+            logger.warning(
+                "Failed to load RViz config %s, using built-in defaults (code %s)",
+                config_path,
+                load_result,
+            )
+            lib.set_fixed_frame(rviz_ptr, b"map")
 
         # Display tab
         disp_ptr = lib.get_display_panel(rviz_ptr)
@@ -296,6 +324,69 @@ class MainWindow(QMainWindow):
         layout_ptr = sip.unwrapinstance(self._camera_dock_layout)
         if layout_ptr:
             lib.set_dock_layout(rviz_ptr, ctypes.c_void_p(layout_ptr))
+
+    def _default_rviz_config_path(self) -> Path:
+        return Path(__file__).resolve().parent / "config" / "default.rviz"
+
+    def _load_rviz_config(self, path: Path) -> bool:
+        if not self._rviz_lib or not self._rviz_ptr:
+            QMessageBox.warning(self, "RViz 未就绪", "RViz 还没有初始化完成。")
+            return False
+
+        result = self._rviz_lib.load_config(
+            self._rviz_ptr,
+            str(path).encode("utf-8"),
+        )
+        if result != 0:
+            QMessageBox.warning(
+                self,
+                "加载失败",
+                f"无法加载 RViz 配置：{path}\n错误码：{result}",
+            )
+            return False
+
+        self.statusBar().showMessage(f"已加载 RViz 配置：{path}", 5000)
+        return True
+
+    def _save_rviz_config(self, path: Path) -> bool:
+        if not self._rviz_lib or not self._rviz_ptr:
+            QMessageBox.warning(self, "RViz 未就绪", "RViz 还没有初始化完成。")
+            return False
+
+        result = self._rviz_lib.save_config(
+            self._rviz_ptr,
+            str(path).encode("utf-8"),
+        )
+        if result != 0:
+            QMessageBox.warning(
+                self,
+                "保存失败",
+                f"无法保存 RViz 配置：{path}\n错误码：{result}",
+            )
+            return False
+
+        self.statusBar().showMessage(f"已保存 RViz 配置：{path}", 5000)
+        return True
+
+    def _load_rviz_config_from_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "加载 RViz 配置",
+            str(self._default_rviz_config_path()),
+            "RViz 配置 (*.rviz);;YAML 文件 (*.yaml *.yml);;所有文件 (*)",
+        )
+        if path:
+            self._load_rviz_config(Path(path))
+
+    def _save_rviz_config_from_dialog(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存 RViz 配置",
+            str(self._default_rviz_config_path()),
+            "RViz 配置 (*.rviz);;YAML 文件 (*.yaml *.yml);;所有文件 (*)",
+        )
+        if path:
+            self._save_rviz_config(Path(path))
 
     # ------------------------------------------------------------------
     # MQTT callbacks

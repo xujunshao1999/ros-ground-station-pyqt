@@ -10,6 +10,8 @@ void* create_rviz_splitter(void);
 
 int load_config(void* widget_ptr, const char* config_path);
 
+int save_config(void* widget_ptr, const char* config_path);
+
 void set_fixed_frame(void* widget_ptr, const char* frame);
 
 void* get_display_panel(void* widget_ptr);
