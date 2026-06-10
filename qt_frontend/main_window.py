@@ -31,6 +31,7 @@ class MainWindow(QMainWindow):
         self._config = config
         self._rviz_ptr = None
         self._rviz_lib = None
+        self._current_rviz_config_path: Optional[Path] = None
         self._mqtt_client: Optional[MqttClient] = None
         self._splitter_sizes = [360, 920, 320]
 
@@ -277,6 +278,8 @@ class MainWindow(QMainWindow):
             lib.load_config.restype = ctypes.c_int
             lib.save_config.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
             lib.save_config.restype = ctypes.c_int
+            lib.has_config_changes.argtypes = [ctypes.c_void_p]
+            lib.has_config_changes.restype = ctypes.c_int
             lib.set_fixed_frame.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
             lib.set_fixed_frame.restype = None
             lib.get_display_panel.argtypes = [ctypes.c_void_p]
@@ -309,6 +312,8 @@ class MainWindow(QMainWindow):
                 load_result,
             )
             lib.set_fixed_frame(rviz_ptr, b"map")
+        else:
+            self._current_rviz_config_path = config_path
 
         # Display tab
         disp_ptr = lib.get_display_panel(rviz_ptr)
@@ -346,6 +351,7 @@ class MainWindow(QMainWindow):
             return False
 
         self.statusBar().showMessage(f"已加载 RViz 配置：{path}", 5000)
+        self._current_rviz_config_path = path
         return True
 
     def _save_rviz_config(self, path: Path) -> bool:
@@ -366,7 +372,13 @@ class MainWindow(QMainWindow):
             return False
 
         self.statusBar().showMessage(f"已保存 RViz 配置：{path}", 5000)
+        self._current_rviz_config_path = path
         return True
+
+    def _rviz_config_has_changes(self) -> bool:
+        if not self._rviz_lib or not self._rviz_ptr:
+            return False
+        return bool(self._rviz_lib.has_config_changes(self._rviz_ptr))
 
     def _load_rviz_config_from_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -378,7 +390,7 @@ class MainWindow(QMainWindow):
         if path:
             self._load_rviz_config(Path(path))
 
-    def _save_rviz_config_from_dialog(self) -> None:
+    def _save_rviz_config_from_dialog(self) -> bool:
         path, _ = QFileDialog.getSaveFileName(
             self,
             "保存 RViz 配置",
@@ -386,7 +398,8 @@ class MainWindow(QMainWindow):
             "RViz 配置 (*.rviz);;YAML 文件 (*.yaml *.yml);;所有文件 (*)",
         )
         if path:
-            self._save_rviz_config(Path(path))
+            return self._save_rviz_config(Path(path))
+        return False
 
     # ------------------------------------------------------------------
     # MQTT callbacks
@@ -462,6 +475,30 @@ class MainWindow(QMainWindow):
             self._mqtt_client.send_emergency_stop(self._robot_list.get_online_robots() or [])
 
     def closeEvent(self, event) -> None:
+        if self._rviz_config_has_changes():
+            config_path = self._current_rviz_config_path
+            path_text = str(config_path) if config_path else "尚未关联到文件"
+            choice = QMessageBox.question(
+                self,
+                "保存 RViz 配置",
+                "RViz Display 配置已发生变化，关闭前是否保存？\n\n"
+                f"当前 RViz 配置文件：{path_text}",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if choice == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if choice == QMessageBox.Save:
+                saved = (
+                    self._save_rviz_config(config_path)
+                    if config_path
+                    else self._save_rviz_config_from_dialog()
+                )
+                if not saved:
+                    event.ignore()
+                    return
+
         if self._mqtt_client:
             self._mqtt_client.disconnect()
         event.accept()

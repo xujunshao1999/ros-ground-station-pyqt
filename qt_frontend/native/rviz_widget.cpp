@@ -2,6 +2,7 @@
 
 #include <QAbstractItemModel>
 #include <QLayout>
+#include <QString>
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -27,6 +28,8 @@ struct RvizInstance {
     rviz::VisualizationManager* manager;
     rviz::DisplaysPanel* displays_panel;
     QLayout* dock_layout;
+    bool config_dirty;
+    QString config_snapshot;
 };
 
 static std::map<void*, RvizInstance*> g_instances;
@@ -60,6 +63,26 @@ static void restore_interaction_state(RvizInstance* instance) {
     instance->render_panel->setFocus(Qt::OtherFocusReason);
 }
 
+static QString current_display_config_snapshot(RvizInstance* instance) {
+    if (!instance || !instance->manager) return QString();
+
+    rviz::Config manager_config;
+    instance->manager->save(manager_config);
+
+    rviz::Config snapshot_config;
+    rviz::Config displays_config = manager_config.mapGetChild("Displays");
+    if (displays_config.isValid()) {
+        snapshot_config.mapMakeChild("Displays").copy(displays_config);
+    }
+    rviz::Config global_options_config = manager_config.mapGetChild("Global Options");
+    if (global_options_config.isValid()) {
+        snapshot_config.mapMakeChild("Global Options").copy(global_options_config);
+    }
+
+    rviz::YamlConfigWriter writer;
+    return writer.writeString(snapshot_config, "rviz display snapshot");
+}
+
 class DockExtractor : public QObject {
     Q_OBJECT
 public:
@@ -71,9 +94,16 @@ public Q_SLOTS:
     void onConfigChanged();
 };
 
+static void mark_config_dirty(RvizInstance* inst) {
+    if (inst) {
+        inst->config_dirty = true;
+    }
+}
+
 void DockExtractor::onConfigChanged() {
     for (auto& pair : ::g_instances) {
         RvizInstance* inst = pair.second;
+        mark_config_dirty(inst);
         if (!inst->dock_layout) continue;
         auto docks = inst->frame->findChildren<rviz::PanelDockWidget*>();
         for (auto* dw : docks) {
@@ -103,6 +133,7 @@ void* create_rviz_widget(void* parent_ptr) {
 
     auto* instance = new RvizInstance();
     instance->dock_layout = nullptr;
+    instance->config_dirty = false;
 
     instance->frame = new rviz::VisualizationFrame();
     instance->frame->initialize();
@@ -126,6 +157,7 @@ void* create_rviz_widget(void* parent_ptr) {
     instance->manager->createDisplay("rviz/TF", "TF", true);
 
     restore_interaction_state(instance);
+    instance->config_snapshot = current_display_config_snapshot(instance);
 
     instance->displays_panel = new rviz::DisplaysPanel();
     instance->displays_panel->initialize(instance->manager);
@@ -175,6 +207,8 @@ int load_config(void* widget_ptr, const char* config_path) {
     // which is unsafe when only RenderPanel is embedded inside PyQt.
     instance->manager->load(manager_config);
     restore_interaction_state(instance);
+    instance->config_snapshot = current_display_config_snapshot(instance);
+    instance->config_dirty = false;
     return 0;
 }
 
@@ -197,7 +231,18 @@ int save_config(void* widget_ptr, const char* config_path) {
         return 3;
     }
 
+    instance->config_snapshot = current_display_config_snapshot(instance);
+    instance->config_dirty = false;
     return 0;
+}
+
+int has_config_changes(void* widget_ptr) {
+    if (!widget_ptr) return 0;
+    auto it = g_instances.find(widget_ptr);
+    if (it == g_instances.end()) return 0;
+    RvizInstance* instance = it->second;
+    if (instance->config_dirty) return 1;
+    return current_display_config_snapshot(instance) != instance->config_snapshot ? 1 : 0;
 }
 
 void set_fixed_frame(void* widget_ptr, const char* frame) {

@@ -12,6 +12,8 @@ int load_config(void* widget_ptr, const char* config_path);
 
 int save_config(void* widget_ptr, const char* config_path);
 
+int has_config_changes(void* widget_ptr);
+
 void set_fixed_frame(void* widget_ptr, const char* frame);
 
 void* get_display_panel(void* widget_ptr);
