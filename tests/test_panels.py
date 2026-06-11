@@ -1283,6 +1283,51 @@ class TestTrafficMonitor:
         assert entry.robot_id == "r1"
         assert entry.bytes_received == 10000
 
+    def test_subscription_config_updates_transport(self, qt_app):
+        panel = TrafficMonitor()
+
+        panel.on_subscriptions_changed(
+            "r1",
+            [
+                {
+                    "topic": "/camera/image_raw/compressed",
+                    "transport": "mqtt_binary",
+                }
+            ],
+        )
+        panel.on_sensor_data_received(
+            "r1",
+            "camera/image_raw/compressed",
+            {"format": "jpeg", "data": [1, 2, 3]},
+            now=100.0,
+        )
+
+        entry = panel._entries[("camera/image_raw/compressed", "r1")]
+        assert entry.transport == "mqtt_binary"
+
+    def test_frequency_uses_message_intervals_not_refresh_interval(self, qt_app):
+        panel = TrafficMonitor()
+
+        panel.on_sensor_data_received("r1", "scan", {"ranges": [1.0]}, now=100.0)
+        panel.on_sensor_data_received("r1", "scan", {"ranges": [1.0]}, now=100.1)
+        panel.on_sensor_data_received("r1", "scan", {"ranges": [1.0]}, now=100.2)
+        panel._update_stats(now=101.2)
+
+        entry = panel._entries[("scan", "r1")]
+        assert entry.current_hz == pytest.approx(10.0)
+        assert panel._table.item(0, 4).text() == "10.0 Hz"
+
+    def test_frequency_expires_when_topic_stops(self, qt_app):
+        panel = TrafficMonitor()
+
+        panel.on_sensor_data_received("r1", "scan", {"ranges": [1.0]}, now=100.0)
+        panel.on_sensor_data_received("r1", "scan", {"ranges": [1.0]}, now=100.1)
+        panel._update_stats(now=106.0)
+
+        entry = panel._entries[("scan", "r1")]
+        assert entry.current_hz == 0.0
+        assert panel._table.item(0, 4).text() == "0.0 Hz"
+
 
 # ------------------------------------------------------------------
 # SensorSummaryPanel

@@ -494,6 +494,7 @@ class MainWindow(QMainWindow):
             self._robot_list.update_subscription_count(robot_id, len(subscriptions))
             self._configured_sensor_subscriptions[robot_id] = subscriptions
             self._sensor_panel.on_subscriptions_changed(robot_id, subscriptions)
+            self._traffic_monitor.on_subscriptions_changed(robot_id, subscriptions)
 
     def _refresh_robot_subscription_counts(self) -> None:
         try:
@@ -532,6 +533,7 @@ class MainWindow(QMainWindow):
             entries = self._configured_sensor_subscriptions.get(robot_id)
             if entries is not None:
                 self._sensor_panel.on_subscriptions_changed(robot_id, entries)
+                self._traffic_monitor.on_subscriptions_changed(robot_id, entries)
 
     def _on_mqtt_connected(self) -> None:
         self._lb_conn.setText("● 已连接")
