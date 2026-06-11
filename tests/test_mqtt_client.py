@@ -167,6 +167,46 @@ class TestOnMessageStatus:
         assert sensor_signal.call_args[0][0] == "robot_001"
         assert sensor_signal.call_args[0][1] == "scan"
 
+    def test_sensor_received_keeps_nested_topic_path(self, client, mock_paho):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        msg = Message(
+            src="robot_001",
+            type="sensor_data",
+            data={"_msg_type": "sensor_msgs/Imu"},
+        )
+        mqtt_msg = _make_mqtt_msg("robot/robot_001/sensor/imu/data", msg.to_json())
+
+        client.connect()
+        client._on_message(mock_paho, None, mqtt_msg)
+
+        sensor_signal.assert_called_once()
+        assert sensor_signal.call_args[0][0] == "robot_001"
+        assert sensor_signal.call_args[0][1] == "imu/data"
+
+    def test_sensor_received_accepts_raw_json_payload(self, client, mock_paho):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        mqtt_msg = _make_mqtt_msg(
+            "robot/robot_001/sensor/imu/data",
+            json.dumps(
+                {
+                    "_msg_type": "sensor_msgs/Imu",
+                    "angular_velocity": {"x": 0.1},
+                }
+            ),
+        )
+
+        client.connect()
+        client._on_message(mock_paho, None, mqtt_msg)
+
+        sensor_signal.assert_called_once()
+        assert sensor_signal.call_args[0][0] == "robot_001"
+        assert sensor_signal.call_args[0][1] == "imu/data"
+        assert sensor_signal.call_args[0][2]["_msg_type"] == "sensor_msgs/Imu"
+
     def test_topic_response_received(self, client, mock_paho):
         resp_signal = MagicMock()
         client.signals.topic_response_received.connect(resp_signal)

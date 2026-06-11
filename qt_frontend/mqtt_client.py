@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import time
 from typing import Any, Dict, Optional
 
 import paho.mqtt.client as mqtt
@@ -18,7 +17,6 @@ from protocol.topics import (
     parse_station_topic,
     robot_cmd,
     station_config_query,
-    station_config_response,
     station_config_sync,
     station_discover,
     station_topic_request,
@@ -196,6 +194,23 @@ class MqttClient:
     def _on_message(self, client, userdata, msg) -> None:
         try:
             payload_str = msg.payload.decode("utf-8")
+            robot_info = parse_robot_topic(msg.topic)
+            if robot_info and robot_info.get("type") == "sensor":
+                payload = json.loads(payload_str)
+                message = (
+                    Message.from_dict(payload)
+                    if isinstance(payload, dict) and "type" in payload and "data" in payload
+                    else Message(
+                        src=robot_info.get("robot_id", ""),
+                        dst=self._client_id,
+                        type="sensor_data",
+                        data=payload if isinstance(payload, dict) else {"raw": payload},
+                    )
+                )
+                self.signals.message_received.emit(msg.topic, message)
+                self._dispatch(msg.topic, message)
+                return
+
             message = Message.from_json(payload_str)
             self.signals.message_received.emit(msg.topic, message)
 

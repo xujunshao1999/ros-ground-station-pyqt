@@ -210,9 +210,11 @@ def parse_robot_topic(topic: str) -> Optional[Dict[str, str]]:
     elif parts[2] == _SENSOR:
         if len(parts) > 3:
             result["type"] = "sensor"
-            result["name"] = parts[3]
-            if len(parts) > 4 and parts[4] == _META:
+            sensor_parts = parts[3:]
+            if sensor_parts[-1] == _META and len(sensor_parts) > 1:
                 result["type"] = "sensor_meta"
+                sensor_parts = sensor_parts[:-1]
+            result["name"] = "/".join(sensor_parts)
         else:
             return None
     elif parts[2] == _TO:

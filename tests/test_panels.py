@@ -1288,6 +1288,253 @@ class TestTrafficMonitor:
 # SensorSummaryPanel
 # ------------------------------------------------------------------
 class TestSensorSummary:
+    def test_topic_snapshot_tracks_hz_summary_and_age(self):
+        snapshot = SensorSummaryPanel.build_topic_snapshot(
+            robot_id="r1",
+            sensor_name="scan",
+            data={"ranges": [1.0, 2.0]},
+            now=100.0,
+            previous=None,
+        )
+        snapshot = SensorSummaryPanel.build_topic_snapshot(
+            robot_id="r1",
+            sensor_name="scan",
+            data={"ranges": [1.0, 2.0, 3.0]},
+            now=100.5,
+            previous=snapshot,
+        )
+        snapshot = SensorSummaryPanel.build_topic_snapshot(
+            robot_id="r1",
+            sensor_name="scan",
+            data={"ranges": [1.0]},
+            now=101.0,
+            previous=snapshot,
+        )
+
+        assert snapshot.frame_count == 3
+        assert snapshot.hz == pytest.approx(2.0)
+        assert snapshot.age(101.25) == pytest.approx(0.25)
+        assert any("LaserScan" in line for line in snapshot.summary_lines)
+        assert snapshot.is_stale(101.25) is False
+        assert snapshot.is_stale(104.5) is True
+
+    def test_topic_snapshot_prunes_old_samples_from_hz_window(self):
+        snapshot = None
+        for now in [100.0, 101.0, 106.0, 107.0]:
+            snapshot = SensorSummaryPanel.build_topic_snapshot(
+                robot_id="r1",
+                sensor_name="odom",
+                data={"pose": {}, "twist": {}},
+                now=now,
+                previous=snapshot,
+            )
+
+        assert snapshot is not None
+        assert snapshot.hz == pytest.approx(1.0)
+        assert snapshot.frame_count == 4
+
+    def test_generic_summary_handles_unknown_dict(self):
+        lines = SensorSummaryPanel.summarize_data(
+            {
+                "header": {"frame_id": "map", "stamp": {"secs": 10, "nsecs": 5}},
+                "custom": {"value": 42},
+                "enabled": True,
+            },
+            msg_type_hint="custom_msgs/Widget",
+        )
+
+        assert any("custom_msgs/Widget" in line for line in lines)
+        assert any("frame_id: map" in line for line in lines)
+        assert any("字段: 3" in line for line in lines)
+
+    def test_panel_keeps_selected_topic_when_other_data_arrives(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+        panel.on_sensor_data_received("r1", "scan", {"ranges": [1.0]})
+        panel._refresh_current_view(force=True)
+        panel.on_sensor_data_received("r1", "odom", {"pose": {}, "twist": {}})
+        panel._refresh_current_view(force=True)
+
+        panel._topic_combo.setCurrentIndex(
+            panel._topic_combo.findData("r1\x1fscan")
+        )
+        panel.on_sensor_data_received("r1", "odom", {"pose": {}, "twist": {}})
+        panel._refresh_current_view(force=True)
+
+        assert panel._selected_key == ("r1", "scan")
+        assert "话题: scan" in panel._browser.toPlainText()
+        assert "Odometry" not in panel._browser.toPlainText()
+
+    def test_panel_does_not_duplicate_combo_items_for_same_topic(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+
+        for _ in range(5):
+            panel.on_sensor_data_received(
+                "r1",
+                "scan",
+                {"_msg_type": "sensor_msgs/LaserScan", "ranges": [1.0]},
+            )
+        panel._refresh_current_view(force=True)
+
+        assert panel._topic_combo.count() == 1
+        assert panel._topic_combo.itemData(0) == "r1\x1fscan"
+
+    def test_panel_uses_msg_type_field_without_raw_json_panel(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+
+        panel.on_sensor_data_received(
+            "r1",
+            "joint_states",
+            {
+                "_msg_type": "sensor_msgs/JointState",
+                "header": {"frame_id": "base_link"},
+                "name": ["left_wheel", "right_wheel"],
+                "position": [0.1, 0.2],
+            },
+        )
+        panel._refresh_current_view(force=True)
+
+        summary = panel._browser.toPlainText()
+        assert "类型: sensor_msgs/JointState" in summary
+        assert "JointState: 2 个关节" in summary
+        assert not hasattr(panel, "_raw_browser")
+
+    def test_summarize_joint_state_and_occupancy_grid(self):
+        joint_lines = SensorSummaryPanel.summarize_data({
+            "_msg_type": "sensor_msgs/JointState",
+            "name": ["left", "right"],
+            "position": [1.0, 2.0],
+            "velocity": [0.1, 0.2],
+            "effort": [],
+        })
+        grid_lines = SensorSummaryPanel.summarize_data({
+            "_msg_type": "nav_msgs/OccupancyGrid",
+            "info": {"width": 100, "height": 50, "resolution": 0.05},
+            "data": [0, 100, -1],
+        })
+
+        assert any("JointState: 2 个关节" in line for line in joint_lines)
+        assert any("position: 2" in line for line in joint_lines)
+        assert any("OccupancyGrid: 100×50" in line for line in grid_lines)
+        assert any("resolution: 0.050 m" in line for line in grid_lines)
+
+    def test_panel_observation_list_comes_from_subscriptions(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+
+        panel.on_subscriptions_changed(
+            "r1",
+            [
+                {
+                    "topic": "/imu/data",
+                    "msg_type": "sensor_msgs/Imu",
+                    "status": "active",
+                },
+                {
+                    "topic": "/camera/image_raw/compressed",
+                    "msg_type": "sensor_msgs/CompressedImage",
+                    "status": "active",
+                },
+            ],
+        )
+
+        assert panel._topic_combo.count() == 2
+        combo_keys = {
+            panel._topic_combo.itemData(index)
+            for index in range(panel._topic_combo.count())
+        }
+        assert combo_keys == {
+            "r1\x1fimu/data",
+            "r1\x1fcamera/image_raw/compressed",
+        }
+        assert "等待数据" in panel._browser.toPlainText()
+
+        panel.on_sensor_data_received(
+            "r1",
+            "imu/data",
+            {
+                "_msg_type": "sensor_msgs/Imu",
+                "angular_velocity": {"x": 0.1, "y": 0.0, "z": 0.0},
+                "linear_acceleration": {"x": 0.0, "y": 0.0, "z": 9.8},
+            },
+        )
+        panel._refresh_current_view(force=True)
+
+        assert panel._topic_combo.count() == 2
+        assert "类型: sensor_msgs/Imu" in panel._browser.toPlainText()
+
+    def test_snapshot_does_not_store_large_payload(self):
+        data = {
+            "_msg_type": "nav_msgs/OccupancyGrid",
+            "info": {"width": 100, "height": 100, "resolution": 0.05},
+            "data": list(range(10000)),
+        }
+        snapshot = SensorSummaryPanel.build_topic_snapshot(
+            robot_id="r1",
+            sensor_name="map",
+            data=data,
+            now=100.0,
+            previous=None,
+        )
+
+        assert not hasattr(snapshot, "last_data")
+        assert any("OccupancyGrid: 100×100" in line for line in snapshot.summary_lines)
+        assert any("数据长度: 10000" in line for line in snapshot.summary_lines)
+
+    def test_status_table_shows_subscribed_topic_summary(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+
+        panel.on_subscriptions_changed(
+            "r1",
+            [
+                {
+                    "topic": "/map",
+                    "msg_type": "nav_msgs/OccupancyGrid",
+                    "status": "active",
+                }
+            ],
+        )
+        panel.on_sensor_data_received(
+            "r1",
+            "map",
+            {
+                "_msg_type": "nav_msgs/OccupancyGrid",
+                "info": {"width": 20, "height": 10, "resolution": 0.1},
+                "data": list(range(200)),
+            },
+        )
+        panel._refresh_current_view(force=True)
+
+        assert panel._topic_table.columnCount() == 6
+        assert panel._topic_table.item(0, 2).text() == "正常"
+        assert "OccupancyGrid: 20×10" in panel._topic_table.item(0, 5).text()
+
+    def test_retain_robots_removes_offline_robot_observations(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+
+        panel.on_subscriptions_changed(
+            "turtlebot_001",
+            [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}],
+        )
+        panel.on_subscriptions_changed(
+            "turtlebot_002",
+            [{"topic": "/odom", "msg_type": "nav_msgs/Odometry"}],
+        )
+
+        panel.retain_robots(["turtlebot_001"])
+
+        combo_keys = {
+            panel._topic_combo.itemData(index)
+            for index in range(panel._topic_combo.count())
+        }
+        assert combo_keys == {"turtlebot_001\x1fscan"}
+        assert panel._topic_table.rowCount() == 1
+        assert panel._topic_table.item(0, 1).text() == "turtlebot_001"
+
     def test_summarize_laserscan(self):
         lines = SensorSummaryPanel.summarize_laserscan({
             "ranges": [1.0, 2.0, 5.0, float("inf")],
@@ -1301,7 +1548,9 @@ class TestSensorSummary:
         assert any("无数据" in line for line in lines)
 
     def test_summarize_image(self):
-        lines = SensorSummaryPanel.summarize_image({"width": 640, "height": 480, "encoding": "rgb8"})
+        lines = SensorSummaryPanel.summarize_image(
+            {"width": 640, "height": 480, "encoding": "rgb8"}
+        )
         assert any("640×480" in line for line in lines)
 
     def test_summarize_imu(self):

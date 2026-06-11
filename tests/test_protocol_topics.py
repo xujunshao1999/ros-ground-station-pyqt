@@ -146,7 +146,14 @@ class TestTopicParser:
         result = parse_robot_topic("robot/r1/sensor/camera/image/compressed")
         assert result is not None
         assert result["type"] == "sensor"
-        assert result["name"] == "camera"
+        assert result["name"] == "camera/image/compressed"
+
+    def test_parse_robot_sensor_meta_with_path(self):
+        """嵌套传感器路径的 meta 后缀"""
+        result = parse_robot_topic("robot/r1/sensor/camera/image/compressed/meta")
+        assert result is not None
+        assert result["type"] == "sensor_meta"
+        assert result["name"] == "camera/image/compressed"
 
     def test_parse_robot_sensor_meta(self):
         result = parse_robot_topic("robot/robot_001/sensor/lidar/meta")

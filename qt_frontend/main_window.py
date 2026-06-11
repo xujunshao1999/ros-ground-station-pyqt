@@ -6,7 +6,7 @@ import os
 import sip
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
@@ -34,6 +34,7 @@ class MainWindow(QMainWindow):
         self._current_rviz_config_path: Optional[Path] = None
         self._mqtt_client: Optional[MqttClient] = None
         self._splitter_sizes = [360, 920, 320]
+        self._configured_sensor_subscriptions: Dict[str, List[Dict[str, Any]]] = {}
 
         self._init_window()
         self._init_panels()
@@ -412,6 +413,8 @@ class MainWindow(QMainWindow):
         self._topic_config.on_robot_list_changed(robots)
         self._fleet_comm.on_robot_list_changed(robots)
         self._data_sender.on_robot_list_changed(robots)
+        self._sensor_panel.retain_robots(robots)
+        self._sync_sensor_panel_subscriptions([robot_id])
         self._lb_online.setText(f"在线: {len(robots)}")
 
     def _on_discover(self, robot_id: str, data: dict) -> None:
@@ -421,6 +424,8 @@ class MainWindow(QMainWindow):
         self._topic_config.on_robot_list_changed(robots)
         self._fleet_comm.on_robot_list_changed(robots)
         self._data_sender.on_robot_list_changed(robots)
+        self._sensor_panel.retain_robots(robots)
+        self._sync_sensor_panel_subscriptions([robot_id])
         self._lb_online.setText(f"在线: {len(robots)}")
 
     def _on_config_response(self, robot_id: str, data: dict) -> None:
@@ -429,6 +434,8 @@ class MainWindow(QMainWindow):
         subscriptions = data.get("subscriptions", [])
         if isinstance(subscriptions, list):
             self._robot_list.update_subscription_count(robot_id, len(subscriptions))
+            self._configured_sensor_subscriptions[robot_id] = subscriptions
+            self._sensor_panel.on_subscriptions_changed(robot_id, subscriptions)
 
     def _refresh_robot_subscription_counts(self) -> None:
         try:
@@ -440,6 +447,33 @@ class MainWindow(QMainWindow):
             return
         counts = RobotListPanel.subscription_counts_from_transmit_config(config)
         self._robot_list.update_subscription_counts(counts)
+        self._configured_sensor_subscriptions = (
+            TopicConfigPanel.normalize_transmit_subscriptions(
+                config.get("subscriptions") or {}
+            )
+        )
+        self._sync_sensor_panel_subscriptions(self._robot_list.get_online_robots())
+
+    @staticmethod
+    def sensor_summary_subscriptions_for_online_robots(
+        config: Dict[str, Any],
+        online_robots: List[str],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        subscriptions = TopicConfigPanel.normalize_transmit_subscriptions(
+            config.get("subscriptions") or {}
+        )
+        online_robot_set = set(online_robots)
+        return {
+            robot_id: entries
+            for robot_id, entries in subscriptions.items()
+            if robot_id in online_robot_set
+        }
+
+    def _sync_sensor_panel_subscriptions(self, robot_ids: List[str]) -> None:
+        for robot_id in robot_ids:
+            entries = self._configured_sensor_subscriptions.get(robot_id)
+            if entries is not None:
+                self._sensor_panel.on_subscriptions_changed(robot_id, entries)
 
     def _on_mqtt_connected(self) -> None:
         self._lb_conn.setText("● 已连接")
