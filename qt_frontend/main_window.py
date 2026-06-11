@@ -3,22 +3,39 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
-import sip
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import sip
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QAction, QDockWidget, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
-    QPushButton, QSizePolicy, QSplitter, QStatusBar, QTabWidget,
-    QToolBar, QVBoxLayout, QWidget,
+    QAction,
+    QDockWidget,
+    QFileDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QStatusBar,
+    QTabWidget,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
 
 from qt_frontend.mqtt_client import MqttClient
 from qt_frontend.panels import (
-    CommandPanel, DataSenderPanel, EventPanel, FleetCommPanel,
-    RobotListPanel, SensorSummaryPanel, TopicConfigPanel, TrafficMonitor,
+    CommandPanel,
+    DataSenderPanel,
+    EventPanel,
+    FleetCommPanel,
+    RobotListPanel,
+    SensorSummaryPanel,
+    TopicConfigPanel,
+    TrafficMonitor,
 )
 from qt_frontend.theme import DANGER, SUCCESS
 
@@ -82,20 +99,26 @@ class MainWindow(QMainWindow):
         self._act_quit = QAction("退出", self)
         self._act_quit.triggered.connect(self.close)
         self._act_disconnect.setEnabled(False)
-        m.addAction(self._act_connect); m.addAction(self._act_disconnect)
-        m.addSeparator(); m.addAction(self._act_quit)
+        m.addAction(self._act_connect)
+        m.addAction(self._act_disconnect)
+        m.addSeparator()
+        m.addAction(self._act_quit)
 
         # --- 机器人 ---
         m = menubar.addMenu("&机器人")
         self._act_discover = QAction("发现机器人", self)
         self._act_emergency = QAction("全部急停", self)
-        m.addAction(self._act_discover); m.addSeparator(); m.addAction(self._act_emergency)
+        m.addAction(self._act_discover)
+        m.addSeparator()
+        m.addAction(self._act_emergency)
 
         # --- 录制 ---
         m = menubar.addMenu("&录制")
         self._act_rec_start = QAction("开始录制", self)
-        self._act_rec_stop = QAction("停止录制", self); self._act_rec_stop.setEnabled(False)
-        m.addAction(self._act_rec_start); m.addAction(self._act_rec_stop)
+        self._act_rec_stop = QAction("停止录制", self)
+        self._act_rec_stop.setEnabled(False)
+        m.addAction(self._act_rec_start)
+        m.addAction(self._act_rec_stop)
 
         # --- 视图 ---
         m = menubar.addMenu("&视图")
@@ -115,24 +138,31 @@ class MainWindow(QMainWindow):
         m.addAction(self._act_about)
 
         # --- 工具栏 ---
-        toolbar = QToolBar("主工具栏"); toolbar.setMovable(False)
+        toolbar = QToolBar("主工具栏")
+        toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
         self._lb_conn = QLabel("● 已断开")
         self._lb_conn.setStyleSheet("color: red; font-weight: bold;")
-        toolbar.addWidget(self._lb_conn); toolbar.addSeparator()
+        toolbar.addWidget(self._lb_conn)
+        toolbar.addSeparator()
 
         mqtt_cfg = self._config.get("mqtt", {})
-        toolbar.addWidget(QLabel(f"Broker: {mqtt_cfg.get('broker_host','localhost')}:{mqtt_cfg.get('broker_port',1883)}"))
+        broker_host = mqtt_cfg.get("broker_host", "localhost")
+        broker_port = mqtt_cfg.get("broker_port", 1883)
+        toolbar.addWidget(QLabel(f"Broker: {broker_host}:{broker_port}"))
         toolbar.addSeparator()
 
-        self._lb_online = QLabel("在线: 0"); toolbar.addWidget(self._lb_online)
+        self._lb_online = QLabel("在线: 0")
+        toolbar.addWidget(self._lb_online)
         toolbar.addSeparator()
 
-        self._lb_fps = QLabel("FPS: --"); toolbar.addWidget(self._lb_fps)
+        self._lb_fps = QLabel("FPS: --")
+        toolbar.addWidget(self._lb_fps)
         toolbar.addSeparator()
 
-        self._lb_rec = QLabel("录制: 00:00:00"); toolbar.addWidget(self._lb_rec)
+        self._lb_rec = QLabel("录制: 00:00:00")
+        toolbar.addWidget(self._lb_rec)
         toolbar.addSeparator()
 
         btn_load_rviz = QPushButton("加载 RViz")
@@ -154,20 +184,30 @@ class MainWindow(QMainWindow):
         # Left tabs
         left = QTabWidget()
         left.setMinimumWidth(320)
-        t = QWidget(); l = QVBoxLayout(t); l.setContentsMargins(0,0,0,0)
-        l.addWidget(self._robot_list); l.addWidget(self._command)
-        left.addTab(t, "机器人")
-        t2 = QWidget(); l2 = QVBoxLayout(t2); l2.setContentsMargins(0,0,0,0)
-        sub = QTabWidget(); sub.addTab(self._topic_config, "传输"); sub.addTab(self._fleet_comm, "编队")
-        l2.addWidget(sub); left.addTab(t2, "配置")
+        robot_tab = QWidget()
+        robot_layout = QVBoxLayout(robot_tab)
+        robot_layout.setContentsMargins(0, 0, 0, 0)
+        robot_layout.addWidget(self._robot_list)
+        robot_layout.addWidget(self._command)
+        left.addTab(robot_tab, "机器人")
+
+        config_tab = QWidget()
+        config_layout = QVBoxLayout(config_tab)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_tabs = QTabWidget()
+        config_tabs.addTab(self._topic_config, "传输")
+        config_tabs.addTab(self._fleet_comm, "编队")
+        config_layout.addWidget(config_tabs)
+        left.addTab(config_tab, "配置")
         left.addTab(self._event_panel, "事件")
 
         # Right tabs
         right = QTabWidget()
         right.setMinimumWidth(280)
         self._display_container = QWidget()
-        dl = QVBoxLayout(self._display_container); dl.setContentsMargins(0,0,0,0)
-        dl.addWidget(QLabel("RViz 初始化中..."))
+        display_layout = QVBoxLayout(self._display_container)
+        display_layout.setContentsMargins(0, 0, 0, 0)
+        display_layout.addWidget(QLabel("RViz 初始化中..."))
         right.addTab(self._display_container, "Display")
         right.addTab(self._sensor_panel, "摘要")
         right.addTab(self._data_sender, "发送")
@@ -177,7 +217,7 @@ class MainWindow(QMainWindow):
         self._camera_dock = QDockWidget("摄像头", self)
         cam_container = QWidget()
         self._camera_dock_layout = QVBoxLayout(cam_container)
-        self._camera_dock_layout.setContentsMargins(0,0,0,0)
+        self._camera_dock_layout.setContentsMargins(0, 0, 0, 0)
         self._camera_dock.setWidget(cam_container)
         self.addDockWidget(Qt.RightDockWidgetArea, self._camera_dock)
 
@@ -250,13 +290,27 @@ class MainWindow(QMainWindow):
         )
 
     def _init_ros_monitor(self) -> None:
-        self._ros_timer = QTimer(self); self._ros_timer.timeout.connect(self._check_ros)
-        self._ros_timer.start(5000); self._check_ros()
+        self._ros_timer = QTimer(self)
+        self._ros_timer.timeout.connect(self._check_ros)
+        self._ros_timer.start(5000)
+        self._check_ros()
 
     def _check_ros(self) -> None:
         try:
-            r = subprocess.run(["rostopic","list"], capture_output=True, text=True, timeout=3,
-                env={**os.environ, "ROS_MASTER_URI": self._config.get("ros",{}).get("master_uri","http://localhost:11311")})
+            ros_cfg = self._config.get("ros", {})
+            r = subprocess.run(
+                ["rostopic", "list"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env={
+                    **os.environ,
+                    "ROS_MASTER_URI": ros_cfg.get(
+                        "master_uri",
+                        "http://localhost:11311",
+                    ),
+                },
+            )
             ok = r.returncode == 0
         except Exception:
             ok = False
@@ -270,7 +324,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _init_rviz(self) -> None:
-        lib_path = str(Path(__file__).resolve().parent / "native" / "build" / "librviz_widget.so")
+        lib_path = str(
+            Path(__file__).resolve().parent / "native" / "build" / "librviz_widget.so"
+        )
         try:
             lib = ctypes.CDLL(lib_path)
             lib.create_rviz_widget.argtypes = [ctypes.c_void_p]
@@ -293,7 +349,8 @@ class MainWindow(QMainWindow):
             return
 
         rviz_ptr = lib.create_rviz_widget(None)
-        if not rviz_ptr: return
+        if not rviz_ptr:
+            return
         self._rviz_ptr = rviz_ptr
 
         rviz_widget = sip.wrapinstance(int(rviz_ptr), QWidget)
@@ -323,7 +380,8 @@ class MainWindow(QMainWindow):
             dl = self._display_container.layout()
             while dl.count():
                 w = dl.takeAt(0).widget()
-                if w: w.deleteLater()
+                if w:
+                    w.deleteLater()
             dl.addWidget(disp_widget)
 
         # Camera dock layout for RViz Image/Camera panels
@@ -478,12 +536,14 @@ class MainWindow(QMainWindow):
     def _on_mqtt_connected(self) -> None:
         self._lb_conn.setText("● 已连接")
         self._lb_conn.setStyleSheet(f"color: {SUCCESS}; font-weight: bold;")
-        self._act_connect.setEnabled(False); self._act_disconnect.setEnabled(True)
+        self._act_connect.setEnabled(False)
+        self._act_disconnect.setEnabled(True)
 
     def _on_mqtt_disconnected(self) -> None:
         self._lb_conn.setText("● 已断开")
         self._lb_conn.setStyleSheet(f"color: {DANGER}; font-weight: bold;")
-        self._act_connect.setEnabled(True); self._act_disconnect.setEnabled(False)
+        self._act_connect.setEnabled(True)
+        self._act_disconnect.setEnabled(False)
 
     def _on_sensor_data(self, robot_id: str, sensor_name: str, data: object) -> None:
         if isinstance(data, dict):
@@ -496,17 +556,26 @@ class MainWindow(QMainWindow):
 
     def _on_data_send(self, robot_id: str, topic: str, json_str: str) -> None:
         if self._mqtt_client:
-            self._mqtt_client.publish(f"robot/{robot_id}/sensor/{topic.lstrip('/')}", json_str, qos=0)
+            self._mqtt_client.publish(
+                f"robot/{robot_id}/sensor/{topic.lstrip('/')}",
+                json_str,
+                qos=0,
+            )
 
     # ------------------------------------------------------------------
     # 事件
     # ------------------------------------------------------------------
 
     def _on_emergency(self) -> None:
-        if QMessageBox.question(self, "确认急停", "向所有在线机器人发送急停？") != QMessageBox.Yes:
+        if (
+            QMessageBox.question(self, "确认急停", "向所有在线机器人发送急停？")
+            != QMessageBox.Yes
+        ):
             return
         if self._mqtt_client:
-            self._mqtt_client.send_emergency_stop(self._robot_list.get_online_robots() or [])
+            self._mqtt_client.send_emergency_stop(
+                self._robot_list.get_online_robots() or []
+            )
 
     def closeEvent(self, event) -> None:
         if self._rviz_config_has_changes():
