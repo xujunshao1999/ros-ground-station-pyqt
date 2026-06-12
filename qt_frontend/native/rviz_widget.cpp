@@ -2,7 +2,9 @@
 
 #include <QAbstractItemModel>
 #include <QLayout>
+#include <QSizePolicy>
 #include <QString>
+#include <QTimer>
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -27,8 +29,9 @@ struct RvizInstance {
     rviz::RenderPanel* render_panel;
     rviz::VisualizationManager* manager;
     rviz::DisplaysPanel* displays_panel;
-    QLayout* dock_layout;
+    QVBoxLayout* dock_layout;
     bool config_dirty;
+    bool dock_move_pending;
     QString config_snapshot;
 };
 
@@ -92,6 +95,7 @@ public:
     }
 public Q_SLOTS:
     void onConfigChanged();
+    void moveImagePanels();
 };
 
 static void mark_config_dirty(RvizInstance* inst) {
@@ -100,20 +104,45 @@ static void mark_config_dirty(RvizInstance* inst) {
     }
 }
 
-void DockExtractor::onConfigChanged() {
-    for (auto& pair : ::g_instances) {
-        RvizInstance* inst = pair.second;
-        mark_config_dirty(inst);
-        if (!inst->dock_layout) continue;
-        auto docks = inst->frame->findChildren<rviz::PanelDockWidget*>();
-        for (auto* dw : docks) {
-            QString title = dw->windowTitle();
-            if (title == "Camera" || title == "Image") {
-                if (!dw->parentWidget() || dw->parentWidget() != inst->dock_layout->parentWidget()) {
-                    inst->dock_layout->addWidget(dw);
+static void move_image_panels_to_layout(RvizInstance* inst) {
+    if (!inst || !inst->dock_layout) return;
+
+    auto docks = inst->frame->findChildren<rviz::PanelDockWidget*>();
+    for (auto* dw : docks) {
+        QString title = dw->windowTitle();
+        if (title == "Camera" || title == "Image") {
+            if (!dw->parentWidget() || dw->parentWidget() != inst->dock_layout->parentWidget()) {
+                dw->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+                inst->dock_layout->addWidget(dw);
+                inst->dock_layout->setStretch(inst->dock_layout->indexOf(dw), 1);
+                if (inst->dock_layout->parentWidget()) {
+                    inst->dock_layout->parentWidget()->show();
                 }
             }
         }
+    }
+}
+
+void DockExtractor::moveImagePanels() {
+    for (auto& pair : ::g_instances) {
+        RvizInstance* inst = pair.second;
+        inst->dock_move_pending = false;
+        move_image_panels_to_layout(inst);
+    }
+}
+
+void DockExtractor::onConfigChanged() {
+    bool should_schedule_move = false;
+    for (auto& pair : ::g_instances) {
+        RvizInstance* inst = pair.second;
+        mark_config_dirty(inst);
+        if (inst->dock_layout && !inst->dock_move_pending) {
+            inst->dock_move_pending = true;
+            should_schedule_move = true;
+        }
+    }
+    if (should_schedule_move) {
+        QTimer::singleShot(0, DockExtractor::instance(), SLOT(moveImagePanels()));
     }
 }
 
@@ -134,6 +163,7 @@ void* create_rviz_widget(void* parent_ptr) {
     auto* instance = new RvizInstance();
     instance->dock_layout = nullptr;
     instance->config_dirty = false;
+    instance->dock_move_pending = false;
 
     instance->frame = new rviz::VisualizationFrame();
     instance->frame->initialize();
@@ -263,7 +293,12 @@ void set_dock_layout(void* widget_ptr, void* layout_ptr) {
     if (!widget_ptr || !layout_ptr) return;
     auto it = g_instances.find(widget_ptr);
     if (it == g_instances.end()) return;
-    it->second->dock_layout = static_cast<QLayout*>(layout_ptr);
+    it->second->dock_layout = qobject_cast<QVBoxLayout*>(static_cast<QLayout*>(layout_ptr));
+}
+
+void set_dock_host(void* widget_ptr, void* dock_host_ptr) {
+    (void)widget_ptr;
+    (void)dock_host_ptr;
 }
 
 long get_window_id(void* widget_ptr) {

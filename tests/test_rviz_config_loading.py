@@ -88,3 +88,41 @@ def test_native_tracks_rviz_config_dirty_state():
     assert "instance->config_dirty = false;" in source
     assert "int has_config_changes(void* widget_ptr)" in source
     assert "current_display_config_snapshot(instance) != instance->config_snapshot" in source
+
+
+def test_native_embeds_render_panel_not_full_visualization_frame():
+    source = _read_repo_file("qt_frontend/native/rviz_widget.cpp")
+
+    assert "g_instances[instance->render_panel] = instance;" in source
+    assert "return static_cast<void*>(instance->render_panel);" in source
+    assert "g_instances[instance->frame] = instance;" not in source
+    assert "return static_cast<void*>(instance->frame);" not in source
+
+
+def test_native_reparents_rviz_image_docks_after_config_change_settles():
+    source = _read_repo_file("qt_frontend/native/rviz_widget.cpp")
+    extractor_source = source[
+        source.index("void DockExtractor::onConfigChanged()"):source.index(
+            "static bool g_ros_init_done"
+        )
+    ]
+    move_source = source[
+        source.index("static void move_image_panels_to_layout("):source.index(
+            "void DockExtractor::moveImagePanels()"
+        )
+    ]
+
+    assert "QTimer::singleShot(0, DockExtractor::instance(), SLOT(moveImagePanels()))" in (
+        extractor_source
+    )
+    assert "QVBoxLayout* dock_layout;" in source
+    assert "findChildren<rviz::PanelDockWidget*>" in move_source
+    assert 'title == "Camera" || title == "Image"' in move_source
+    assert "dw->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);" in (
+        move_source
+    )
+    assert "inst->dock_layout->addWidget(dw);" in move_source
+    assert "inst->dock_layout->setStretch(" in move_source
+    assert "inst->dock_layout->parentWidget()->show();" in move_source
+    assert "setWidget(nullptr)" not in move_source
+    assert "addDockWidget" not in move_source

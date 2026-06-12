@@ -20,6 +20,8 @@ void* get_display_panel(void* widget_ptr);
 
 void set_dock_layout(void* widget_ptr, void* layout_ptr);
 
+void set_dock_host(void* widget_ptr, void* dock_host_ptr);
+
 long get_window_id(void* widget_ptr);
 
 void destroy_panel(void* widget_ptr);

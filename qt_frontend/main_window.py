@@ -11,7 +11,6 @@ import sip
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QAction,
-    QDockWidget,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -207,19 +206,27 @@ class MainWindow(QMainWindow):
         self._display_container = QWidget()
         display_layout = QVBoxLayout(self._display_container)
         display_layout.setContentsMargins(0, 0, 0, 0)
-        display_layout.addWidget(QLabel("RViz 初始化中..."))
+        self._display_splitter = QSplitter(Qt.Vertical)
+        self._display_panel_holder = QWidget()
+        display_panel_layout = QVBoxLayout(self._display_panel_holder)
+        display_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self._image_panel_container = QWidget()
+        self._image_panel_layout = QVBoxLayout(self._image_panel_container)
+        self._image_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self._image_panel_container.setMinimumHeight(160)
+        self._image_panel_container.setMaximumHeight(280)
+        self._image_panel_container.hide()
+        self._display_placeholder = QLabel("RViz 初始化中...")
+        display_panel_layout.addWidget(self._display_placeholder)
+        self._display_splitter.addWidget(self._display_panel_holder)
+        self._display_splitter.addWidget(self._image_panel_container)
+        self._display_splitter.setStretchFactor(0, 1)
+        self._display_splitter.setStretchFactor(1, 0)
+        display_layout.addWidget(self._display_splitter)
         right.addTab(self._display_container, "Display")
         right.addTab(self._sensor_panel, "摘要")
         right.addTab(self._data_sender, "发送")
         right.addTab(self._traffic_monitor, "流量")
-
-        # Camera dock
-        self._camera_dock = QDockWidget("摄像头", self)
-        cam_container = QWidget()
-        self._camera_dock_layout = QVBoxLayout(cam_container)
-        self._camera_dock_layout.setContentsMargins(0, 0, 0, 0)
-        self._camera_dock.setWidget(cam_container)
-        self.addDockWidget(Qt.RightDockWidgetArea, self._camera_dock)
 
         self._splitter = QSplitter(Qt.Horizontal)
         self._splitter.setChildrenCollapsible(True)
@@ -377,17 +384,18 @@ class MainWindow(QMainWindow):
         disp_ptr = lib.get_display_panel(rviz_ptr)
         if disp_ptr:
             disp_widget = sip.wrapinstance(int(disp_ptr), QWidget)
-            dl = self._display_container.layout()
-            while dl.count():
-                w = dl.takeAt(0).widget()
+            display_panel_layout = self._display_panel_holder.layout()
+            while display_panel_layout.count():
+                item = display_panel_layout.takeAt(0)
+                w = item.widget()
                 if w:
                     w.deleteLater()
-            dl.addWidget(disp_widget)
+            display_panel_layout.addWidget(disp_widget)
 
-        # Camera dock layout for RViz Image/Camera panels
-        layout_ptr = sip.unwrapinstance(self._camera_dock_layout)
-        if layout_ptr:
-            lib.set_dock_layout(rviz_ptr, ctypes.c_void_p(layout_ptr))
+        # Native RViz Image/Camera panels created by Display checkboxes.
+        image_layout_ptr = sip.unwrapinstance(self._image_panel_layout)
+        if image_layout_ptr:
+            lib.set_dock_layout(rviz_ptr, ctypes.c_void_p(image_layout_ptr))
 
     def _default_rviz_config_path(self) -> Path:
         return Path(__file__).resolve().parent / "config" / "default.rviz"
