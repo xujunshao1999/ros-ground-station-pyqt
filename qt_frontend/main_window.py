@@ -213,6 +213,11 @@ class MainWindow(QMainWindow):
         self._image_panel_container = QWidget()
         self._image_panel_layout = QVBoxLayout(self._image_panel_container)
         self._image_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self._image_dock_host = QMainWindow()
+        self._image_dock_host.setDockOptions(
+            QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks
+        )
+        self._image_panel_layout.addWidget(self._image_dock_host)
         self._image_panel_container.setMinimumHeight(160)
         self._image_panel_container.setMaximumHeight(280)
         self._image_panel_container.hide()
@@ -350,6 +355,8 @@ class MainWindow(QMainWindow):
             lib.get_display_panel.restype = ctypes.c_void_p
             lib.set_dock_layout.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
             lib.set_dock_layout.restype = None
+            lib.set_dock_host.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            lib.set_dock_host.restype = None
             self._rviz_lib = lib
         except OSError as e:
             logger.error(f"Failed to load librviz_widget.so: {e}")
@@ -393,9 +400,9 @@ class MainWindow(QMainWindow):
             display_panel_layout.addWidget(disp_widget)
 
         # Native RViz Image/Camera panels created by Display checkboxes.
-        image_layout_ptr = sip.unwrapinstance(self._image_panel_layout)
-        if image_layout_ptr:
-            lib.set_dock_layout(rviz_ptr, ctypes.c_void_p(image_layout_ptr))
+        image_dock_host_ptr = sip.unwrapinstance(self._image_dock_host)
+        if image_dock_host_ptr:
+            lib.set_dock_host(rviz_ptr, ctypes.c_void_p(image_dock_host_ptr))
 
     def _default_rviz_config_path(self) -> Path:
         return Path(__file__).resolve().parent / "config" / "default.rviz"

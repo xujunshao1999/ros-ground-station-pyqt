@@ -1,7 +1,9 @@
 #include "rviz_widget.h"
 
 #include <QAbstractItemModel>
+#include <QDockWidget>
 #include <QLayout>
+#include <QMainWindow>
 #include <QSizePolicy>
 #include <QString>
 #include <QTimer>
@@ -29,7 +31,7 @@ struct RvizInstance {
     rviz::RenderPanel* render_panel;
     rviz::VisualizationManager* manager;
     rviz::DisplaysPanel* displays_panel;
-    QVBoxLayout* dock_layout;
+    QMainWindow* dock_host;
     bool config_dirty;
     bool dock_move_pending;
     QString config_snapshot;
@@ -105,18 +107,22 @@ static void mark_config_dirty(RvizInstance* inst) {
 }
 
 static void move_image_panels_to_layout(RvizInstance* inst) {
-    if (!inst || !inst->dock_layout) return;
+    if (!inst || !inst->dock_host) return;
 
     auto docks = inst->frame->findChildren<rviz::PanelDockWidget*>();
     for (auto* dw : docks) {
         QString title = dw->windowTitle();
         if (title == "Camera" || title == "Image") {
-            if (!dw->parentWidget() || dw->parentWidget() != inst->dock_layout->parentWidget()) {
+            if (!dw->parentWidget() || dw->parentWidget() != inst->dock_host) {
                 dw->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-                inst->dock_layout->addWidget(dw);
-                inst->dock_layout->setStretch(inst->dock_layout->indexOf(dw), 1);
-                if (inst->dock_layout->parentWidget()) {
-                    inst->dock_layout->parentWidget()->show();
+                dw->setAllowedAreas(Qt::AllDockWidgetAreas);
+                dw->setFeatures(dw->features()
+                                | QDockWidget::DockWidgetFloatable
+                                | QDockWidget::DockWidgetMovable);
+                inst->dock_host->addDockWidget(Qt::BottomDockWidgetArea, dw);
+                inst->dock_host->show();
+                if (inst->dock_host->parentWidget()) {
+                    inst->dock_host->parentWidget()->show();
                 }
             }
         }
@@ -136,7 +142,7 @@ void DockExtractor::onConfigChanged() {
     for (auto& pair : ::g_instances) {
         RvizInstance* inst = pair.second;
         mark_config_dirty(inst);
-        if (inst->dock_layout && !inst->dock_move_pending) {
+        if (inst->dock_host && !inst->dock_move_pending) {
             inst->dock_move_pending = true;
             should_schedule_move = true;
         }
@@ -161,7 +167,7 @@ void* create_rviz_widget(void* parent_ptr) {
     }
 
     auto* instance = new RvizInstance();
-    instance->dock_layout = nullptr;
+    instance->dock_host = nullptr;
     instance->config_dirty = false;
     instance->dock_move_pending = false;
 
@@ -290,15 +296,16 @@ void* get_display_panel(void* widget_ptr) {
 }
 
 void set_dock_layout(void* widget_ptr, void* layout_ptr) {
-    if (!widget_ptr || !layout_ptr) return;
-    auto it = g_instances.find(widget_ptr);
-    if (it == g_instances.end()) return;
-    it->second->dock_layout = qobject_cast<QVBoxLayout*>(static_cast<QLayout*>(layout_ptr));
+    (void)widget_ptr;
+    (void)layout_ptr;
 }
 
 void set_dock_host(void* widget_ptr, void* dock_host_ptr) {
-    (void)widget_ptr;
-    (void)dock_host_ptr;
+    if (!widget_ptr || !dock_host_ptr) return;
+    auto it = g_instances.find(widget_ptr);
+    if (it == g_instances.end()) return;
+    it->second->dock_host = qobject_cast<QMainWindow*>(
+        static_cast<QWidget*>(dock_host_ptr));
 }
 
 long get_window_id(void* widget_ptr) {

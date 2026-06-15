@@ -4,7 +4,14 @@ import os
 
 import pytest
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import QApplication, QDockWidget, QLabel, QSplitter, QVBoxLayout
+from PyQt5.QtWidgets import (
+    QApplication,
+    QDockWidget,
+    QLabel,
+    QMainWindow,
+    QSplitter,
+    QVBoxLayout,
+)
 
 from qt_frontend.main_window import MainWindow
 
@@ -43,7 +50,7 @@ class TestMainWindowSubscriptions:
 
 
 class TestMainWindowLayout:
-    def test_display_tab_has_bottom_host_for_native_image_panels(self, qt_app, monkeypatch):
+    def test_display_tab_has_dock_host_for_native_image_panels(self, qt_app, monkeypatch):
         monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
         monkeypatch.setattr(MainWindow, "_check_ros", lambda self: None)
 
@@ -53,6 +60,7 @@ class TestMainWindowLayout:
         display_splitter = window._display_splitter
         display_holder = window._display_panel_holder
         image_container = window._image_panel_container
+        image_dock_host = window._image_dock_host
 
         assert isinstance(display_layout, QVBoxLayout)
         assert isinstance(display_splitter, QSplitter)
@@ -62,7 +70,9 @@ class TestMainWindowLayout:
         assert display_splitter.indexOf(image_container) == 1
         assert display_holder.layout().indexOf(window._display_placeholder) == 0
         assert display_layout.count() == 1
-        assert image_container.layout() is window._image_panel_layout
+        assert image_container.layout().indexOf(image_dock_host) == 0
+        assert isinstance(image_dock_host, QMainWindow)
+        assert image_dock_host.dockOptions() & QMainWindow.AllowTabbedDocks
         assert image_container.isVisible() is False
         assert window.findChildren(QDockWidget) == []
         assert isinstance(window._display_placeholder, QLabel)

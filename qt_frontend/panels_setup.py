@@ -4,28 +4,17 @@ from __future__ import annotations
 import ctypes
 import logging
 from pathlib import Path
-from typing import Optional
 
-import yaml
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QDockWidget,
-    QGroupBox,
-    QHBoxLayout,
     QLabel,
-    QMenuBar,
-    QMessageBox,
-    QPushButton,
-    QSizePolicy,
+    QMainWindow,
     QSplitter,
-    QStatusBar,
     QTabWidget,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-from qt_frontend.mqtt_client import MqttClient
 from qt_frontend.panels import (
     CommandPanel,
     DataSenderPanel,
@@ -59,6 +48,8 @@ def _init_rviz_lib():
     _rviz_lib.get_display_panel.restype = ctypes.c_void_p
     _rviz_lib.set_dock_layout.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _rviz_lib.set_dock_layout.restype = None
+    _rviz_lib.set_dock_host.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _rviz_lib.set_dock_host.restype = None
 
 
 class RvizPanelWrapper:
@@ -90,6 +81,13 @@ class RvizPanelWrapper:
         import sip
         lptr = sip.unwrapinstance(layout)
         _rviz_lib.set_dock_layout(self._widget_ptr, ctypes.c_void_p(lptr))
+
+    def set_dock_host(self, host) -> None:
+        if _rviz_lib is None:
+            return
+        import sip
+        hptr = sip.unwrapinstance(host)
+        _rviz_lib.set_dock_host(self._widget_ptr, ctypes.c_void_p(hptr))
 
 
 class MainWindow(QWidget):
@@ -165,11 +163,32 @@ def setup(cpp_splitter_ptr: int, rviz_container_ptr: int):
     display_container = QWidget()
     dl = QVBoxLayout(display_container)
     dl.setContentsMargins(0, 0, 0, 0)
+    display_splitter = QSplitter(Qt.Vertical)
+    display_panel_holder = QWidget()
+    display_panel_layout = QVBoxLayout(display_panel_holder)
+    display_panel_layout.setContentsMargins(0, 0, 0, 0)
+    image_panel_container = QWidget()
+    image_panel_layout = QVBoxLayout(image_panel_container)
+    image_panel_layout.setContentsMargins(0, 0, 0, 0)
+    image_dock_host = QMainWindow()
+    image_dock_host.setDockOptions(
+        QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks
+    )
+    image_panel_layout.addWidget(image_dock_host)
+    image_panel_container.setMinimumHeight(160)
+    image_panel_container.setMaximumHeight(280)
+    image_panel_container.hide()
     native_display = rviz_wrapper.get_display_panel()
     if native_display:
-        dl.addWidget(native_display)
+        display_panel_layout.addWidget(native_display)
     else:
-        dl.addWidget(QLabel("Display panel not available"))
+        display_panel_layout.addWidget(QLabel("Display panel not available"))
+    display_splitter.addWidget(display_panel_holder)
+    display_splitter.addWidget(image_panel_container)
+    display_splitter.setStretchFactor(0, 1)
+    display_splitter.setStretchFactor(1, 0)
+    dl.addWidget(display_splitter)
+    rviz_wrapper.set_dock_host(image_dock_host)
     right_tabs.addTab(display_container, "Display")
 
     right_tabs.addTab(SensorSummaryPanel(), "摘要")

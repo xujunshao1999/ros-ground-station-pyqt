@@ -99,7 +99,7 @@ def test_native_embeds_render_panel_not_full_visualization_frame():
     assert "return static_cast<void*>(instance->frame);" not in source
 
 
-def test_native_reparents_rviz_image_docks_after_config_change_settles():
+def test_native_docks_rviz_image_panels_in_bottom_host_after_config_change_settles():
     source = _read_repo_file("qt_frontend/native/rviz_widget.cpp")
     extractor_source = source[
         source.index("void DockExtractor::onConfigChanged()"):source.index(
@@ -115,14 +115,19 @@ def test_native_reparents_rviz_image_docks_after_config_change_settles():
     assert "QTimer::singleShot(0, DockExtractor::instance(), SLOT(moveImagePanels()))" in (
         extractor_source
     )
-    assert "QVBoxLayout* dock_layout;" in source
+    assert "QMainWindow* dock_host;" in source
     assert "findChildren<rviz::PanelDockWidget*>" in move_source
     assert 'title == "Camera" || title == "Image"' in move_source
     assert "dw->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);" in (
         move_source
     )
-    assert "inst->dock_layout->addWidget(dw);" in move_source
-    assert "inst->dock_layout->setStretch(" in move_source
-    assert "inst->dock_layout->parentWidget()->show();" in move_source
+    assert "dw->setAllowedAreas(Qt::AllDockWidgetAreas);" in move_source
+    assert "dw->setFeatures(dw->features()" in move_source
+    assert "QDockWidget::DockWidgetFloatable" in move_source
+    assert "QDockWidget::DockWidgetMovable" in move_source
+    assert "inst->dock_host->addDockWidget(Qt::BottomDockWidgetArea, dw);" in (
+        move_source
+    )
+    assert "inst->dock_host->show();" in move_source
     assert "setWidget(nullptr)" not in move_source
-    assert "addDockWidget" not in move_source
+    assert "QVBoxLayout" not in move_source
