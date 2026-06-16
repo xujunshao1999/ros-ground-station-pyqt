@@ -4,11 +4,13 @@ import ctypes
 import logging
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sip
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QAction,
     QFileDialog,
@@ -41,6 +43,10 @@ from qt_frontend.theme import DANGER, SUCCESS
 logger = logging.getLogger(__name__)
 
 
+class MainWindowSignals(QObject):
+    ros_checked = pyqtSignal(bool)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config: dict) -> None:
         super().__init__()
@@ -51,12 +57,20 @@ class MainWindow(QMainWindow):
         self._mqtt_client: Optional[MqttClient] = None
         self._splitter_sizes = [360, 920, 320]
         self._configured_sensor_subscriptions: Dict[str, List[Dict[str, Any]]] = {}
+        self._pending_sensor_data: Dict[
+            Tuple[str, str],
+            List[Tuple[float, object]],
+        ] = {}
+        self._signals = MainWindowSignals()
+        self._ros_check_inflight = False
 
         self._init_window()
         self._init_panels()
         self._init_menu_and_toolbar()
         self._init_central_widget()
         self._init_status_bar()
+        self._signals.ros_checked.connect(self._on_ros_checked)
+        self._init_sensor_batch_timer()
         self._init_mqtt()
         self._init_ros_monitor()
 
@@ -257,6 +271,11 @@ class MainWindow(QMainWindow):
             sb.addWidget(w)
         self.setStatusBar(sb)
 
+    def _init_sensor_batch_timer(self) -> None:
+        self._sensor_batch_timer = QTimer(self)
+        self._sensor_batch_timer.timeout.connect(self._flush_sensor_data)
+        self._sensor_batch_timer.start(100)
+
     def _init_mqtt(self) -> None:
         mqtt_cfg = self._config.get("mqtt", {})
         self._mqtt_client = MqttClient(
@@ -308,13 +327,20 @@ class MainWindow(QMainWindow):
         self._check_ros()
 
     def _check_ros(self) -> None:
+        if self._ros_check_inflight:
+            return
+        self._ros_check_inflight = True
+        thread = threading.Thread(target=self._check_ros_worker, daemon=True)
+        thread.start()
+
+    def _check_ros_worker(self) -> None:
         try:
             ros_cfg = self._config.get("ros", {})
             r = subprocess.run(
                 ["rostopic", "list"],
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=1,
                 env={
                     **os.environ,
                     "ROS_MASTER_URI": ros_cfg.get(
@@ -326,6 +352,10 @@ class MainWindow(QMainWindow):
             ok = r.returncode == 0
         except Exception:
             ok = False
+        self._signals.ros_checked.emit(ok)
+
+    def _on_ros_checked(self, ok: bool) -> None:
+        self._ros_check_inflight = False
         self._lb_ros.setText("ROS Master ✓" if ok else "ROS Master ✗")
         self._lb_ros.setStyleSheet(
             f"color: {SUCCESS if ok else DANGER}; font-weight: bold;"
@@ -563,9 +593,29 @@ class MainWindow(QMainWindow):
         self._act_disconnect.setEnabled(False)
 
     def _on_sensor_data(self, robot_id: str, sensor_name: str, data: object) -> None:
-        if isinstance(data, dict):
-            self._sensor_panel.on_sensor_data_received(robot_id, sensor_name, data)
-        self._traffic_monitor.on_sensor_data_received(robot_id, sensor_name, data)
+        key = (robot_id, sensor_name)
+        self._pending_sensor_data.setdefault(key, []).append((time.monotonic(), data))
+
+    def _flush_sensor_data(self) -> None:
+        if not self._pending_sensor_data:
+            return
+
+        pending = self._pending_sensor_data
+        self._pending_sensor_data = {}
+        for (robot_id, sensor_name), samples in pending.items():
+            for sample_time, data in samples:
+                if isinstance(data, dict):
+                    self._sensor_panel.on_sensor_data_received(
+                        robot_id,
+                        sensor_name,
+                        data,
+                    )
+                self._traffic_monitor.on_sensor_data_received(
+                    robot_id,
+                    sensor_name,
+                    data,
+                    now=sample_time,
+                )
 
     def _on_command(self, robot_id: str, action: str, params: dict) -> None:
         if self._mqtt_client:

@@ -45,6 +45,11 @@ class MqttSignals(QObject):
 class MqttClient:
     """线程安全 MQTT 客户端 — paho 回调 emit Qt Signal，不直接操作 UI"""
 
+    _LARGE_SENSOR_PAYLOAD_BYTES = 128 * 1024
+    _LARGE_SENSOR_MSG_TYPES = {
+        "map": "nav_msgs/OccupancyGrid",
+    }
+
     def __init__(
         self,
         broker_host: str = "localhost",
@@ -193,9 +198,24 @@ class MqttClient:
 
     def _on_message(self, client, userdata, msg) -> None:
         try:
-            payload_str = msg.payload.decode("utf-8")
             robot_info = parse_robot_topic(msg.topic)
             if robot_info and robot_info.get("type") == "sensor":
+                sensor_name = robot_info.get("name", "")
+                if self._should_summarize_sensor_payload(sensor_name, msg.payload):
+                    message = Message(
+                        src=robot_info.get("robot_id", ""),
+                        dst=self._client_id,
+                        type="sensor_data",
+                        data=self._large_sensor_payload_summary(
+                            sensor_name,
+                            msg.payload,
+                        ),
+                    )
+                    self.signals.message_received.emit(msg.topic, message)
+                    self._dispatch(msg.topic, message)
+                    return
+
+                payload_str = msg.payload.decode("utf-8")
                 payload = json.loads(payload_str)
                 message = (
                     Message.from_dict(payload)
@@ -211,12 +231,32 @@ class MqttClient:
                 self._dispatch(msg.topic, message)
                 return
 
+            payload_str = msg.payload.decode("utf-8")
             message = Message.from_json(payload_str)
             self.signals.message_received.emit(msg.topic, message)
 
             self._dispatch(msg.topic, message)
         except Exception as e:
             logger.error(f"[MqttClient] Failed to handle message on {msg.topic}: {e}")
+
+    def _should_summarize_sensor_payload(self, sensor_name: str, payload: bytes) -> bool:
+        normalized = sensor_name.strip().lstrip("/")
+        return (
+            normalized in self._LARGE_SENSOR_MSG_TYPES
+            and len(payload) >= self._LARGE_SENSOR_PAYLOAD_BYTES
+        )
+
+    def _large_sensor_payload_summary(
+        self,
+        sensor_name: str,
+        payload: bytes,
+    ) -> Dict[str, Any]:
+        normalized = sensor_name.strip().lstrip("/")
+        return {
+            "_msg_type": self._LARGE_SENSOR_MSG_TYPES.get(normalized, "custom/LargePayload"),
+            "_payload_skipped": True,
+            "_payload_bytes": len(payload),
+        }
 
     def _dispatch(self, mqtt_topic: str, message: Message) -> None:
         robot_info = parse_robot_topic(mqtt_topic)

@@ -49,6 +49,74 @@ class TestMainWindowSubscriptions:
         }
 
 
+class TestMainWindowSensorBatching:
+    def test_sensor_data_is_batched_before_panel_updates(self, qt_app, monkeypatch):
+        monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
+        monkeypatch.setattr(MainWindow, "_check_ros", lambda self: None)
+
+        window = MainWindow({})
+        sensor_calls = []
+        traffic_calls = []
+
+        class SensorPanel:
+            def on_sensor_data_received(self, robot_id, sensor_name, data):
+                sensor_calls.append((robot_id, sensor_name, data))
+
+        class TrafficMonitor:
+            def on_sensor_data_received(self, robot_id, sensor_name, data, now=None):
+                traffic_calls.append((robot_id, sensor_name, data, now))
+
+        window._sensor_panel = SensorPanel()
+        window._traffic_monitor = TrafficMonitor()
+
+        window._on_sensor_data("r1", "scan", {"ranges": [1.0]})
+        window._on_sensor_data("r1", "scan", {"ranges": [2.0]})
+
+        assert sensor_calls == []
+        assert traffic_calls == []
+
+        window._flush_sensor_data()
+
+        assert sensor_calls == [
+            ("r1", "scan", {"ranges": [1.0]}),
+            ("r1", "scan", {"ranges": [2.0]}),
+        ]
+        assert [call[:3] for call in traffic_calls] == sensor_calls
+        assert all(call[3] is not None for call in traffic_calls)
+
+
+class TestMainWindowRosMonitor:
+    def test_ros_check_runs_in_background(self, qt_app, monkeypatch):
+        original_check_ros = MainWindow._check_ros
+        monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
+        monkeypatch.setattr(MainWindow, "_check_ros", lambda self: None)
+
+        started = []
+
+        class FakeThread:
+            def __init__(self, target, daemon):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                started.append(self)
+
+        monkeypatch.setattr("qt_frontend.main_window.threading.Thread", FakeThread)
+
+        window = MainWindow({})
+        original_check_ros(window)
+
+        assert window._ros_check_inflight is True
+        assert len(started) == 1
+        assert started[0].daemon is True
+        assert window._lb_ros.text() == "ROS Master: 检测中..."
+
+        window._on_ros_checked(True)
+
+        assert window._ros_check_inflight is False
+        assert window._lb_ros.text() == "ROS Master ✓"
+
+
 class TestMainWindowLayout:
     def test_display_tab_has_dock_host_for_native_image_panels(self, qt_app, monkeypatch):
         monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)

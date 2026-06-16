@@ -100,6 +100,10 @@ class TrafficMonitor(QWidget):
     @staticmethod
     def estimate_payload_bytes(data: object) -> int:
         import sys
+        if isinstance(data, dict):
+            payload_bytes = data.get("_payload_bytes")
+            if isinstance(payload_bytes, int) and payload_bytes >= 0:
+                return payload_bytes
         return sys.getsizeof(str(data))
 
     @classmethod

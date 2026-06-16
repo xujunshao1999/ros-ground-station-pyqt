@@ -1283,6 +1283,9 @@ class TestTrafficMonitor:
         assert entry.robot_id == "r1"
         assert entry.bytes_received == 10000
 
+    def test_estimate_payload_bytes_uses_large_payload_summary(self):
+        assert TrafficMonitor.estimate_payload_bytes({"_payload_bytes": 123456}) == 123456
+
     def test_subscription_config_updates_transport(self, qt_app):
         panel = TrafficMonitor()
 
@@ -1424,6 +1427,41 @@ class TestSensorSummary:
 
         assert panel._topic_combo.count() == 1
         assert panel._topic_combo.itemData(0) == "r1\x1fscan"
+
+    def test_panel_batches_inbound_data_until_refresh(self, qt_app, monkeypatch):
+        panel = SensorSummaryPanel()
+        panel.show()
+        calls = []
+        original_summarize_data = SensorSummaryPanel.summarize_data
+
+        def fake_summarize_data(data, msg_type_hint=""):
+            calls.append((data, msg_type_hint))
+            return original_summarize_data(data, msg_type_hint)
+
+        monkeypatch.setattr(
+            SensorSummaryPanel,
+            "summarize_data",
+            staticmethod(fake_summarize_data),
+        )
+
+        panel.on_sensor_data_received(
+            "r1",
+            "scan",
+            {"_msg_type": "sensor_msgs/LaserScan", "ranges": [1.0]},
+        )
+        panel.on_sensor_data_received(
+            "r1",
+            "scan",
+            {"_msg_type": "sensor_msgs/LaserScan", "ranges": [2.0]},
+        )
+
+        assert calls == []
+
+        panel._refresh_current_view(force=True)
+
+        assert len(calls) == 1
+        assert calls[0][0]["ranges"] == [2.0]
+        assert panel._snapshots[("r1", "scan")].frame_count == 2
 
     def test_panel_uses_msg_type_field_without_raw_json_panel(self, qt_app):
         panel = SensorSummaryPanel()

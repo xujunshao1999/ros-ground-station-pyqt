@@ -597,6 +597,7 @@ class TestStartupRecovery:
                         "msg_type": "sensor_msgs/LaserScan",
                         "freq_limit": 5.0,
                         "transport": "mqtt_json",
+                        "qos": 0,
                         "compression": {},
                     }
                 ]
@@ -618,6 +619,7 @@ class TestStartupRecovery:
         assert message.data["msg_type"] == "sensor_msgs/LaserScan"
         assert message.data["freq_limit"] == 5.0
         assert message.data["transport"] == "mqtt_json"
+        assert message.data["qos"] == 0
         assert message.data["compression"] == {}
 
     def test_normalize_subscriptions_accepts_legacy_mapping_format(self):

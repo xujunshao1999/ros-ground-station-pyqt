@@ -73,6 +73,7 @@ class SensorSummaryPanel(QWidget):
         self._last_rendered_summary_key: Optional[Tuple[TopicKey, int, bool]] = None
         self._topic_options_dirty = False
         self._topic_table_dirty = False
+        self._pending_data: Dict[TopicKey, Tuple[str, Dict[str, Any], List[float]]] = {}
 
         layout = QVBoxLayout(self)
 
@@ -135,23 +136,25 @@ class SensorSummaryPanel(QWidget):
         now: float,
         previous: Optional[TopicSnapshot],
         msg_type_hint: str = "",
+        sample_times_to_add: Optional[List[float]] = None,
     ) -> TopicSnapshot:
         msg_type = SensorSummaryPanel.infer_msg_type(data, msg_type_hint)
         summary_lines = SensorSummaryPanel.summarize_data(data, msg_type)
+        new_sample_times = sample_times_to_add or [now]
         if previous is None:
-            sample_times = [now]
+            sample_times = list(new_sample_times)
             return TopicSnapshot(
                 robot_id=robot_id,
                 sensor_name=sensor_name,
                 msg_type=msg_type,
                 summary_lines=summary_lines,
-                first_time=now,
+                first_time=sample_times[0],
                 last_time=now,
-                frame_count=1,
+                frame_count=len(new_sample_times),
                 sample_times=sample_times,
             )
 
-        sample_times = list(previous.sample_times) + [now]
+        sample_times = list(previous.sample_times) + list(new_sample_times)
         cutoff = now - SensorSummaryPanel._HZ_WINDOW_SECONDS
         sample_times = [t for t in sample_times if t >= cutoff]
         return TopicSnapshot(
@@ -161,7 +164,7 @@ class SensorSummaryPanel(QWidget):
             summary_lines=summary_lines,
             first_time=previous.first_time,
             last_time=now,
-            frame_count=previous.frame_count + 1,
+            frame_count=previous.frame_count + len(new_sample_times),
             sample_times=sample_times,
         )
 
@@ -421,23 +424,20 @@ class SensorSummaryPanel(QWidget):
         normalized_sensor_name = self.normalize_sensor_name(sensor_name)
         key = (robot_id, normalized_sensor_name)
         now = time.monotonic()
-        previous = self._snapshots.get(key)
-        snapshot = self.build_topic_snapshot(
-            robot_id=robot_id,
-            sensor_name=normalized_sensor_name,
-            data=data,
-            now=now,
-            previous=previous,
-        )
-        self._snapshots[key] = snapshot
+        msg_type = self.infer_msg_type(data)
+        pending = self._pending_data.get(key)
+        sample_times = list(pending[2]) if pending is not None else []
+        sample_times.append(now)
+        self._pending_data[key] = (msg_type, data, sample_times)
+
         previous_topic = self._observed_topics.get(key)
         self._observed_topics[key] = ObservedTopic(
             robot_id=robot_id,
             sensor_name=normalized_sensor_name,
-            msg_type=snapshot.msg_type,
+            msg_type=msg_type or (previous_topic.msg_type if previous_topic else ""),
             status="active",
         )
-        if previous_topic is None or previous_topic.msg_type != snapshot.msg_type:
+        if previous_topic is None or previous_topic.msg_type != msg_type:
             self._topic_options_dirty = True
         self._topic_table_dirty = True
 
@@ -652,6 +652,7 @@ class SensorSummaryPanel(QWidget):
     def _refresh_current_view(self, force: bool = False) -> None:
         if not force and not self.isVisible():
             return
+        self._process_pending_data()
         if not self._snapshots:
             if self._topic_options_dirty:
                 self._refresh_topic_options()
@@ -671,6 +672,41 @@ class SensorSummaryPanel(QWidget):
             self._render_snapshot(snapshot)
         else:
             self._render_waiting_topic(self._selected_key)
+
+    def _process_pending_data(self) -> None:
+        if not self._pending_data:
+            return
+
+        pending_items = list(self._pending_data.items())
+        self._pending_data.clear()
+        for key, (msg_type, data, arrival_times) in pending_items:
+            if not arrival_times:
+                continue
+            robot_id, sensor_name = key
+            previous = self._snapshots.get(key)
+            snapshot = self.build_topic_snapshot(
+                robot_id=robot_id,
+                sensor_name=sensor_name,
+                data=data,
+                now=arrival_times[-1],
+                previous=previous,
+                msg_type_hint=msg_type,
+                sample_times_to_add=arrival_times,
+            )
+            if snapshot is not None:
+                self._snapshots[key] = snapshot
+                topic = self._observed_topics.get(key)
+                if topic is not None and topic.msg_type != snapshot.msg_type:
+                    self._observed_topics[key] = ObservedTopic(
+                        robot_id=topic.robot_id,
+                        sensor_name=topic.sensor_name,
+                        msg_type=snapshot.msg_type,
+                        status=topic.status,
+                    )
+                    self._topic_options_dirty = True
+                if self._selected_key == key:
+                    self._last_rendered_summary_key = None
+        self._topic_table_dirty = True
 
     def _metric_style(self, background: str = "#202838") -> str:
         return (

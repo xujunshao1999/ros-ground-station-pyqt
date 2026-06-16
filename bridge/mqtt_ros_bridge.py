@@ -1053,6 +1053,7 @@ class MqttRosBridge:
                     "msg_type": sub_info.get("msg_type", ""),
                     "freq_limit": sub_info.get("freq_limit", 10.0),
                     "transport": sub_info.get("transport", "auto"),
+                    "qos": int(sub_info.get("qos", 1)),
                     "compression": sub_info.get("compression", {}),
                 }
                 message = Message(

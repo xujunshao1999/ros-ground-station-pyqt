@@ -207,6 +207,32 @@ class TestOnMessageStatus:
         assert sensor_signal.call_args[0][1] == "imu/data"
         assert sensor_signal.call_args[0][2]["_msg_type"] == "sensor_msgs/Imu"
 
+    def test_large_occupancy_grid_payload_is_summarized_without_json_decode(
+        self, client, mock_paho
+    ):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        mqtt_msg = MagicMock()
+        mqtt_msg.topic = "robot/robot_001/sensor/map"
+        mqtt_msg.payload = b'{"_msg_type":"nav_msgs/OccupancyGrid","data":[' + (
+            b"0," * 200000
+        ) + b"0]}"
+
+        client.connect()
+        with patch("qt_frontend.mqtt_client.json.loads") as mock_loads:
+            client._on_message(mock_paho, None, mqtt_msg)
+
+        mock_loads.assert_not_called()
+        sensor_signal.assert_called_once()
+        assert sensor_signal.call_args[0][0] == "robot_001"
+        assert sensor_signal.call_args[0][1] == "map"
+        assert sensor_signal.call_args[0][2] == {
+            "_msg_type": "nav_msgs/OccupancyGrid",
+            "_payload_skipped": True,
+            "_payload_bytes": len(mqtt_msg.payload),
+        }
+
     def test_topic_response_received(self, client, mock_paho):
         resp_signal = MagicMock()
         client.signals.topic_response_received.connect(resp_signal)
