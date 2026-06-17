@@ -3,9 +3,12 @@ from __future__ import annotations
 import pytest
 
 from protocol.binary_payloads import (
+    ENCODING_TF_MESSAGE,
     decode_sensor_binary,
+    encode_ros_message_binary,
     encode_sensor_binary,
     is_binary_supported,
+    is_ros_message_binary_encoding,
 )
 
 
@@ -94,4 +97,27 @@ def test_occupancy_grid_binary_roundtrip_uses_zlib_int8_payload():
 def test_is_binary_supported_only_for_first_phase_types():
     assert is_binary_supported("sensor_msgs/LaserScan") is True
     assert is_binary_supported("nav_msgs/OccupancyGrid") is True
+    assert is_binary_supported("tf2_msgs/TFMessage") is False
     assert is_binary_supported("nav_msgs/Odometry") is False
+
+
+def test_tf_message_binary_envelope_keeps_ros_payload_opaque():
+    envelope, payload = encode_ros_message_binary(
+        "/tf",
+        "tf2_msgs/TFMessage",
+        b"\x01\x02tf-bytes",
+        seq=42,
+    )
+
+    assert envelope == {
+        "binary": True,
+        "topic": "/tf",
+        "msg_type": "tf2_msgs/TFMessage",
+        "encoding": ENCODING_TF_MESSAGE,
+        "seq": 42,
+        "payload_format": "ros1_serialized",
+        "payload_size": len(payload),
+        "compression": "none",
+    }
+    assert payload == b"\x01\x02tf-bytes"
+    assert is_ros_message_binary_encoding(envelope) is True

@@ -49,6 +49,7 @@ class MqttClient:
     _LARGE_SENSOR_MSG_TYPES = {
         "map": "nav_msgs/OccupancyGrid",
     }
+    _IGNORED_SENSOR_TOPICS = frozenset({"tf"})
 
     def __init__(
         self,
@@ -208,6 +209,12 @@ class MqttClient:
                 return
             if robot_info and robot_info.get("type") == "sensor":
                 sensor_name = robot_info.get("name", "")
+                if self._should_ignore_sensor_payload(sensor_name):
+                    logger.debug(
+                        "[MqttClient] Ignoring high-frequency sensor payload on %s",
+                        msg.topic,
+                    )
+                    return
                 if self._should_summarize_sensor_payload(sensor_name, msg.payload):
                     message = Message(
                         src=robot_info.get("robot_id", ""),
@@ -245,6 +252,10 @@ class MqttClient:
             self._dispatch(msg.topic, message)
         except Exception as e:
             logger.error(f"[MqttClient] Failed to handle message on {msg.topic}: {e}")
+
+    def _should_ignore_sensor_payload(self, sensor_name: str) -> bool:
+        normalized = sensor_name.strip().lstrip("/")
+        return normalized in self._IGNORED_SENSOR_TOPICS
 
     def _should_summarize_sensor_payload(self, sensor_name: str, payload: bytes) -> bool:
         normalized = sensor_name.strip().lstrip("/")

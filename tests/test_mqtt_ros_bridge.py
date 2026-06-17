@@ -19,7 +19,10 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from protocol.binary_payloads import encode_sensor_binary
+from protocol.binary_payloads import (
+    encode_ros_message_binary,
+    encode_sensor_binary,
+)
 
 # ---------------------------------------------------------------------------
 # Mock rospy and std_msgs.msg at sys.modules level before importing bridge
@@ -121,6 +124,16 @@ class MockTransformStamped:
             translation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
             rotation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
         )
+
+
+class MockTfMessage:
+    def __init__(self):
+        self.raw_payload = b""
+        self.transforms = []
+
+    def deserialize(self, payload):
+        self.raw_payload = payload
+        return self
 
 
 if "geometry_msgs" not in sys.modules:
@@ -519,6 +532,43 @@ class TestBinarySensorData:
 
         get_pub.assert_called_once_with("/robot_001/scan", type(ros_msg))
         publisher.publish.assert_called_once_with(ros_msg)
+
+    def test_binary_tf_message_publishes_deserialized_ros_message_without_dict_conversion(
+        self, bridge: MqttRosBridge
+    ):
+        envelope, payload = encode_ros_message_binary(
+            "/tf",
+            "tf2_msgs/TFMessage",
+            b"serialized-tf",
+            seq=9,
+        )
+        publisher = MagicMock()
+
+        with patch(
+            "bridge.mqtt_ros_bridge._get_message_class",
+            return_value=MockTfMessage,
+        ), patch(
+            "bridge.mqtt_ros_bridge.dict_to_ros_msg"
+        ) as dict_to_ros_msg, patch.object(
+            bridge,
+            "_get_or_create_typed_publisher",
+            return_value=publisher,
+        ) as get_pub, patch.object(
+            bridge,
+            "_wait_for_publisher_connection",
+        ):
+            bridge._handle_sensor_data(
+                "robot_001",
+                "tf",
+                json.dumps(envelope).encode("utf-8"),
+            )
+            bridge._handle_sensor_binary("robot_001", "tf", payload)
+
+        dict_to_ros_msg.assert_not_called()
+        get_pub.assert_called_once_with("/tf", MockTfMessage)
+        published = publisher.publish.call_args[0][0]
+        assert isinstance(published, MockTfMessage)
+        assert published.raw_payload == b"serialized-tf"
 
 
 # ===================================================================

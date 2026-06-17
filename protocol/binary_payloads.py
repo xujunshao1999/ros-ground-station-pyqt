@@ -9,13 +9,38 @@ from typing import Any, Dict, List, Tuple
 
 ENCODING_LASER_SCAN = "laser_scan_v1"
 ENCODING_OCCUPANCY_GRID = "occupancy_grid_v1"
+ENCODING_TF_MESSAGE = "tf_message_ros1_v1"
 
 _LASER_SCAN_TYPE = "sensor_msgs/LaserScan"
 _OCCUPANCY_GRID_TYPE = "nav_msgs/OccupancyGrid"
+_ROS_MESSAGE_BINARY_ENCODINGS = frozenset({ENCODING_TF_MESSAGE})
 
 
 def is_binary_supported(msg_type: str) -> bool:
     return msg_type in {_LASER_SCAN_TYPE, _OCCUPANCY_GRID_TYPE}
+
+
+def is_ros_message_binary_encoding(envelope: Dict[str, Any]) -> bool:
+    return envelope.get("encoding") in _ROS_MESSAGE_BINARY_ENCODINGS
+
+
+def encode_ros_message_binary(
+    topic: str,
+    msg_type: str,
+    payload: bytes,
+    seq: int,
+) -> Tuple[Dict[str, Any], bytes]:
+    envelope = {
+        "binary": True,
+        "topic": topic,
+        "msg_type": msg_type,
+        "encoding": ENCODING_TF_MESSAGE,
+        "seq": int(seq),
+        "payload_format": "ros1_serialized",
+        "payload_size": len(payload),
+        "compression": "none",
+    }
+    return envelope, payload
 
 
 def encode_sensor_binary(

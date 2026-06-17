@@ -44,14 +44,18 @@ from geometry_msgs.msg import TransformStamped
 from std_msgs.msg import String
 
 from protocol.messages import Message, MessageType, TopicResponseResult
-from protocol.binary_payloads import decode_sensor_binary
+from protocol.binary_payloads import (
+    decode_sensor_binary,
+    is_ros_message_binary_encoding,
+)
 from protocol.topics import (
     robot_cmd,
     station_discover,
     station_topic_request,
     parse_robot_topic,
 )
-from agent.frame_utils import namespace_message_frames
+from agent.frame_utils import namespace_frame_id, namespace_message_frames
+from agent.dict_to_ros_msg import _get_message_class
 from bridge.dict_to_ros_msg import dict_to_ros_msg
 
 logger = logging.getLogger(__name__)
@@ -721,6 +725,19 @@ class MqttRosBridge:
 
         try:
             decode_start = time.monotonic()
+            if is_ros_message_binary_encoding(envelope):
+                ros_msg = self._deserialize_ros_binary_message(envelope, payload)
+                decode_ms = (time.monotonic() - decode_start) * 1000.0
+                self._publish_ros_binary_sensor(
+                    robot_id,
+                    sensor_name,
+                    envelope,
+                    ros_msg,
+                    payload_size=len(payload),
+                    total_start=total_start,
+                    decode_ms=decode_ms,
+                )
+                return
             data_dict = decode_sensor_binary(envelope, payload)
             decode_ms = (time.monotonic() - decode_start) * 1000.0
         except Exception as e:
@@ -741,6 +758,74 @@ class MqttRosBridge:
             total_start=total_start,
             decode_ms=decode_ms,
         )
+
+    @staticmethod
+    def _deserialize_ros_binary_message(
+        envelope: Dict[str, Any],
+        payload: bytes,
+    ):
+        msg_type = envelope.get("msg_type", "")
+        msg_class = _get_message_class(msg_type)
+        if msg_class is None:
+            raise ValueError("Unknown ROS message type: '%s'" % msg_type)
+        ros_msg = msg_class()
+        ros_msg.deserialize(payload)
+        return ros_msg
+
+    def _publish_ros_binary_sensor(
+        self,
+        robot_id: str,
+        sensor_name: str,
+        envelope: Dict[str, Any],
+        ros_msg,
+        payload_size: int,
+        total_start: float,
+        decode_ms: float,
+    ) -> None:
+        is_canonical = sensor_name in self._CANONICAL_TOPICS
+        msg_type = envelope.get("msg_type", "")
+        full_topic = (
+            f"/{sensor_name}" if is_canonical else f"/{robot_id}/{sensor_name}"
+        )
+
+        try:
+            if self._namespace_tf_frames and msg_type == "tf2_msgs/TFMessage":
+                self._prefix_tf_message_frames(ros_msg, robot_id)
+
+            pub = self._get_or_create_typed_publisher(full_topic, type(ros_msg))
+            self._wait_for_publisher_connection(full_topic, pub)
+            publish_start = time.monotonic()
+            pub.publish(ros_msg)
+            publish_ms = (time.monotonic() - publish_start) * 1000.0
+            total_ms = (time.monotonic() - total_start) * 1000.0
+            logger.debug(
+                "[Bridge] Published binary ROS sensor: ros_topic=%s "
+                "msg_type=%s size=%d decode=%.1fms publish=%.1fms total=%.1fms",
+                full_topic,
+                msg_type,
+                payload_size,
+                decode_ms,
+                publish_ms,
+                total_ms,
+            )
+        except Exception as e:
+            logger.error("[Bridge] Failed to publish binary ROS sensor: %s", e)
+
+    @staticmethod
+    def _prefix_tf_message_frames(ros_msg, robot_id: str) -> None:
+        transforms = getattr(ros_msg, "transforms", [])
+        for transform in transforms:
+            header = getattr(transform, "header", None)
+            if header is not None:
+                header.frame_id = namespace_frame_id(
+                    getattr(header, "frame_id", ""),
+                    robot_id,
+                )
+            child_frame_id = getattr(transform, "child_frame_id", "")
+            transform.child_frame_id = namespace_frame_id(
+                child_frame_id,
+                robot_id,
+            )
 
     def _publish_sensor_dict(
         self,

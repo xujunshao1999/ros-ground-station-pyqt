@@ -6,6 +6,7 @@ from __future__ import annotations
 # 并将 MQTT 控制指令翻译为 ROS 话题发布。
 #
 # 依赖：rospy（ROS 1 Noetic / Melodic）
+import io
 import json
 import logging
 import math
@@ -229,6 +230,17 @@ class ROS1Agent(BaseAgent):
                 return  # 限频：跳过
             lpt["t"] = now
 
+            if t == "/tf" and mt == "tf2_msgs/TFMessage":
+                raw_payload = self._serialize_ros_message(msg)
+                if raw_payload is not None:
+                    self.publish_sensor_binary_data(
+                        t,
+                        mt,
+                        raw_payload,
+                        seq=self._tf_message_seq(msg),
+                    )
+                    return
+
             data = ros_msg_to_dict(msg)
             if t == "/tf_static":
                 data = self._merge_tf_static_data(data)
@@ -253,6 +265,28 @@ class ROS1Agent(BaseAgent):
                 self._publish_latched_tf_static(msg_class, msg_type)
         except Exception as e:
             logger.error(f"[ROS1Agent] Failed to subscribe {topic}: {e}")
+
+    @staticmethod
+    def _serialize_ros_message(msg) -> Optional[bytes]:
+        try:
+            buff = io.BytesIO()
+            msg.serialize(buff)
+            return buff.getvalue()
+        except Exception as e:
+            logger.warning("[ROS1Agent] Failed to serialize ROS message: %s", e)
+            return None
+
+    @staticmethod
+    def _tf_message_seq(msg) -> Optional[int]:
+        transforms = getattr(msg, "transforms", None)
+        if not transforms:
+            return None
+        header = getattr(transforms[0], "header", None)
+        seq = getattr(header, "seq", None)
+        try:
+            return int(seq) if seq is not None else None
+        except (TypeError, ValueError):
+            return None
 
     def _publish_latched_tf_static(self, msg_class: type, msg_type: str) -> None:
         """Fetch and publish the current latched /tf_static message once."""

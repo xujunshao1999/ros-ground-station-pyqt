@@ -67,7 +67,11 @@ from protocol.topics import (
     station_config_query,
     station_config_response,
 )
-from protocol.binary_payloads import encode_sensor_binary, is_binary_supported
+from protocol.binary_payloads import (
+    encode_ros_message_binary,
+    encode_sensor_binary,
+    is_binary_supported,
+)
 from agent.rate_limiter import RateLimiter
 from agent.topic_handler import TopicHandler
 from protocol.topic_registry import TopicTier
@@ -380,6 +384,48 @@ class BaseAgent(ABC):
         if not bypass_rate_limit:
             self._rate_limiter.mark_sent(ros_topic)
 
+    def publish_sensor_binary_data(
+        self,
+        ros_topic: str,
+        msg_type: str,
+        payload: bytes,
+        seq: Optional[int] = None,
+        bypass_rate_limit: bool = False,
+        retain: bool = False,
+    ) -> None:
+        """发布已序列化的 ROS 消息二进制数据。"""
+        if ros_topic not in self._subscribed_topics:
+            return
+
+        if not bypass_rate_limit and not self._rate_limiter.can_send(ros_topic):
+            return
+
+        sub_info = self._subscribed_topics[ros_topic]
+        qos = int(sub_info.get("qos", 1))
+        envelope, binary_payload = encode_ros_message_binary(
+            ros_topic,
+            msg_type,
+            payload,
+            seq=seq if seq is not None else int(time.time() * 1000),
+        )
+        sensor_topic = self._get_sensor_mqtt_topic(ros_topic, TopicTier.MEDIUM)
+        binary_topic = self._get_sensor_binary_mqtt_topic(ros_topic)
+        self._mqtt_publish(
+            sensor_topic,
+            json.dumps(envelope, ensure_ascii=False).encode("utf-8"),
+            qos=qos,
+            retain=retain,
+        )
+        self._mqtt_publish(
+            binary_topic,
+            binary_payload,
+            qos=qos,
+            retain=retain,
+        )
+
+        if not bypass_rate_limit:
+            self._rate_limiter.mark_sent(ros_topic)
+
     # ============================================================
     # 机器人间通信
     # ============================================================
@@ -667,7 +713,13 @@ class BaseAgent(ABC):
             )
             self._save_config()
             self._rate_limiter.set_limit(topic, freq_limit)
-            self._on_topic_subscribed(topic, msg_type, options)
+            self._on_topic_subscribed(
+                topic,
+                msg_type,
+                self._subscription_callback_options(
+                    freq_limit, transport, qos, options
+                ),
+            )
 
             # 发送确认
             response = self._factory.topic_response(TopicResponseData(
@@ -810,7 +862,16 @@ class BaseAgent(ABC):
             if topic:
                 self._subscribed_topics[topic] = self._subscription_runtime_info(sub)
                 self._rate_limiter.set_limit(topic, freq_limit)
-                self._on_topic_subscribed(topic, msg_type, options)
+                self._on_topic_subscribed(
+                    topic,
+                    msg_type,
+                    self._subscription_callback_options(
+                        freq_limit,
+                        sub.get("transport", "mqtt_json"),
+                        int(sub.get("qos", 1)),
+                        options,
+                    ),
+                )
                 logger.info(f"[Agent] Restored subscription: {topic}")
         self._apply_fleet_rules(self.config.fleet_rules)
 
@@ -920,7 +981,16 @@ class BaseAgent(ABC):
                     self._on_topic_unsubscribed(topic)
                 self._subscribed_topics[topic] = self._subscription_runtime_info(sub)
                 self._rate_limiter.set_limit(topic, freq_limit)
-                self._on_topic_subscribed(topic, msg_type, options)
+                self._on_topic_subscribed(
+                    topic,
+                    msg_type,
+                    self._subscription_callback_options(
+                        freq_limit,
+                        sub.get("transport", "mqtt_json"),
+                        int(sub.get("qos", 1)),
+                        options,
+                    ),
+                )
                 logger.info(f"[Agent] Config sync: subscribed to {topic}")
 
     def _upsert_subscription_config(
@@ -951,6 +1021,19 @@ class BaseAgent(ABC):
             sub for sub in self.config.subscriptions
             if sub.get("topic") != topic
         ])
+
+    @staticmethod
+    def _subscription_callback_options(
+        freq_limit: float,
+        transport: str,
+        qos: int,
+        compression: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        options = dict(compression or {})
+        options["freq_limit"] = float(freq_limit)
+        options["transport"] = transport
+        options["qos"] = int(qos)
+        return options
 
     def _save_config(self) -> None:
         """持久化动态配置，保留原 YAML 中的其他字段。"""

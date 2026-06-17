@@ -250,6 +250,30 @@ class TestOnMessageStatus:
         mock_from_json.assert_not_called()
         sensor_signal.assert_not_called()
 
+    def test_tf_sensor_payload_is_ignored_without_json_decode(self, client, mock_paho):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        mqtt_msg = _make_mqtt_msg(
+            "robot/robot_001/sensor/tf",
+            json.dumps(
+                {
+                    "binary": True,
+                    "msg_type": "tf2_msgs/TFMessage",
+                    "encoding": "tf_message_ros1_v1",
+                }
+            ),
+        )
+
+        client.connect()
+        with patch("qt_frontend.mqtt_client.json.loads") as mock_loads, \
+                patch("qt_frontend.mqtt_client.Message.from_json") as mock_from_json:
+            client._on_message(mock_paho, None, mqtt_msg)
+
+        mock_loads.assert_not_called()
+        mock_from_json.assert_not_called()
+        sensor_signal.assert_not_called()
+
     def test_topic_response_received(self, client, mock_paho):
         resp_signal = MagicMock()
         client.signals.topic_response_received.connect(resp_signal)

@@ -88,6 +88,16 @@ def test_topic_request_subscribe_updates_runtime_and_persistent_config():
     assert agent.saved_count == 1
     assert agent.published[-1][1]["type"] == "topic_resp"
     assert agent.published[-1][1]["data"]["result"] == "ok"
+    assert agent.subscribed[-1] == (
+        "/scan",
+        "sensor_msgs/LaserScan",
+        {
+            "quality": 80,
+            "freq_limit": 5.0,
+            "qos": 2,
+            "transport": "mqtt_json",
+        },
+    )
 
 
 def test_publish_sensor_data_uses_subscription_qos():
@@ -297,8 +307,25 @@ def test_config_sync_converges_added_updated_and_removed_subscriptions():
     assert agent._subscribed_topics["/scan"]["options"] == {"quality": 70}
     assert agent.unsubscribed == ["/odom", "/scan"]
     assert agent.subscribed == [
-        ("/scan", "sensor_msgs/LaserScan", {"quality": 70}),
-        ("/map", "nav_msgs/OccupancyGrid", {}),
+        (
+            "/scan",
+            "sensor_msgs/LaserScan",
+            {
+                "quality": 70,
+                "freq_limit": 2.0,
+                "transport": "mqtt_json",
+                "qos": 1,
+            },
+        ),
+        (
+            "/map",
+            "nav_msgs/OccupancyGrid",
+            {
+                "freq_limit": 1.0,
+                "transport": "mqtt_json",
+                "qos": 1,
+            },
+        ),
     ]
     assert agent.config.fleet_rules == [fleet_rule]
     assert agent.applied_fleet_rules == [[fleet_rule]]

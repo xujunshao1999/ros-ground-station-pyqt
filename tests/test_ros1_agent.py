@@ -6,6 +6,14 @@ from agent.ros1_agent import ROS1Agent
 from protocol.messages import FleetData
 
 
+class _SerializableRosMsg:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+
+    def serialize(self, buff):
+        buff.write(self.payload)
+
+
 def test_ros1_agent_uses_agent_local_dict_to_ros_msg():
     import agent.ros1_agent as ros1_agent
 
@@ -167,6 +175,47 @@ def test_tf_static_callback_merges_multiple_latched_messages(monkeypatch):
         transform["child_frame_id"]
         for transform in published[0][2]["transforms"]
     ] == ["base_link", "base_scan"]
+
+
+def test_dynamic_tf_callback_uses_binary_fast_path(monkeypatch):
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+
+    def fail_ros_msg_to_dict(msg):
+        raise AssertionError("dynamic /tf should not use dict JSON conversion")
+
+    monkeypatch.setattr("agent.ros1_agent.ros_msg_to_dict", fail_ros_msg_to_dict)
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 100.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_binary_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/tf",
+        "tf2_msgs/TFMessage",
+        {"freq_limit": 100.0},
+    )
+    captured_callback["callback"](_SerializableRosMsg(b"tf-raw"))
+
+    agent.publish_sensor_binary_data.assert_called_once()
+    assert agent.publish_sensor_binary_data.call_args[0][:3] == (
+        "/tf",
+        "tf2_msgs/TFMessage",
+        b"tf-raw",
+    )
 
 
 def test_fleet_rule_callback_sends_fleet_data(monkeypatch):
