@@ -671,12 +671,15 @@ class TopicConfigPanel(QWidget):
         else:
             transport_value = self.transport_from_tier(transport)
 
+        qos_data = self._combo_qos.currentData()
+        qos = 1 if qos_data is None else int(qos_data)
+
         return SubscriptionEntry(
             topic=topic,
             msg_type=msg_type,
             freq_limit=float(self._spin_freq.value()),
             transport=transport_value,
-            qos=int(self._combo_qos.currentData() or 1),
+            qos=qos,
             status="pending",
             compression={},
         )

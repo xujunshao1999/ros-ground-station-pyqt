@@ -669,6 +669,41 @@ class TestTopicConfigPanel:
         )
         assert TopicConfigPanel.config_response_failed({"subscriptions": []}) == ""
 
+    def test_confirm_then_deploy_preserves_qos_zero(self, qt_app, tmp_path):
+        panel = TopicConfigPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        panel.on_robot_list_changed(["turtlebot_001"])
+        panel._entries = [
+            SubscriptionEntry(
+                topic="/scan",
+                msg_type="sensor_msgs/LaserScan",
+                freq_limit=5.0,
+                transport="mqtt_binary",
+                qos=1,
+                status="saved",
+            )
+        ]
+        panel._refresh_table()
+        emitted = []
+        panel.config_sync_requested.connect(
+            lambda robot_id, payload: emitted.append((robot_id, payload))
+        )
+
+        panel._table.setCurrentCell(0, 0)
+        panel._set_qos_combo(0)
+        panel._btn_confirm.click()
+        assert panel._entries[0].qos == 0
+
+        panel._btn_deploy.click()
+
+        saved = TopicConfigPanel.load_transmit_config_file(
+            panel._transmit_config_path
+        )
+        saved_sub = saved["subscriptions"]["turtlebot_001"][0]
+
+        assert saved_sub["qos"] == 0
+        assert emitted[0][1]["subscriptions"][0]["qos"] == 0
+
 
 # ------------------------------------------------------------------
 # EventPanel formatters
