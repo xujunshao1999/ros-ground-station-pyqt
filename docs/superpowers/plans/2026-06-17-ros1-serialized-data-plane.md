@@ -44,6 +44,34 @@
 
 `/map` 暂不迁移。当前 `occupancy_grid_v1` 使用 `zlib` 压缩，带宽收益明显；地图 frame 和 global/local map 语义也比普通 sensor 更复杂。
 
+## 多机器人与 `/tf` 约束
+
+`/tf` 和 `/tf_static` 在地面站 ROS 中仍保持公共 topic，不为每台机器人创建 `/turtlebot_001/tf`、`/turtlebot_002/tf` 这类私有 topic。ROS TF 的正常模型是多个 publisher 同时向同一个 `/tf` 发布不同 frame 的 transform，RViz 和 tf listener 订阅一个 `/tf` 后合成完整 TF tree。
+
+多机器人隔离不能依赖 topic 名隔离，而必须依赖 frame 全局唯一：
+
+```text
+turtlebot_001/odom -> turtlebot_001/base_link
+turtlebot_002/odom -> turtlebot_002/base_link
+```
+
+禁止在地面站 ROS 中出现多个机器人共用以下 frame：
+
+```text
+odom
+base_link
+base_scan
+map
+```
+
+因此 serialized 数据面必须遵守以下规则：
+
+- MQTT topic 继续用 `robot/<robot_id>/sensor/<name>` 区分数据来源。
+- 普通 sensor topic 发布到地面站 ROS 时继续使用 `/<robot_id>/<topic>`，例如 `/turtlebot_001/odom`。
+- `/tf` 和 `/tf_static` 发布到公共 topic，但 Bridge 发布前必须反序列化并给 `frame_id`、`child_frame_id` 加 `robot_id` 前缀。
+- 允许多个 Bridge 进程同时发布 `/tf`，前提是每个进程只发布自己负责机器人的 namespace 后 frame。
+- `/tf_static` 可以由每个 Bridge 进程广播自己负责机器人的 static transforms；如果实测出现缓存或覆盖问题，再单独设计 TF static aggregator。
+
 ### 任务 1：协议层抽象 ROS1 serialized encoding
 
 **文件：**
@@ -398,7 +426,7 @@ git commit -m "fix: 为 serialized 数据补齐 frame 命名空间"
 
 - [ ] **步骤 1：编写 Bridge 失败测试**
 
-在 `tests/test_mqtt_ros_bridge.py` 增加：
+在 `tests/test_mqtt_ros_bridge.py` 的 `TestBinarySensorData` 类中增加：
 
 ```python
 def test_binary_tf_static_uses_static_transform_broadcaster(self, bridge: MqttRosBridge):
@@ -728,6 +756,134 @@ git add docs/work-log-2026-06-17.md
 git commit -m "docs: 记录 LaserScan 传输方案评估"
 ```
 
+### 任务 8：补充 Bridge 按 robot_id 分片能力
+
+**文件：**
+- 修改：`bridge/mqtt_ros_bridge.py`
+- 测试：`tests/test_mqtt_ros_bridge.py`
+- 文档：`docs/work-log-2026-06-17.md`
+
+此任务只在单 Bridge 进程处理多机器人时 CPU 仍偏高后执行。目标是允许多个 Bridge 进程按 robot_id 分片处理 MQTT 数据，避免多个 Bridge 重复消费同一批 sensor 消息。
+
+- [ ] **步骤 1：编写失败的订阅过滤测试**
+
+在 `tests/test_mqtt_ros_bridge.py` 的 `TestMqttConnect` 类中增加：
+
+```python
+def test_bridge_subscribes_only_selected_robot_sensor_topics():
+    bridge = MqttRosBridge(robot_ids=["turtlebot_001", "turtlebot_002"])
+    mock_client = MagicMock()
+
+    bridge._on_mqtt_connect(mock_client, None, None, 0, None)
+
+    subscribed_topics = [call_args[0][0] for call_args in mock_client.subscribe.call_args_list]
+    assert "robot/turtlebot_001/sensor/#" in subscribed_topics
+    assert "robot/turtlebot_002/sensor/#" in subscribed_topics
+    assert "robot/+/sensor/#" not in subscribed_topics
+```
+
+- [ ] **步骤 2：运行测试验证失败**
+
+运行：
+
+```bash
+python3 -m pytest tests/test_mqtt_ros_bridge.py::TestMqttConnect::test_bridge_subscribes_only_selected_robot_sensor_topics -q
+```
+
+预期：失败，原因是 Bridge 当前默认订阅 `robot/+/sensor/#`，没有 robot_id 分片参数。
+
+- [ ] **步骤 3：实现 Bridge robot_id 过滤参数**
+
+在 `MqttRosBridge.__init__()` 增加可选参数：
+
+```python
+def __init__(
+    self,
+    mqtt_host: str = "localhost",
+    mqtt_port: int = 1883,
+    robot_ids: Optional[List[str]] = None,
+):
+    self._robot_ids = list(robot_ids or [])
+```
+
+在 `_on_mqtt_connect()` 中替换 sensor 订阅逻辑：
+
+```python
+sensor_topics = (
+    [f"robot/{robot_id}/sensor/#" for robot_id in self._robot_ids]
+    if self._robot_ids
+    else ["robot/+/sensor/#"]
+)
+for topic in sensor_topics:
+    client.subscribe(topic, qos=0)
+```
+
+status、event、cmd ack、topic response 也按同样原则分片；如果该 Bridge 没有配置 `robot_ids`，保留现有 wildcard 行为。
+
+- [ ] **步骤 4：实现 CLI 参数**
+
+在 Bridge main 入口增加：
+
+```python
+parser.add_argument(
+    "--robot-id",
+    action="append",
+    dest="robot_ids",
+    default=[],
+    help="Only bridge MQTT topics for the given robot id. Can be repeated.",
+)
+```
+
+创建 Bridge 时传入：
+
+```python
+bridge = MqttRosBridge(
+    mqtt_host=args.mqtt_host,
+    mqtt_port=args.mqtt_port,
+    robot_ids=args.robot_ids,
+)
+```
+
+- [ ] **步骤 5：运行 Bridge 测试验证通过**
+
+运行：
+
+```bash
+python3 -m pytest tests/test_mqtt_ros_bridge.py -q
+```
+
+预期：全部通过。
+
+- [ ] **步骤 6：运行态验证两个 Bridge 分片**
+
+启动两个 Bridge：
+
+```bash
+python3 -m bridge.mqtt_ros_bridge --robot-id turtlebot_001
+python3 -m bridge.mqtt_ros_bridge --robot-id turtlebot_002
+```
+
+验证 `/tf` 仍是公共 topic，且 frame 不冲突：
+
+```bash
+timeout 12 rostopic hz /tf
+timeout 6 rosrun tf tf_echo turtlebot_001/odom turtlebot_001/base_link
+timeout 6 rosrun tf tf_echo turtlebot_002/odom turtlebot_002/base_link
+timeout 8 rostopic echo -n 1 /turtlebot_001/odom/header
+timeout 8 rostopic echo -n 1 /turtlebot_002/odom/header
+```
+
+预期：两个 Bridge 都向公共 `/tf` 发布各自机器人 namespace 后的 transforms；`/turtlebot_001/odom` 和 `/turtlebot_002/odom` 互不串 frame。
+
+- [ ] **步骤 7：记录验证结果并 Commit**
+
+在 `docs/work-log-2026-06-17.md` 记录 Bridge 分片验证结果。
+
+```bash
+git add bridge/mqtt_ros_bridge.py tests/test_mqtt_ros_bridge.py docs/work-log-2026-06-17.md
+git commit -m "feat: 支持 Bridge 按机器人分片"
+```
+
 ## 最终验证清单
 
 完成所有已选择任务后运行：
@@ -748,6 +904,7 @@ timeout 12 rostopic hz /turtlebot_001/imu
 timeout 12 rostopic hz /turtlebot_001/scan
 timeout 8 rostopic echo -n 1 /turtlebot_001/odom/header
 timeout 6 rosrun tf tf_echo turtlebot_001/odom turtlebot_001/base_link
+timeout 6 rosrun tf tf_echo turtlebot_002/odom turtlebot_002/base_link
 ```
 
 成功标准：
@@ -756,4 +913,6 @@ timeout 6 rosrun tf tf_echo turtlebot_001/odom turtlebot_001/base_link
 - `/odom`、`/imu` 不因 JSON 转换出现明显掉频。
 - `/scan` 保持约 5Hz，RViz 不出现明显成批刷新。
 - 多机器人 frame 均带 robot_id 前缀，不出现 `base_link`、`odom`、`base_scan` 冲突。
+- `/tf` 与 `/tf_static` 保持公共 topic，可由单个或多个 Bridge 发布；隔离边界是 frame namespace，不是 TF topic namespace。
+- 如果启用 Bridge 分片，每个 Bridge 只消费自己负责的 `robot_id` MQTT topic，不重复消费 `robot/+/sensor/#`。
 - 前端摘要面板不解析高频 `/bin` payload，Qt 主进程 CPU 不因 sensor payload 解析上升。
