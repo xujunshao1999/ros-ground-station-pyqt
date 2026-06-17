@@ -44,6 +44,7 @@ from geometry_msgs.msg import TransformStamped
 from std_msgs.msg import String
 
 from protocol.messages import Message, MessageType, TopicResponseResult
+from protocol.binary_payloads import decode_sensor_binary
 from protocol.topics import (
     robot_cmd,
     station_discover,
@@ -103,6 +104,7 @@ class MqttRosBridge:
         self._fleet_static_tf_broadcaster = None
         self._fleet_static_tf_timer = None
         self._robot_static_transforms: Dict[str, Dict[str, TransformStamped]] = {}
+        self._binary_sensor_envelopes: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
         # Resolve config paths
         self._bridge_dir = Path(__file__).resolve().parent
@@ -507,6 +509,9 @@ class MqttRosBridge:
             if msg_type == "sensor":
                 sensor_name = parsed.get("name", "")
                 self._handle_sensor_data(robot_id, sensor_name, msg.payload)
+            elif msg_type == "sensor_binary":
+                sensor_name = parsed.get("name", "")
+                self._handle_sensor_binary(robot_id, sensor_name, msg.payload)
             elif msg_type == "sensor_meta":
                 sensor_name = parsed.get("name", "")
                 self._handle_sensor_meta(robot_id, sensor_name, msg.payload)
@@ -656,7 +661,6 @@ class MqttRosBridge:
         """
         total_start = time.monotonic()
         payload_size = len(payload)
-        is_large_payload = payload_size >= 256 * 1024
 
         # 1. Decode the JSON payload (moved first for auto-detection)
         try:
@@ -678,7 +682,78 @@ class MqttRosBridge:
             )
             return
 
-        # 2. Resolve ROS topic and message type
+        if data_dict.get("binary") is True:
+            with self._lock:
+                self._binary_sensor_envelopes[(robot_id, sensor_name)] = data_dict
+            logger.debug(
+                "[Bridge] Cached binary sensor envelope for %s/%s seq=%s",
+                robot_id,
+                sensor_name,
+                data_dict.get("seq"),
+            )
+            return
+
+        self._publish_sensor_dict(
+            robot_id,
+            sensor_name,
+            data_dict,
+            fallback_text=text,
+            payload_size=payload_size,
+            total_start=total_start,
+            decode_ms=decode_ms,
+        )
+
+    def _handle_sensor_binary(
+        self, robot_id: str, sensor_name: str, payload: bytes
+    ) -> None:
+        """Decode a binary sensor payload using the latest cached envelope."""
+        total_start = time.monotonic()
+        with self._lock:
+            envelope = self._binary_sensor_envelopes.get((robot_id, sensor_name))
+
+        if not envelope:
+            logger.warning(
+                "[Bridge] Binary sensor payload without envelope for %s/%s",
+                robot_id,
+                sensor_name,
+            )
+            return
+
+        try:
+            decode_start = time.monotonic()
+            data_dict = decode_sensor_binary(envelope, payload)
+            decode_ms = (time.monotonic() - decode_start) * 1000.0
+        except Exception as e:
+            logger.error(
+                "[Bridge] Failed to decode binary sensor data from %s/%s: %s",
+                robot_id,
+                sensor_name,
+                e,
+            )
+            return
+
+        self._publish_sensor_dict(
+            robot_id,
+            sensor_name,
+            data_dict,
+            fallback_text="",
+            payload_size=len(payload),
+            total_start=total_start,
+            decode_ms=decode_ms,
+        )
+
+    def _publish_sensor_dict(
+        self,
+        robot_id: str,
+        sensor_name: str,
+        data_dict: Dict[str, Any],
+        fallback_text: str,
+        payload_size: int,
+        total_start: float,
+        decode_ms: float,
+    ) -> None:
+        """Publish a decoded sensor dict to the appropriate ROS topic."""
+        is_large_payload = payload_size >= 256 * 1024
         is_canonical = sensor_name in self._CANONICAL_TOPICS
 
         with self._lock:
@@ -697,7 +772,7 @@ class MqttRosBridge:
                     robot_id, sensor_name,
                 )
                 self._publish_as_json(
-                    f"/{robot_id}/{sensor_name}", text
+                    f"/{robot_id}/{sensor_name}", fallback_text
                 )
                 return
 

@@ -1503,6 +1503,55 @@ class TestSensorSummary:
         assert any("OccupancyGrid: 100×50" in line for line in grid_lines)
         assert any("resolution: 0.050 m" in line for line in grid_lines)
 
+    def test_binary_laserscan_envelope_uses_msg_type_not_encoding(self):
+        envelope = {
+            "binary": True,
+            "topic": "/scan",
+            "msg_type": "sensor_msgs/LaserScan",
+            "encoding": "laser_scan_v1",
+            "payload_format": "float32_le",
+            "payload_size": 2880,
+            "ranges_len": 360,
+            "intensities_len": 360,
+        }
+
+        snapshot = SensorSummaryPanel.build_topic_snapshot(
+            robot_id="r1",
+            sensor_name="scan",
+            data=envelope,
+            now=100.0,
+            previous=None,
+        )
+
+        assert snapshot.msg_type == "sensor_msgs/LaserScan"
+        assert not any("Image" in line for line in snapshot.summary_lines)
+
+    def test_binary_occupancy_grid_envelope_uses_msg_type_not_encoding(self):
+        envelope = {
+            "binary": True,
+            "topic": "/map",
+            "msg_type": "nav_msgs/OccupancyGrid",
+            "encoding": "occupancy_grid_v1",
+            "payload_format": "int8",
+            "payload_size": 714,
+            "raw_payload_size": 147456,
+            "compression": "zlib",
+            "info": {"width": 384, "height": 384, "resolution": 0.05},
+            "data_len": 147456,
+        }
+
+        snapshot = SensorSummaryPanel.build_topic_snapshot(
+            robot_id="r1",
+            sensor_name="map",
+            data=envelope,
+            now=100.0,
+            previous=None,
+        )
+
+        assert snapshot.msg_type == "nav_msgs/OccupancyGrid"
+        assert any("OccupancyGrid: 384×384" in line for line in snapshot.summary_lines)
+        assert not any("Image" in line for line in snapshot.summary_lines)
+
     def test_panel_observation_list_comes_from_subscriptions(self, qt_app):
         panel = SensorSummaryPanel()
         panel.show()

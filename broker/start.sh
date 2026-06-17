@@ -33,6 +33,6 @@ echo "[ROS Ground Station] Config: $CONFIG_PATH"
 echo "[ROS Ground Station] Press Ctrl+C to stop"
 echo ""
 
-# Linux 下可能需要 sudo 运行（默认使用 1883 端口）
 cd "$PROJECT_ROOT"
-mosquitto -c "$CONFIG_PATH" -v
+mkdir -p "$PROJECT_ROOT/data"
+mosquitto -c "$CONFIG_PATH"

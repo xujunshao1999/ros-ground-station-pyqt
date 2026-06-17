@@ -42,9 +42,13 @@ class RecordingAgent(MockAgent):
         qos: int = 1,
         retain: bool = False,
     ) -> None:
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            decoded = payload
         self.published.append((
             topic,
-            json.loads(payload.decode("utf-8")),
+            decoded,
             qos,
             retain,
         ))
@@ -102,6 +106,73 @@ def test_publish_sensor_data_uses_subscription_qos():
     )
 
     assert agent.published[-1][2] == 2
+
+
+def test_publish_sensor_data_uses_mqtt_binary_transport_for_scan():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
+    agent._subscribed_topics["/scan"] = {
+        "msg_type": "sensor_msgs/LaserScan",
+        "freq_limit": 0.0,
+        "transport": "mqtt_binary",
+        "qos": 2,
+        "options": {},
+    }
+
+    agent.publish_sensor_data(
+        "/scan",
+        "sensor_msgs/LaserScan",
+        {
+            "header": {
+                "seq": 1,
+                "stamp": {"secs": 2, "nsecs": 3},
+                "frame_id": "base_scan",
+            },
+            "angle_min": 0.0,
+            "angle_max": 1.0,
+            "angle_increment": 0.5,
+            "time_increment": 0.0,
+            "scan_time": 0.1,
+            "range_min": 0.12,
+            "range_max": 3.5,
+            "ranges": [1.0, 2.0],
+            "intensities": [0.5, 0.25],
+        },
+    )
+
+    assert len(agent.published) == 2
+    envelope_topic, envelope, envelope_qos, _ = agent.published[0]
+    binary_topic, binary_payload, binary_qos, _ = agent.published[1]
+    assert envelope_topic == "robot/robot_001/sensor/scan"
+    assert envelope["binary"] is True
+    assert envelope["encoding"] == "laser_scan_v1"
+    assert envelope["msg_type"] == "sensor_msgs/LaserScan"
+    assert binary_topic == "robot/robot_001/sensor/scan/bin"
+    assert isinstance(binary_payload, bytes)
+    assert binary_payload[:1] != b"{"
+    assert envelope_qos == 2
+    assert binary_qos == 2
+
+
+def test_publish_sensor_data_keeps_json_transport_single_payload():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
+    agent._subscribed_topics["/scan"] = {
+        "msg_type": "sensor_msgs/LaserScan",
+        "freq_limit": 0.0,
+        "transport": "mqtt_json",
+        "qos": 1,
+        "options": {},
+    }
+
+    agent.publish_sensor_data(
+        "/scan",
+        "sensor_msgs/LaserScan",
+        {"ranges": [1.0], "intensities": [], "angle_min": 0.0, "angle_max": 0.0},
+    )
+
+    assert len(agent.published) == 1
+    assert agent.published[0][0] == "robot/robot_001/sensor/scan"
+    assert agent.published[0][1]["_msg_type"] == "sensor_msgs/LaserScan"
+    assert "binary" not in agent.published[0][1]
 
 
 def test_publish_sensor_data_can_retain_message():

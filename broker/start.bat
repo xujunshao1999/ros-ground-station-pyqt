@@ -48,4 +48,4 @@ echo [ROS Ground Station] Config: broker\mosquitto.conf
 echo [ROS Ground Station] Press Ctrl+C to stop
 echo.
 
-%MOSQUITTO_PATH% -c broker\mosquitto.conf -v
+%MOSQUITTO_PATH% -c broker\mosquitto.conf

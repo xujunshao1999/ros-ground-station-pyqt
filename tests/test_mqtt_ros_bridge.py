@@ -19,6 +19,8 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from protocol.binary_payloads import encode_sensor_binary
+
 # ---------------------------------------------------------------------------
 # Mock rospy and std_msgs.msg at sys.modules level before importing bridge
 #
@@ -407,6 +409,14 @@ class TestMqttRouting:
             bridge._on_mqtt_message(None, None, msg)
             spied.assert_called_once_with("robot_001", "camera", _SENSOR_DATA_PAYLOAD)
 
+    def test_route_sensor_binary(self, bridge: MqttRosBridge):
+        """robot/+/sensor/+/bin messages reach _handle_sensor_binary."""
+        payload = b"\x00\x01binary"
+        msg = MockMqttMsg("robot/robot_001/sensor/scan/bin", payload)
+        with patch.object(bridge, "_handle_sensor_binary") as spied:
+            bridge._on_mqtt_message(None, None, msg)
+            spied.assert_called_once_with("robot_001", "scan", payload)
+
     def test_route_status(self, bridge: MqttRosBridge):
         """robot/+/status messages reach _handle_status."""
         payload = json.dumps({"battery": 85.0}).encode("utf-8")
@@ -449,6 +459,66 @@ class TestMqttRouting:
             bridge._handle_event.assert_not_called()
             bridge._handle_cmd_ack.assert_not_called()
             bridge._handle_station_response.assert_not_called()
+
+
+# ===================================================================
+# 5b. TestBinarySensorData
+# ===================================================================
+
+class TestBinarySensorData:
+    """Binary sensor envelopes and payloads are decoded before ROS publish."""
+
+    def test_binary_laser_scan_roundtrip_publishes_ros_message(
+        self, bridge: MqttRosBridge
+    ):
+        source = {
+            "header": {
+                "seq": 1,
+                "stamp": {"secs": 2, "nsecs": 3},
+                "frame_id": "base_scan",
+            },
+            "angle_min": 0.0,
+            "angle_max": 1.0,
+            "angle_increment": 0.5,
+            "time_increment": 0.0,
+            "scan_time": 0.1,
+            "range_min": 0.12,
+            "range_max": 3.5,
+            "ranges": [1.0, 2.0],
+            "intensities": [0.5, 0.25],
+            "_msg_type": "sensor_msgs/LaserScan",
+        }
+        envelope, payload = encode_sensor_binary(
+            "/scan",
+            "sensor_msgs/LaserScan",
+            source,
+            seq=1,
+        )
+        publisher = MagicMock()
+        ros_msg = types.SimpleNamespace(ranges=[1.0, 2.0])
+
+        def fake_dict_to_ros_msg(data, msg_type):
+            assert msg_type == "sensor_msgs/LaserScan"
+            assert data["ranges"] == pytest.approx([1.0, 2.0])
+            assert data["intensities"] == pytest.approx([0.5, 0.25])
+            return ros_msg
+
+        with patch("bridge.mqtt_ros_bridge.dict_to_ros_msg", side_effect=fake_dict_to_ros_msg), \
+                patch.object(
+                    bridge,
+                    "_get_or_create_typed_publisher",
+                    return_value=publisher,
+                ) as get_pub, \
+                patch.object(bridge, "_wait_for_publisher_connection"):
+            bridge._handle_sensor_data(
+                "robot_001",
+                "scan",
+                json.dumps(envelope).encode("utf-8"),
+            )
+            bridge._handle_sensor_binary("robot_001", "scan", payload)
+
+        get_pub.assert_called_once_with("/robot_001/scan", type(ros_msg))
+        publisher.publish.assert_called_once_with(ros_msg)
 
 
 # ===================================================================

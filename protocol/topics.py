@@ -28,6 +28,7 @@ STATION_PREFIX = "station"
 _STATUS = "status"
 _SENSOR = "sensor"
 _META = "meta"
+_BIN = "bin"
 _CMD = "cmd"
 _CMD_ACK = "cmd/ack"
 _EVENT = "event"
@@ -82,6 +83,11 @@ def robot_sensor(robot_id: str, sensor_name: str) -> str:
 def robot_sensor_meta(robot_id: str, sensor_name: str) -> str:
     """robot/{id}/sensor/{name}/meta"""
     return f"{ROBOT_PREFIX}/{robot_id}/{_SENSOR}/{sensor_name}/{_META}"
+
+
+def robot_sensor_binary(robot_id: str, sensor_name: str) -> str:
+    """robot/{id}/sensor/{name}/bin"""
+    return f"{ROBOT_PREFIX}/{robot_id}/{_SENSOR}/{sensor_name}/{_BIN}"
 
 
 def robot_cmd(robot_id: str) -> str:
@@ -167,6 +173,11 @@ def all_robot_sensor_meta() -> str:
     return f"{ROBOT_PREFIX}/+/{_SENSOR}/+/{_META}"
 
 
+def all_robot_sensor_binary() -> str:
+    """robot/+/sensor/+/bin - 订阅所有机器人的二进制传感器数据"""
+    return f"{ROBOT_PREFIX}/+/{_SENSOR}/+/{_BIN}"
+
+
 def all_robot_to_robot(dst_id: str) -> str:
     """robot/+/to/{dst_id} - 订阅所有发往本机的机器人间数据"""
     return f"{ROBOT_PREFIX}/+/{_TO}/{dst_id}"
@@ -211,6 +222,9 @@ def parse_robot_topic(topic: str) -> Optional[Dict[str, str]]:
         if len(parts) > 3:
             result["type"] = "sensor"
             sensor_parts = parts[3:]
+            if sensor_parts[-1] == _BIN and len(sensor_parts) > 1:
+                result["type"] = "sensor_binary"
+                sensor_parts = sensor_parts[:-1]
             if sensor_parts[-1] == _META and len(sensor_parts) > 1:
                 result["type"] = "sensor_meta"
                 sensor_parts = sensor_parts[:-1]

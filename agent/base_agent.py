@@ -18,9 +18,10 @@ import os
 import threading
 import time
 from abc import ABC, abstractmethod
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from dataclasses import dataclass, field
 from enum import Enum
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import paho.mqtt.client as mqtt
@@ -51,6 +52,7 @@ from protocol.topics import (
     robot_status,
     robot_sensor,
     robot_sensor_meta,
+    robot_sensor_binary,
     robot_cmd,
     robot_cmd_ack,
     robot_event,
@@ -65,6 +67,7 @@ from protocol.topics import (
     station_config_query,
     station_config_response,
 )
+from protocol.binary_payloads import encode_sensor_binary, is_binary_supported
 from agent.rate_limiter import RateLimiter
 from agent.topic_handler import TopicHandler
 from protocol.topic_registry import TopicTier
@@ -313,6 +316,33 @@ class BaseAgent(ABC):
             sub_info = self._subscribed_topics[ros_topic]
             options = sub_info.get("options", {})
             qos = int(sub_info.get("qos", 1))
+            transport = sub_info.get("transport", "mqtt_json")
+            if transport == "mqtt_binary" and is_binary_supported(msg_type):
+                header = data.get("header", {})
+                seq = int(header.get("seq", int(time.time() * 1000)))
+                envelope, binary_payload = encode_sensor_binary(
+                    ros_topic,
+                    msg_type,
+                    data,
+                    seq=seq,
+                )
+                sensor_topic = self._get_sensor_mqtt_topic(ros_topic, TopicTier.MEDIUM)
+                binary_topic = self._get_sensor_binary_mqtt_topic(ros_topic)
+                self._mqtt_publish(
+                    sensor_topic,
+                    json.dumps(envelope, ensure_ascii=False).encode("utf-8"),
+                    qos=qos,
+                    retain=retain,
+                )
+                self._mqtt_publish(
+                    binary_topic,
+                    binary_payload,
+                    qos=qos,
+                    retain=retain,
+                )
+                if not bypass_rate_limit:
+                    self._rate_limiter.mark_sent(ros_topic)
+                return
             processed = self._topic_handler.process(
                 ros_topic, data, **options
             )
@@ -851,6 +881,7 @@ class BaseAgent(ABC):
         return {
             "msg_type": sub.get("msg_type", ""),
             "freq_limit": sub.get("freq_limit", self.config.default_freq_limit),
+            "transport": sub.get("transport", "mqtt_json"),
             "qos": int(sub.get("qos", 1)),
             "options": dict(sub.get("compression") or {}),
         }
@@ -863,6 +894,7 @@ class BaseAgent(ABC):
         return (
             current.get("msg_type") != desired["msg_type"]
             or current.get("freq_limit") != desired["freq_limit"]
+            or current.get("transport", "mqtt_json") != desired["transport"]
             or int(current.get("qos", 1)) != desired["qos"]
             or current.get("options", {}) != desired["options"]
         )
@@ -922,9 +954,6 @@ class BaseAgent(ABC):
 
     def _save_config(self) -> None:
         """持久化动态配置，保留原 YAML 中的其他字段。"""
-        from pathlib import Path
-        import yaml
-
         config_path = (
             Path(self.config.config_path)
             if self.config.config_path
@@ -1123,6 +1152,11 @@ class BaseAgent(ABC):
         # 简化话题名（移除开头的 /）
         name = ros_topic.lstrip("/").replace("/", "_")
         return robot_sensor(self.config.robot_id, name)
+
+    def _get_sensor_binary_mqtt_topic(self, ros_topic: str) -> str:
+        """获取传感器二进制数据的 MQTT topic"""
+        name = ros_topic.lstrip("/").replace("/", "_")
+        return robot_sensor_binary(self.config.robot_id, name)
 
     def _store_stream_data(self, topic: str, data: bytes) -> None:
         """存储流数据（供 HTTP 流服务端读取）"""

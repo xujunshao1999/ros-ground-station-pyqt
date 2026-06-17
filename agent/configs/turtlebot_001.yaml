@@ -66,43 +66,50 @@ reconnect_delay: 5.0
 
 # 地面站下发的持久订阅列表（启动时自动恢复）
 subscriptions:
-  - topic: "/odom"
-    msg_type: "nav_msgs/Odometry"
-    freq_limit: 30.0
-    transport: "mqtt_json"
-  - topic: "/scan"
-    msg_type: "sensor_msgs/LaserScan"
-    freq_limit: 0.0
-    transport: "mqtt_binary"
-    qos: 0
-    compression: {}
-  - topic: "/imu"
-    msg_type: "sensor_msgs/Imu"
-    freq_limit: 50.0
-    transport: "mqtt_json"
-  - topic: "/tf"
-    msg_type: "tf2_msgs/TFMessage"
-    freq_limit: 0.0
-    transport: "mqtt_json"
-    qos: 0
-    compression: {}
-  - topic: "/tf_static"
-    msg_type: "tf2_msgs/TFMessage"
-    freq_limit: 10.0
-    transport: "mqtt_json"
-  - topic: "/joint_states"
-    msg_type: "sensor_msgs/JointState"
-    freq_limit: 30.0
-    transport: "mqtt_json"
-  - topic: "/map"
-    msg_type: "nav_msgs/OccupancyGrid"
-    freq_limit: 0.2
-    transport: "mqtt_binary"
-    qos: 0
-    compression: {}
+- topic: /odom
+  msg_type: nav_msgs/Odometry
+  freq_limit: 30.0
+  transport: mqtt_json
+  qos: 1
+  compression: {}
+- topic: /imu
+  msg_type: sensor_msgs/Imu
+  freq_limit: 50.0
+  transport: mqtt_json
+  qos: 1
+  compression: {}
+- topic: /tf
+  msg_type: tf2_msgs/TFMessage
+  freq_limit: 0.0
+  transport: mqtt_json
+  qos: 0
+  compression: {}
+- topic: /tf_static
+  msg_type: tf2_msgs/TFMessage
+  freq_limit: 10.0
+  transport: mqtt_json
+  qos: 1
+  compression: {}
+- topic: /joint_states
+  msg_type: sensor_msgs/JointState
+  freq_limit: 30.0
+  transport: mqtt_json
+  qos: 1
+  compression: {}
+- topic: /scan
+  msg_type: sensor_msgs/LaserScan
+  freq_limit: 5.0
+  transport: mqtt_binary
+  qos: 1
+  compression: {}
+- topic: /map
+  msg_type: nav_msgs/OccupancyGrid
+  freq_limit: 1.0
+  transport: mqtt_binary
+  qos: 1
+  compression: {}
 
 # 编队通信规则（地面站下发，启动时自动恢复）
-fleet_rules: []
 # 格式示例：
 # fleet_rules:
 #   - topic: "/odom"
@@ -110,3 +117,13 @@ fleet_rules: []
 #     target: "robot_002"
 #     freq_limit: 2.0
 #     transport: "mqtt_json"
+fleet_rules:
+- enabled: false
+  src_topic: /odom
+  msg_type: nav_msgs/Odometry
+  targets:
+  - robot_id: turtlebot_002
+    dst_topic: /fleet/turtlebot_001/odom
+  freq_limit: 1.0
+  transport: mqtt_json
+  frame_policy: namespace

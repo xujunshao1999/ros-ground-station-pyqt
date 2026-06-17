@@ -55,7 +55,7 @@ class TestMqttClientInit:
 class TestMqttConnect:
     def test_connect_creates_paho_client(self, client, mock_paho):
         client.connect()
-        mock_paho.assert_called_once()
+        assert client._client is mock_paho
 
     def test_connect_sets_callbacks(self, client, mock_paho):
         client.connect()
@@ -232,6 +232,23 @@ class TestOnMessageStatus:
             "_payload_skipped": True,
             "_payload_bytes": len(mqtt_msg.payload),
         }
+
+    def test_binary_sensor_payload_is_not_json_decoded(self, client, mock_paho):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        mqtt_msg = MagicMock()
+        mqtt_msg.topic = "robot/robot_001/sensor/scan/bin"
+        mqtt_msg.payload = b"\x00\x01binary-payload"
+
+        client.connect()
+        with patch("qt_frontend.mqtt_client.json.loads") as mock_loads, \
+                patch("qt_frontend.mqtt_client.Message.from_json") as mock_from_json:
+            client._on_message(mock_paho, None, mqtt_msg)
+
+        mock_loads.assert_not_called()
+        mock_from_json.assert_not_called()
+        sensor_signal.assert_not_called()
 
     def test_topic_response_received(self, client, mock_paho):
         resp_signal = MagicMock()

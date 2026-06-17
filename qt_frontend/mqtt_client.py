@@ -199,6 +199,13 @@ class MqttClient:
     def _on_message(self, client, userdata, msg) -> None:
         try:
             robot_info = parse_robot_topic(msg.topic)
+            if robot_info and robot_info.get("type") == "sensor_binary":
+                logger.debug(
+                    "[MqttClient] Ignoring binary sensor payload on %s (%d bytes)",
+                    msg.topic,
+                    len(msg.payload),
+                )
+                return
             if robot_info and robot_info.get("type") == "sensor":
                 sensor_name = robot_info.get("name", "")
                 if self._should_summarize_sensor_payload(sensor_name, msg.payload):

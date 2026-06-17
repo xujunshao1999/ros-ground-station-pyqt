@@ -175,6 +175,9 @@ class SensorSummaryPanel(QWidget):
         embedded_msg_type = data.get("_msg_type")
         if isinstance(embedded_msg_type, str) and embedded_msg_type:
             return embedded_msg_type
+        protocol_msg_type = data.get("msg_type")
+        if isinstance(protocol_msg_type, str) and protocol_msg_type:
+            return protocol_msg_type
         if "ranges" in data:
             return "sensor_msgs/LaserScan"
         if "encoding" in data:
