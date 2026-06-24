@@ -67,6 +67,8 @@ map
 因此 serialized 数据面必须遵守以下规则：
 
 - MQTT topic 继续用 `robot/<robot_id>/sensor/<name>` 区分数据来源。
+- 只有订阅配置 `transport: mqtt_binary` 且 `(topic, msg_type)` 命中 ROS1 serialized allowlist 时，Agent 才能发布 `ros1_serialized_v1`。
+- 如果 allowlist 命中但订阅配置仍为 `transport: mqtt_json`，Agent 必须保留 JSON 路径，避免配置语义和实际传输方式不一致。
 - 普通 sensor topic 发布到地面站 ROS 时继续使用 `/<robot_id>/<topic>`，例如 `/turtlebot_001/odom`。
 - `/tf` 和 `/tf_static` 发布到公共 topic，但 Bridge 发布前必须反序列化并给 `frame_id`、`child_frame_id` 加 `robot_id` 前缀。
 - 允许多个 Bridge 进程同时发布 `/tf`，前提是每个进程只发布自己负责机器人的 namespace 后 frame。
@@ -290,6 +292,124 @@ python3 -m pytest tests/test_ros1_agent.py -q
 ```bash
 git add agent/ros1_agent.py tests/test_ros1_agent.py
 git commit -m "feat: 支持高频话题 ROS1 serialized 发布"
+```
+
+### 任务 2.1：Agent serialized fast path 必须受 transport 控制
+
+**背景：** 任务 2 已将 serialized fast path 从 `/tf` 专用扩展到 allowlist，但实现必须同时检查订阅配置的 `transport`。`ros1_serialized_v1` 是 `mqtt_binary` 传输下的一种 payload encoding；allowlist 只表示“这个 `(topic, msg_type)` 可以走 ROS1 serialized”，不应覆盖用户在配置中选择的 `mqtt_json`。
+
+**文件：**
+- 修改：`agent/ros1_agent.py`
+- 测试：`tests/test_ros1_agent.py`
+
+- [x] **步骤 1：编写失败的 transport 门控测试**
+
+在 `tests/test_ros1_agent.py` 增加：
+
+```python
+def test_allowlisted_topic_uses_json_when_transport_is_mqtt_json(monkeypatch):
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.is_ros_message_binary_supported",
+        lambda topic, msg_type: topic == "/odom" and msg_type == "nav_msgs/Odometry",
+    )
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: {"header": {"frame_id": "odom"}},
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 100.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_binary_data = MagicMock()
+    agent.publish_sensor_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        {"freq_limit": 100.0, "transport": "mqtt_json"},
+    )
+    captured_callback["callback"](_SerializableRosMsg(b"odom-raw"))
+
+    agent.publish_sensor_binary_data.assert_not_called()
+    agent.publish_sensor_data.assert_called_once_with(
+        "/odom",
+        "nav_msgs/Odometry",
+        {"header": {"frame_id": "odom"}},
+    )
+```
+
+同时保留 `test_allowlisted_topic_uses_ros1_serialized_fast_path`，并将其订阅 options 改为显式传入：
+
+```python
+{"freq_limit": 100.0, "transport": "mqtt_binary"}
+```
+
+- [x] **步骤 2：运行测试验证失败**
+
+运行：
+
+```bash
+python3 -m pytest tests/test_ros1_agent.py::test_allowlisted_topic_uses_json_when_transport_is_mqtt_json tests/test_ros1_agent.py::test_allowlisted_topic_uses_ros1_serialized_fast_path -q
+```
+
+预期：`test_allowlisted_topic_uses_json_when_transport_is_mqtt_json` 失败，原因是当前 Agent 只按 allowlist 判断，仍会调用 `publish_sensor_binary_data()`。
+
+- [x] **步骤 3：实现 transport + allowlist 双条件**
+
+在 `agent/ros1_agent.py` 的 `_on_topic_subscribed()` 中，在 callback 定义前读取 transport：
+
+```python
+        transport = options.get("transport", "mqtt_json")
+```
+
+将 callback 默认参数补充为：
+
+```python
+        def callback(
+            msg,
+            t=topic,
+            mt=msg_type,
+            tr=transport,
+            lpt=last_pub_time,
+            mi=min_interval,
+        ):
+```
+
+将 serialized fast path 判断改为：
+
+```python
+            if tr == "mqtt_binary" and is_ros_message_binary_supported(t, mt):
+```
+
+- [x] **步骤 4：运行 Agent 测试验证通过**
+
+运行：
+
+```bash
+python3 -m pytest tests/test_ros1_agent.py -q
+```
+
+预期：全部通过。
+
+- [x] **步骤 5：Commit**
+
+```bash
+git add agent/ros1_agent.py tests/test_ros1_agent.py docs/superpowers/plans/2026-06-17-ros1-serialized-data-plane.md
+git commit -m "fix: 按 transport 控制 serialized 快路径"
 ```
 
 ### 任务 3：Bridge 对 ROS message 对象做通用 frame namespace

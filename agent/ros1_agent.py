@@ -224,14 +224,22 @@ class ROS1Agent(BaseAgent):
         # rospy 没有原生限频，用 throttle 实现
         last_pub_time = {"t": 0.0}
         min_interval = 1.0 / freq if freq > 0 else 0.0
+        transport = options.get("transport", "mqtt_json")
 
-        def callback(msg, t=topic, mt=msg_type, lpt=last_pub_time, mi=min_interval):
+        def callback(
+            msg,
+            t=topic,
+            mt=msg_type,
+            tr=transport,
+            lpt=last_pub_time,
+            mi=min_interval,
+        ):
             now = time.time()
             if t != "/tf_static" and mi > 0 and (now - lpt["t"]) < mi:
                 return  # 限频：跳过
             lpt["t"] = now
 
-            if is_ros_message_binary_supported(t, mt):
+            if tr == "mqtt_binary" and is_ros_message_binary_supported(t, mt):
                 raw_payload = self._serialize_ros_message(msg)
                 if raw_payload is not None:
                     self.publish_sensor_binary_data(

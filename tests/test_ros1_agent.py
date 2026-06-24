@@ -206,7 +206,7 @@ def test_dynamic_tf_callback_uses_binary_fast_path(monkeypatch):
         agent,
         "/tf",
         "tf2_msgs/TFMessage",
-        {"freq_limit": 100.0},
+        {"freq_limit": 100.0, "transport": "mqtt_binary"},
     )
     captured_callback["callback"](_SerializableRosMsg(b"tf-raw"))
 
@@ -252,7 +252,7 @@ def test_allowlisted_topic_uses_ros1_serialized_fast_path(monkeypatch):
         agent,
         "/odom",
         "nav_msgs/Odometry",
-        {"freq_limit": 100.0},
+        {"freq_limit": 100.0, "transport": "mqtt_binary"},
     )
     captured_callback["callback"](_SerializableRosMsg(b"odom-raw"))
 
@@ -261,6 +261,51 @@ def test_allowlisted_topic_uses_ros1_serialized_fast_path(monkeypatch):
         "/odom",
         "nav_msgs/Odometry",
         b"odom-raw",
+    )
+
+
+def test_allowlisted_topic_uses_json_when_transport_is_mqtt_json(monkeypatch):
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.is_ros_message_binary_supported",
+        lambda topic, msg_type: topic == "/odom" and msg_type == "nav_msgs/Odometry",
+    )
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: {"header": {"frame_id": "odom"}},
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 100.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_binary_data = MagicMock()
+    agent.publish_sensor_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        {"freq_limit": 100.0, "transport": "mqtt_json"},
+    )
+    captured_callback["callback"](_SerializableRosMsg(b"odom-raw"))
+
+    agent.publish_sensor_binary_data.assert_not_called()
+    agent.publish_sensor_data.assert_called_once_with(
+        "/odom",
+        "nav_msgs/Odometry",
+        {"header": {"frame_id": "odom"}},
     )
 
 
