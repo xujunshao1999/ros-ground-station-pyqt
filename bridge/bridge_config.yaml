@@ -8,7 +8,7 @@ ros:
   master_uri: "http://localhost:11311"
   node_name: "mqtt_ros_bridge"
   max_update_frequency: 30.0
-  namespace_tf_frames: false  # set true for multi-robot to prefix frame_ids with robot_id/
+  namespace_tf_frames: true  # set true for multi-robot to prefix frame_ids with robot_id/
 
 heartbeat_timeout: 30.0  # seconds before marking robot offline
 transmit_config_path: "../config/transmit_config.yaml"

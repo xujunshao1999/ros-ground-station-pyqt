@@ -718,9 +718,10 @@ git commit -m "fix: 保护前端 serialized 传感器数据路径"
 **文件：**
 - 修改：`qt_frontend/config/transmit_config.yaml`
 - 修改：`agent/configs/turtlebot_001.yaml`
+- 修改：`bridge/bridge_config.yaml`
 - 文档：`docs/work-log-2026-06-17.md`
 
-- [ ] **步骤 1：先启用 `/tf_static`、`/odom`、`/imu` 的 serialized 路径**
+- [x] **步骤 1：先启用 `/tf_static`、`/odom`、`/imu` 的 serialized 路径**
 
 确认配置中保留：
 
@@ -741,7 +742,7 @@ git commit -m "fix: 保护前端 serialized 传感器数据路径"
 
 `/scan` 暂不在本步骤迁移，继续使用当前 `laser_scan_v1` 或现有配置。
 
-- [ ] **步骤 2：启动链路**
+- [x] **步骤 2：启动链路**
 
 运行：
 
@@ -752,7 +753,7 @@ docker compose up -d robot-turtlebot-001
 
 预期：机器人容器、broker、Bridge、Qt 前端正常启动。
 
-- [ ] **步骤 3：验证 MQTT envelope**
+- [x] **步骤 3：验证 MQTT envelope**
 
 运行：
 
@@ -764,7 +765,7 @@ timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/tf_static -C
 
 预期：envelope 中 `encoding=ros1_serialized_v1`、`payload_format=ros1_serialized`、`msg_type` 分别为 `nav_msgs/Odometry`、`sensor_msgs/Imu`、`tf2_msgs/TFMessage`。
 
-- [ ] **步骤 4：验证地面站 ROS topic 频率**
+- [x] **步骤 4：验证地面站 ROS topic 频率**
 
 运行：
 
@@ -777,7 +778,7 @@ timeout 12 rostopic hz /turtlebot_001/scan
 
 预期：`/tf` 接近容器内频率，`/turtlebot_001/odom` 和 `/turtlebot_001/imu` 不低于配置限频，`/turtlebot_001/scan` 保持约 5Hz。
 
-- [ ] **步骤 5：验证 frame namespace**
+- [x] **步骤 5：验证 frame namespace**
 
 运行：
 
@@ -789,7 +790,7 @@ timeout 6 rosrun tf tf_echo turtlebot_001/odom turtlebot_001/base_link
 
 预期：`header.frame_id` 已带 `turtlebot_001/` 前缀；`tf_echo` 可持续输出，不出现跨机器人 frame 冲突。
 
-- [ ] **步骤 6：记录验证结果并 Commit**
+- [x] **步骤 6：记录验证结果并 Commit**
 
 在 `docs/work-log-2026-06-17.md` 增加“ROS1 serialized 数据面迁移验证”小节，写入实际命令和结果。
 

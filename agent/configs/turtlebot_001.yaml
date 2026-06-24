@@ -69,14 +69,14 @@ subscriptions:
 - topic: /odom
   msg_type: nav_msgs/Odometry
   freq_limit: 30.0
-  transport: mqtt_json
-  qos: 1
+  transport: mqtt_binary
+  qos: 0
   compression: {}
 - topic: /imu
   msg_type: sensor_msgs/Imu
   freq_limit: 50.0
-  transport: mqtt_json
-  qos: 1
+  transport: mqtt_binary
+  qos: 0
   compression: {}
 - topic: /tf
   msg_type: tf2_msgs/TFMessage
@@ -87,7 +87,7 @@ subscriptions:
 - topic: /tf_static
   msg_type: tf2_msgs/TFMessage
   freq_limit: 10.0
-  transport: mqtt_json
+  transport: mqtt_binary
   qos: 1
   compression: {}
 - topic: /joint_states
@@ -98,9 +98,9 @@ subscriptions:
   compression: {}
 - topic: /scan
   msg_type: sensor_msgs/LaserScan
-  freq_limit: 5.0
+  freq_limit: 0.0
   transport: mqtt_binary
-  qos: 1
+  qos: 0
   compression: {}
 - topic: /map
   msg_type: nav_msgs/OccupancyGrid
