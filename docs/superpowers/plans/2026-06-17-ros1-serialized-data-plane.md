@@ -544,7 +544,7 @@ git commit -m "fix: 为 serialized 数据补齐 frame 命名空间"
 - 测试：`tests/test_mqtt_ros_bridge.py`
 - 测试：`tests/test_ros1_agent.py`
 
-- [ ] **步骤 1：编写 Bridge 失败测试**
+- [x] **步骤 1：编写 Bridge 失败测试**
 
 在 `tests/test_mqtt_ros_bridge.py` 的 `TestBinarySensorData` 类中增加：
 
@@ -588,7 +588,7 @@ def test_binary_tf_static_uses_static_transform_broadcaster(self, bridge: MqttRo
     get_pub.assert_not_called()
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -598,7 +598,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py::TestBinarySensorData::test_bina
 
 预期：失败，原因是 serialized `/tf_static` 目前会走普通 publisher。
 
-- [ ] **步骤 3：实现 serialized `/tf_static` 静态广播路径**
+- [x] **步骤 3：实现 serialized `/tf_static` 静态广播路径**
 
 在 `_publish_ros_binary_sensor()` 的 namespace 之后、普通 publisher 之前加入：
 
@@ -613,7 +613,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py::TestBinarySensorData::test_bina
                 return
 ```
 
-- [ ] **步骤 4：运行 TF static 相关测试**
+- [x] **步骤 4：运行 TF static 相关测试**
 
 运行：
 
@@ -623,7 +623,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py::TestBinarySensorData tests/test
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add bridge/mqtt_ros_bridge.py tests/test_mqtt_ros_bridge.py tests/test_ros1_agent.py

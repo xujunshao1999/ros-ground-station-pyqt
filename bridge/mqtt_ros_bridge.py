@@ -795,6 +795,15 @@ class MqttRosBridge:
             if self._namespace_tf_frames:
                 namespace_ros_message_frames(ros_msg, robot_id)
 
+            if full_topic == "/tf_static":
+                self._ensure_static_tf_broadcaster()
+                self._cache_robot_static_transforms(
+                    robot_id,
+                    list(getattr(ros_msg, "transforms", [])),
+                )
+                self._send_static_transforms(self._build_all_static_transforms())
+                return
+
             pub = self._get_or_create_typed_publisher(full_topic, type(ros_msg))
             self._wait_for_publisher_connection(full_topic, pub)
             publish_start = time.monotonic()

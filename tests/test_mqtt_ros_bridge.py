@@ -580,6 +580,46 @@ class TestBinarySensorData:
         assert isinstance(published, MockTfMessage)
         assert published.raw_payload == b"serialized-tf"
 
+    def test_binary_tf_static_uses_static_transform_broadcaster(
+        self, bridge: MqttRosBridge
+    ):
+        envelope, payload = encode_ros_message_binary(
+            "/tf_static",
+            "tf2_msgs/TFMessage",
+            b"serialized-static-tf",
+            seq=1,
+        )
+        ros_msg = MockTfMessage()
+        ros_msg.transforms = [MockTransformStamped()]
+
+        with patch(
+            "bridge.mqtt_ros_bridge._get_message_class",
+            return_value=lambda: ros_msg,
+        ), patch.object(
+            bridge,
+            "_ensure_static_tf_broadcaster",
+        ) as ensure_broadcaster, patch.object(
+            bridge,
+            "_cache_robot_static_transforms",
+        ) as cache_static, patch.object(
+            bridge,
+            "_send_static_transforms",
+        ) as send_static, patch.object(
+            bridge,
+            "_get_or_create_typed_publisher",
+        ) as get_pub:
+            bridge._handle_sensor_data(
+                "robot_001",
+                "tf_static",
+                json.dumps(envelope).encode("utf-8"),
+            )
+            bridge._handle_sensor_binary("robot_001", "tf_static", payload)
+
+        ensure_broadcaster.assert_called_once()
+        cache_static.assert_called_once()
+        send_static.assert_called_once()
+        get_pub.assert_not_called()
+
     def test_ros1_serialized_header_message_is_namespaced(
         self, bridge: MqttRosBridge
     ):
