@@ -49,7 +49,7 @@ class MqttClient:
     _LARGE_SENSOR_MSG_TYPES = {
         "map": "nav_msgs/OccupancyGrid",
     }
-    _IGNORED_SENSOR_TOPICS = frozenset({"tf"})
+    _IGNORED_SENSOR_TOPICS = frozenset({"tf", "tf_static"})
 
     def __init__(
         self,

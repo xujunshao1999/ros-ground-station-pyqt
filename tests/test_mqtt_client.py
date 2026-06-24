@@ -274,6 +274,62 @@ class TestOnMessageStatus:
         mock_from_json.assert_not_called()
         sensor_signal.assert_not_called()
 
+    def test_tf_static_sensor_payload_is_ignored_without_json_decode(
+        self, client, mock_paho
+    ):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        mqtt_msg = _make_mqtt_msg(
+            "robot/robot_001/sensor/tf_static",
+            json.dumps(
+                {
+                    "binary": True,
+                    "msg_type": "tf2_msgs/TFMessage",
+                    "encoding": "ros1_serialized_v1",
+                }
+            ),
+        )
+
+        client.connect()
+        with patch("qt_frontend.mqtt_client.json.loads") as mock_loads, \
+                patch("qt_frontend.mqtt_client.Message.from_json") as mock_from_json:
+            client._on_message(mock_paho, None, mqtt_msg)
+
+        mock_loads.assert_not_called()
+        mock_from_json.assert_not_called()
+        sensor_signal.assert_not_called()
+
+    def test_serialized_odom_envelope_is_summarized_but_bin_payload_is_ignored(
+        self, client, mock_paho
+    ):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        envelope_msg = _make_mqtt_msg(
+            "robot/robot_001/sensor/odom",
+            json.dumps(
+                {
+                    "binary": True,
+                    "topic": "/odom",
+                    "msg_type": "nav_msgs/Odometry",
+                    "encoding": "ros1_serialized_v1",
+                    "payload_format": "ros1_serialized",
+                    "payload_size": 128,
+                }
+            ),
+        )
+        bin_msg = MagicMock()
+        bin_msg.topic = "robot/robot_001/sensor/odom/bin"
+        bin_msg.payload = b"\x00\x01serialized"
+
+        client.connect()
+        client._on_message(mock_paho, None, envelope_msg)
+        client._on_message(mock_paho, None, bin_msg)
+
+        assert sensor_signal.call_count == 1
+        assert sensor_signal.call_args[0][2]["msg_type"] == "nav_msgs/Odometry"
+
     def test_topic_response_received(self, client, mock_paho):
         resp_signal = MagicMock()
         client.signals.topic_response_received.connect(resp_signal)

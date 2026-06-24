@@ -636,7 +636,7 @@ git commit -m "fix: 支持 TF static serialized 广播"
 - 修改：`qt_frontend/mqtt_client.py`
 - 测试：`tests/test_mqtt_client.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_mqtt_client.py` 增加：
 
@@ -668,10 +668,10 @@ def test_serialized_odom_envelope_is_summarized_but_bin_payload_is_ignored(clien
     client._on_message(mock_paho, None, bin_msg)
 
     assert sensor_signal.call_count == 1
-    assert sensor_signal.call_args[0][1]["msg_type"] == "nav_msgs/Odometry"
+    assert sensor_signal.call_args[0][2]["msg_type"] == "nav_msgs/Odometry"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -681,7 +681,7 @@ python3 -m pytest tests/test_mqtt_client.py::TestOnMessageStatus::test_serialize
 
 预期：如果当前前端已能总结二进制 envelope，则测试可能直接通过；若失败，按步骤 3 修复。
 
-- [ ] **步骤 3：保证 sensor `/bin` 全量忽略，`tf` envelope 全量忽略**
+- [x] **步骤 3：保证 sensor `/bin` 全量忽略，`tf` envelope 全量忽略**
 
 确认 `qt_frontend/mqtt_client.py` 满足：
 
@@ -696,7 +696,7 @@ if robot_info and robot_info.get("type") == "sensor":
 
 `_IGNORED_SENSOR_TOPICS` 只包含 `tf` 和 `tf_static`。`odom`、`imu` serialized envelope 可作为轻量摘要进入 UI，但 `/bin` 不进入 UI。
 
-- [ ] **步骤 4：运行前端 MQTT 测试**
+- [x] **步骤 4：运行前端 MQTT 测试**
 
 运行：
 
@@ -706,7 +706,7 @@ python3 -m pytest tests/test_mqtt_client.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add qt_frontend/mqtt_client.py tests/test_mqtt_client.py
