@@ -9,15 +9,26 @@ from typing import Any, Dict, List, Tuple
 
 ENCODING_LASER_SCAN = "laser_scan_v1"
 ENCODING_OCCUPANCY_GRID = "occupancy_grid_v1"
-ENCODING_TF_MESSAGE = "tf_message_ros1_v1"
+ENCODING_ROS1_SERIALIZED = "ros1_serialized_v1"
+ENCODING_TF_MESSAGE = ENCODING_ROS1_SERIALIZED
 
 _LASER_SCAN_TYPE = "sensor_msgs/LaserScan"
 _OCCUPANCY_GRID_TYPE = "nav_msgs/OccupancyGrid"
-_ROS_MESSAGE_BINARY_ENCODINGS = frozenset({ENCODING_TF_MESSAGE})
+_ROS1_SERIALIZED_TOPIC_TYPES = {
+    ("/tf", "tf2_msgs/TFMessage"),
+    ("/tf_static", "tf2_msgs/TFMessage"),
+    ("/odom", "nav_msgs/Odometry"),
+    ("/imu", "sensor_msgs/Imu"),
+}
+_ROS_MESSAGE_BINARY_ENCODINGS = frozenset({ENCODING_ROS1_SERIALIZED})
 
 
 def is_binary_supported(msg_type: str) -> bool:
     return msg_type in {_LASER_SCAN_TYPE, _OCCUPANCY_GRID_TYPE}
+
+
+def is_ros_message_binary_supported(topic: str, msg_type: str) -> bool:
+    return (topic, msg_type) in _ROS1_SERIALIZED_TOPIC_TYPES
 
 
 def is_ros_message_binary_encoding(envelope: Dict[str, Any]) -> bool:
@@ -34,7 +45,7 @@ def encode_ros_message_binary(
         "binary": True,
         "topic": topic,
         "msg_type": msg_type,
-        "encoding": ENCODING_TF_MESSAGE,
+        "encoding": ENCODING_ROS1_SERIALIZED,
         "seq": int(seq),
         "payload_format": "ros1_serialized",
         "payload_size": len(payload),

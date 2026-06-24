@@ -9,6 +9,7 @@ from protocol.binary_payloads import (
     encode_sensor_binary,
     is_binary_supported,
     is_ros_message_binary_encoding,
+    is_ros_message_binary_supported,
 )
 
 
@@ -121,3 +122,29 @@ def test_tf_message_binary_envelope_keeps_ros_payload_opaque():
     }
     assert payload == b"\x01\x02tf-bytes"
     assert is_ros_message_binary_encoding(envelope) is True
+
+
+def test_ros1_serialized_envelope_is_not_tf_specific():
+    envelope, payload = encode_ros_message_binary(
+        "/odom",
+        "nav_msgs/Odometry",
+        b"serialized-odom",
+        seq=12,
+    )
+
+    assert envelope["encoding"] == "ros1_serialized_v1"
+    assert envelope["payload_format"] == "ros1_serialized"
+    assert envelope["msg_type"] == "nav_msgs/Odometry"
+    assert envelope["topic"] == "/odom"
+    assert envelope["payload_size"] == len(payload)
+    assert payload == b"serialized-odom"
+    assert is_ros_message_binary_encoding(envelope) is True
+
+
+def test_ros1_serialized_supported_types_are_controlled_by_allowlist():
+    assert is_ros_message_binary_supported("/tf", "tf2_msgs/TFMessage") is True
+    assert is_ros_message_binary_supported("/tf_static", "tf2_msgs/TFMessage") is True
+    assert is_ros_message_binary_supported("/odom", "nav_msgs/Odometry") is True
+    assert is_ros_message_binary_supported("/imu", "sensor_msgs/Imu") is True
+    assert is_ros_message_binary_supported("/scan", "sensor_msgs/LaserScan") is False
+    assert is_ros_message_binary_supported("/map", "nav_msgs/OccupancyGrid") is False
