@@ -25,6 +25,7 @@ from agent.base_agent import AgentConfig, BaseAgent
 from agent.dict_to_ros_msg import dict_to_ros_msg
 from agent.frame_utils import namespace_message_frames
 from agent.ros_msg_converter import ros_msg_to_dict
+from protocol.binary_payloads import is_ros_message_binary_supported
 from protocol.messages import (
     CmdAction,
     CmdData,
@@ -230,14 +231,16 @@ class ROS1Agent(BaseAgent):
                 return  # 限频：跳过
             lpt["t"] = now
 
-            if t == "/tf" and mt == "tf2_msgs/TFMessage":
+            if is_ros_message_binary_supported(t, mt):
                 raw_payload = self._serialize_ros_message(msg)
                 if raw_payload is not None:
                     self.publish_sensor_binary_data(
                         t,
                         mt,
                         raw_payload,
-                        seq=self._tf_message_seq(msg),
+                        seq=self._message_seq(msg),
+                        bypass_rate_limit=(t == "/tf_static"),
+                        retain=(t == "/tf_static"),
                     )
                     return
 
@@ -277,11 +280,12 @@ class ROS1Agent(BaseAgent):
             return None
 
     @staticmethod
-    def _tf_message_seq(msg) -> Optional[int]:
-        transforms = getattr(msg, "transforms", None)
-        if not transforms:
-            return None
-        header = getattr(transforms[0], "header", None)
+    def _message_seq(msg) -> Optional[int]:
+        header = getattr(msg, "header", None)
+        if header is None:
+            transforms = getattr(msg, "transforms", None)
+            if transforms:
+                header = getattr(transforms[0], "header", None)
         seq = getattr(header, "seq", None)
         try:
             return int(seq) if seq is not None else None

@@ -78,7 +78,7 @@ map
 - 修改：`protocol/binary_payloads.py`
 - 测试：`tests/test_binary_payloads.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_binary_payloads.py` 增加：
 
@@ -109,7 +109,7 @@ def test_ros1_serialized_supported_types_are_controlled_by_allowlist():
     assert is_ros_message_binary_supported("/map", "nav_msgs/OccupancyGrid") is False
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -119,7 +119,7 @@ python3 -m pytest tests/test_binary_payloads.py::test_ros1_serialized_envelope_i
 
 预期：失败，原因是 `ros1_serialized_v1` 和 `is_ros_message_binary_supported()` 尚未实现。
 
-- [ ] **步骤 3：实现协议常量和 allowlist**
+- [x] **步骤 3：实现协议常量和 allowlist**
 
 在 `protocol/binary_payloads.py` 中：
 
@@ -149,7 +149,7 @@ def is_ros_message_binary_supported(topic: str, msg_type: str) -> bool:
 "encoding": ENCODING_ROS1_SERIALIZED,
 ```
 
-- [ ] **步骤 4：运行协议测试验证通过**
+- [x] **步骤 4：运行协议测试验证通过**
 
 运行：
 
@@ -159,7 +159,7 @@ python3 -m pytest tests/test_binary_payloads.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add protocol/binary_payloads.py tests/test_binary_payloads.py
@@ -172,7 +172,7 @@ git commit -m "refactor: 抽象 ROS1 serialized 数据面协议"
 - 修改：`agent/ros1_agent.py`
 - 测试：`tests/test_ros1_agent.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_ros1_agent.py` 增加：
 
@@ -223,7 +223,7 @@ def test_allowlisted_topic_uses_ros1_serialized_fast_path(monkeypatch):
     )
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -233,7 +233,7 @@ python3 -m pytest tests/test_ros1_agent.py::test_allowlisted_topic_uses_ros1_ser
 
 预期：失败，原因是 ROS1Agent 仍只对 `/tf` 走 fast path。
 
-- [ ] **步骤 3：实现 allowlist fast path**
+- [x] **步骤 3：实现 allowlist fast path**
 
 在 `agent/ros1_agent.py` import：
 
@@ -275,7 +275,7 @@ from protocol.binary_payloads import is_ros_message_binary_supported
             return None
 ```
 
-- [ ] **步骤 4：运行 Agent 测试验证通过**
+- [x] **步骤 4：运行 Agent 测试验证通过**
 
 运行：
 
@@ -285,7 +285,7 @@ python3 -m pytest tests/test_ros1_agent.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add agent/ros1_agent.py tests/test_ros1_agent.py

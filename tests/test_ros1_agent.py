@@ -218,6 +218,52 @@ def test_dynamic_tf_callback_uses_binary_fast_path(monkeypatch):
     )
 
 
+def test_allowlisted_topic_uses_ros1_serialized_fast_path(monkeypatch):
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.is_ros_message_binary_supported",
+        lambda topic, msg_type: topic == "/odom" and msg_type == "nav_msgs/Odometry",
+    )
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: (_ for _ in ()).throw(
+            AssertionError("serialized topic should not use JSON conversion")
+        ),
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 100.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_binary_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        {"freq_limit": 100.0},
+    )
+    captured_callback["callback"](_SerializableRosMsg(b"odom-raw"))
+
+    agent.publish_sensor_binary_data.assert_called_once()
+    assert agent.publish_sensor_binary_data.call_args[0][:3] == (
+        "/odom",
+        "nav_msgs/Odometry",
+        b"odom-raw",
+    )
+
+
 def test_fleet_rule_callback_sends_fleet_data(monkeypatch):
     monkeypatch.setattr(
         "agent.ros1_agent.ros_msg_to_dict",
