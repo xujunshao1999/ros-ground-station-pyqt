@@ -299,7 +299,7 @@ git commit -m "feat: 支持高频话题 ROS1 serialized 发布"
 - 修改：`bridge/mqtt_ros_bridge.py`
 - 测试：`tests/test_mqtt_ros_bridge.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_mqtt_ros_bridge.py` 增加 mock message：
 
@@ -349,7 +349,7 @@ def test_ros1_serialized_header_message_is_namespaced(self, bridge: MqttRosBridg
     assert published.header.frame_id == "robot_001/odom"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -359,7 +359,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py::TestBinarySensorData::test_ros1
 
 预期：失败，原因是 serialized 路径目前只处理 `tf2_msgs/TFMessage` frame。
 
-- [ ] **步骤 3：新增 ROS message frame namespace helper**
+- [x] **步骤 3：新增 ROS message frame namespace helper**
 
 在 `agent/frame_utils.py` 新增：
 
@@ -400,7 +400,7 @@ from agent.frame_utils import (
 
 保留 `_prefix_tf_message_frames()` 到本任务结束后删除，或直接改为调用 `namespace_ros_message_frames()`，避免重复逻辑。
 
-- [ ] **步骤 4：运行 Bridge 测试验证通过**
+- [x] **步骤 4：运行 Bridge 测试验证通过**
 
 运行：
 
@@ -410,7 +410,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add agent/frame_utils.py bridge/mqtt_ros_bridge.py tests/test_mqtt_ros_bridge.py

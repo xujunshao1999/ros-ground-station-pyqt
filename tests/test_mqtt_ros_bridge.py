@@ -136,6 +136,16 @@ class MockTfMessage:
         return self
 
 
+class MockHeaderMessage:
+    def __init__(self):
+        self.raw_payload = b""
+        self.header = types.SimpleNamespace(frame_id="odom")
+
+    def deserialize(self, payload):
+        self.raw_payload = payload
+        return self
+
+
 if "geometry_msgs" not in sys.modules:
     _mock_geometry_msgs = types.ModuleType("geometry_msgs")
     _mock_geometry_msgs_msg = types.ModuleType("geometry_msgs.msg")
@@ -569,6 +579,40 @@ class TestBinarySensorData:
         published = publisher.publish.call_args[0][0]
         assert isinstance(published, MockTfMessage)
         assert published.raw_payload == b"serialized-tf"
+
+    def test_ros1_serialized_header_message_is_namespaced(
+        self, bridge: MqttRosBridge
+    ):
+        bridge._namespace_tf_frames = True
+        envelope, payload = encode_ros_message_binary(
+            "/odom",
+            "nav_msgs/Odometry",
+            b"serialized-odom",
+            seq=10,
+        )
+        publisher = MagicMock()
+
+        with patch(
+            "bridge.mqtt_ros_bridge._get_message_class",
+            return_value=MockHeaderMessage,
+        ), patch.object(
+            bridge,
+            "_get_or_create_typed_publisher",
+            return_value=publisher,
+        ) as get_pub, patch.object(
+            bridge,
+            "_wait_for_publisher_connection",
+        ):
+            bridge._handle_sensor_data(
+                "robot_001",
+                "odom",
+                json.dumps(envelope).encode("utf-8"),
+            )
+            bridge._handle_sensor_binary("robot_001", "odom", payload)
+
+        get_pub.assert_called_once_with("/robot_001/odom", MockHeaderMessage)
+        published = publisher.publish.call_args[0][0]
+        assert published.header.frame_id == "robot_001/odom"
 
 
 # ===================================================================

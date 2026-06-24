@@ -54,7 +54,10 @@ from protocol.topics import (
     station_topic_request,
     parse_robot_topic,
 )
-from agent.frame_utils import namespace_frame_id, namespace_message_frames
+from agent.frame_utils import (
+    namespace_message_frames,
+    namespace_ros_message_frames,
+)
 from agent.dict_to_ros_msg import _get_message_class
 from bridge.dict_to_ros_msg import dict_to_ros_msg
 
@@ -789,8 +792,8 @@ class MqttRosBridge:
         )
 
         try:
-            if self._namespace_tf_frames and msg_type == "tf2_msgs/TFMessage":
-                self._prefix_tf_message_frames(ros_msg, robot_id)
+            if self._namespace_tf_frames:
+                namespace_ros_message_frames(ros_msg, robot_id)
 
             pub = self._get_or_create_typed_publisher(full_topic, type(ros_msg))
             self._wait_for_publisher_connection(full_topic, pub)
@@ -813,19 +816,7 @@ class MqttRosBridge:
 
     @staticmethod
     def _prefix_tf_message_frames(ros_msg, robot_id: str) -> None:
-        transforms = getattr(ros_msg, "transforms", [])
-        for transform in transforms:
-            header = getattr(transform, "header", None)
-            if header is not None:
-                header.frame_id = namespace_frame_id(
-                    getattr(header, "frame_id", ""),
-                    robot_id,
-                )
-            child_frame_id = getattr(transform, "child_frame_id", "")
-            transform.child_frame_id = namespace_frame_id(
-                child_frame_id,
-                robot_id,
-            )
+        namespace_ros_message_frames(ros_msg, robot_id)
 
     def _publish_sensor_dict(
         self,
