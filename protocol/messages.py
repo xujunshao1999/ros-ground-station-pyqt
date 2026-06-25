@@ -1,11 +1,5 @@
 from __future__ import annotations
 
-"""
-消息协议定义 - 地面站与机器人之间的通信消息格式
-
-所有跨网络消息必须符合此模块定义的格式，确保 Agent 与地面站解耦。
-"""
-
 import json
 import time
 import uuid
@@ -13,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+# 消息协议定义 - 地面站与机器人之间的通信消息格式。
+# 所有跨网络消息必须符合此模块定义的格式，确保 Agent 与地面站解耦。
 
 # ---------------------------------------------------------------------------
 # 协议版本
@@ -160,7 +156,7 @@ class DiscoverResponseData:
     request_id: str = ""
     robot_id: str = ""
     ros_version: str = ""
-    topics: List[Dict[str, str]] = field(default_factory=list)  # [{"topic": "/odom", "msg_type": "nav_msgs/Odometry"}]
+    topics: List[Dict[str, str]] = field(default_factory=list)
     ip: str = ""
     uptime: int = 0
 
@@ -207,6 +203,12 @@ class SensorMetaData:
     stream_url: str = ""
     size_bytes: int = 0
     freq_hz: float = 0.0
+    seq: int = 0
+    stamp: Dict[str, int] = field(default_factory=dict)
+    frame_id: str = ""
+    encoding: str = ""
+    payload_format: str = ""
+    payload_size: int = 0
 
 
 @dataclass

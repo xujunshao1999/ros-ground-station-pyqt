@@ -319,7 +319,7 @@ git commit -m "test: 增加 mock PointCloud2 数据工具"
 - 修改：`protocol/messages.py`
 - 测试：`tests/test_protocol_messages.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_protocol_messages.py` 增加：
 
@@ -351,7 +351,7 @@ def test_sensor_meta_message_includes_heavy_snapshot_fields(self, factory):
     assert msg.data["payload_size"] == 2048000
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -361,7 +361,7 @@ python3 -m pytest tests/test_protocol_messages.py::TestMessageFactory::test_sens
 
 预期：失败，原因是 `SensorMetaData` 尚未定义这些字段。
 
-- [ ] **步骤 3：扩展 SensorMetaData**
+- [x] **步骤 3：扩展 SensorMetaData**
 
 在 `protocol/messages.py` 中将 `SensorMetaData` 改为：
 
@@ -383,7 +383,7 @@ class SensorMetaData:
     payload_size: int = 0
 ```
 
-- [ ] **步骤 4：运行协议消息测试验证通过**
+- [x] **步骤 4：运行协议消息测试验证通过**
 
 运行：
 
@@ -393,7 +393,7 @@ python3 -m pytest tests/test_protocol_messages.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add protocol/messages.py tests/test_protocol_messages.py

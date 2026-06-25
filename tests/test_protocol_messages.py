@@ -1,32 +1,28 @@
 from __future__ import annotations
 
-"""协议消息层测试 - Message 序列化、反序列化、MessageFactory"""
-
 import json
 import time
 
 import pytest
 
 from protocol.messages import (
-    Message,
-    MessageFactory,
-    MessageType,
-    StatusData,
-    Position,
-    Velocity,
-    CmdData,
     CmdAckData,
-    EventData,
-    DiscoverData,
+    CmdAction,
+    CmdData,
     DiscoverResponseData,
+    EventData,
+    FleetData,
+    Message,
+    MessageType,
+    RobotMode,
+    SensorMetaData,
+    StatusData,
+    TopicAction,
     TopicRequestData,
     TopicResponseData,
-    SensorMetaData,
-    FleetData,
-    TopicAction,
-    RobotMode,
-    CmdAction,
 )
+
+# 协议消息层测试 - Message 序列化、反序列化、MessageFactory。
 
 
 class TestMessage:
@@ -204,7 +200,10 @@ class TestMessageFactory:
             request_id="req_001",
             robot_id="robot_001",
             ros_version="1",
-            topics=[{"topic": "/odom", "msg_type": "nav_msgs/Odometry"}, {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}],
+            topics=[
+                {"topic": "/odom", "msg_type": "nav_msgs/Odometry"},
+                {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
+            ],
             ip="192.168.1.10",
         )
         msg = factory.discover_response(resp)
@@ -244,6 +243,32 @@ class TestMessageFactory:
         msg = factory.sensor_meta(meta)
         assert msg.type == MessageType.SENSOR_META
         assert msg.data["stream_url"].startswith("http://")
+
+    def test_sensor_meta_message_includes_heavy_snapshot_fields(self, factory):
+        meta = SensorMetaData(
+            topic="/velodyne_points",
+            msg_type="sensor_msgs/PointCloud2",
+            transport="http_stream",
+            stream_url="http://192.168.1.10:8080/stream/velodyne_points",
+            size_bytes=2048000,
+            seq=12,
+            stamp={"secs": 1782370000, "nsecs": 120000000},
+            frame_id="velodyne",
+            encoding="ros1_serialized_v1",
+            payload_format="ros1_serialized",
+            payload_size=2048000,
+        )
+
+        msg = factory.sensor_meta(meta)
+
+        assert msg.type == MessageType.SENSOR_META
+        assert msg.data["stream_url"].startswith("http://")
+        assert msg.data["seq"] == 12
+        assert msg.data["stamp"]["secs"] == 1782370000
+        assert msg.data["frame_id"] == "velodyne"
+        assert msg.data["encoding"] == "ros1_serialized_v1"
+        assert msg.data["payload_format"] == "ros1_serialized"
+        assert msg.data["payload_size"] == 2048000
 
     def test_fleet_data_message(self, factory):
         """测试创建机器人间通信消息"""
