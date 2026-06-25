@@ -14,7 +14,7 @@ heartbeat_timeout: 30.0  # seconds before marking robot offline
 transmit_config_path: "../config/transmit_config.yaml"
 
 fleet_frames:
-  enabled: false
+  enabled: true
   global_frame: "global_map"
   robots:
     turtlebot_001:

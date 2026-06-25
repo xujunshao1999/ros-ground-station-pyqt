@@ -16,7 +16,7 @@ subscriptions:
   - topic: /tf
     msg_type: tf2_msgs/TFMessage
     freq_limit: 0.0
-    transport: mqtt_json
+    transport: mqtt_binary
     qos: 0
     compression: {}
   - topic: /tf_static
