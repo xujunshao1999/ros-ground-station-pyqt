@@ -1,17 +1,5 @@
 from __future__ import annotations
 
-"""
-Agent 抽象基类
-
-所有 Agent（Mock/ROS1/ROS2）的统一接口。
-Agent 的核心职责：
-1. 连接 MQTT Broker
-2. 上报机器人状态
-3. 接收地面站指令
-4. 按需转发话题数据（轻量/中等/重量分层）
-5. 响应发现请求和话题订阅请求
-"""
-
 import json
 import logging
 import os
@@ -20,61 +8,57 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import paho.mqtt.client as mqtt
 
-from protocol.messages import (
-    Message,
-    MessageType,
-    MessageFactory,
-    StatusData,
-    Position,
-    Velocity,
-    CmdData,
-    CmdAckData,
-    EventData,
-    DiscoverData,
-    DiscoverResponseData,
-    TopicRequestData,
-    TopicResponseData,
-    SensorMetaData,
-    FleetData,
-    ConfigSyncData,
-    ConfigResponseData,
-    TopicAction,
-    RobotMode,
-    CmdAction,
-)
-from protocol.topics import (
-    robot_status,
-    robot_sensor,
-    robot_sensor_meta,
-    robot_sensor_binary,
-    robot_cmd,
-    robot_cmd_ack,
-    robot_event,
-    robot_to_robot,
-    robot_to_robot_meta,
-    all_robot_to_robot,
-    all_robot_to_robot_meta,
-    station_discover,
-    station_topic_request,
-    station_topic_response,
-    station_config_sync,
-    station_config_query,
-    station_config_response,
-)
+from agent.rate_limiter import RateLimiter
+from agent.topic_handler import TopicHandler
 from protocol.binary_payloads import (
     encode_ros_message_binary,
     encode_sensor_binary,
     is_binary_supported,
 )
-from agent.rate_limiter import RateLimiter
-from agent.topic_handler import TopicHandler
+from protocol.messages import (
+    CmdAckData,
+    CmdData,
+    ConfigResponseData,
+    DiscoverResponseData,
+    EventData,
+    FleetData,
+    Message,
+    MessageFactory,
+    MessageType,
+    SensorMetaData,
+    StatusData,
+    TopicAction,
+    TopicResponseData,
+)
 from protocol.topic_registry import TopicTier
+from protocol.topics import (
+    all_robot_to_robot,
+    all_robot_to_robot_meta,
+    robot_cmd,
+    robot_cmd_ack,
+    robot_event,
+    robot_sensor,
+    robot_sensor_binary,
+    robot_sensor_meta,
+    robot_status,
+    robot_to_robot,
+    robot_to_robot_meta,
+    station_config_query,
+    station_config_response,
+    station_config_sync,
+    station_discover,
+    station_topic_request,
+    station_topic_response,
+)
+
+# Agent 抽象基类。所有 Agent（Mock/ROS1/ROS2）的统一接口。
+# 核心职责：连接 MQTT、上报状态、接收指令、转发分层话题数据、响应发现和订阅请求。
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +84,8 @@ class AgentConfig:
     status_interval: float = 2.0  # 状态上报间隔（秒）
     default_freq_limit: float = 10.0  # 默认话题频率上限（Hz）
     http_stream_port: int = 8080  # 重量话题 HTTP 流端口
+    stream_public_host: str = ""  # Bridge 可访问的 HTTP stream host
+    stream_base_url: str = ""  # 显式覆盖完整 stream base URL，例如 http://host:8080
     auto_reconnect: bool = True  # 自动重连
     reconnect_delay: float = 5.0  # 重连延迟（秒）
     subscriptions: list = field(default_factory=list)  # 持久订阅列表
@@ -145,6 +131,7 @@ class AgentConfig:
         known_keys = {
             "robot_id", "broker_host", "broker_port",
             "status_interval", "default_freq_limit", "http_stream_port",
+            "stream_public_host", "stream_base_url",
             "auto_reconnect", "reconnect_delay",
             "subscriptions", "fleet_rules",
             "username", "password", "ros_master_uri", "ros_namespace",
@@ -160,6 +147,8 @@ class AgentConfig:
             status_interval=raw.get("status_interval", 2.0),
             default_freq_limit=raw.get("default_freq_limit", 10.0),
             http_stream_port=raw.get("http_stream_port", 8080),
+            stream_public_host=raw.get("stream_public_host", ""),
+            stream_base_url=raw.get("stream_base_url", ""),
             auto_reconnect=raw.get("auto_reconnect", True),
             reconnect_delay=raw.get("reconnect_delay", 5.0),
             subscriptions=raw.get("subscriptions", []),
@@ -426,6 +415,52 @@ class BaseAgent(ABC):
         if not bypass_rate_limit:
             self._rate_limiter.mark_sent(ros_topic)
 
+    def publish_heavy_snapshot_data(
+        self,
+        ros_topic: str,
+        msg_type: str,
+        payload: bytes,
+        seq: Optional[int] = None,
+        stamp: Optional[dict] = None,
+        frame_id: str = "",
+        retain: bool = False,
+    ) -> None:
+        """发布重型 ROS serialized snapshot，并通过 MQTT 发送 meta 信令。"""
+        if ros_topic not in self._subscribed_topics:
+            return
+        if not self._rate_limiter.can_send(ros_topic):
+            return
+
+        sub_info = self._subscribed_topics[ros_topic]
+        qos = int(sub_info.get("qos", 0))
+        self._store_stream_data(ros_topic, payload)
+        self._start_stream_server()
+
+        meta_msg = self._factory.sensor_meta(SensorMetaData(
+            topic=ros_topic,
+            msg_type=msg_type,
+            transport="http_stream",
+            stream_url=self._get_stream_url(ros_topic),
+            size_bytes=len(payload),
+            seq=seq if seq is not None else int(time.time() * 1000),
+            stamp=stamp or {},
+            frame_id=frame_id,
+            encoding="ros1_serialized_v1",
+            payload_format="ros1_serialized",
+            payload_size=len(payload),
+        ))
+        meta_topic = robot_sensor_meta(
+            self.config.robot_id,
+            ros_topic.lstrip("/").replace("/", "_"),
+        )
+        self._mqtt_publish(
+            meta_topic,
+            meta_msg.to_json().encode("utf-8"),
+            qos=qos,
+            retain=retain,
+        )
+        self._rate_limiter.mark_sent(ros_topic)
+
     # ============================================================
     # 机器人间通信
     # ============================================================
@@ -597,7 +632,11 @@ class BaseAgent(ABC):
             # 启动状态上报循环
             self._start_status_loop()
         else:
-            rc_val = reason_code if isinstance(reason_code, int) else getattr(reason_code, 'value', -1)
+            rc_val = (
+                reason_code
+                if isinstance(reason_code, int)
+                else getattr(reason_code, "value", -1)
+            )
             logger.error(f"[Agent] Connection failed with code: {rc_val}")
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties) -> None:
@@ -656,7 +695,10 @@ class BaseAgent(ABC):
             ip=self._get_local_ip(),
             topics=topics,  # 直接传递完整列表 [{"topic": ..., "msg_type": ..., "description": ...}]
         ))
-        self._mqtt_publish(station_topic_response(self.config.robot_id), response.to_json().encode("utf-8"))
+        self._mqtt_publish(
+            station_topic_response(self.config.robot_id),
+            response.to_json().encode("utf-8"),
+        )
 
     def _handle_command(self, message: Message) -> None:
         """处理控制指令"""
@@ -804,7 +846,7 @@ class BaseAgent(ABC):
 
     def _handle_config_sync(self, message: Message) -> None:
         """处理地面站下发的配置同步"""
-        logger.info(f"[Agent] Received config sync from station")
+        logger.info("[Agent] Received config sync from station")
         data = message.data
 
         has_subscriptions = "subscriptions" in data
@@ -837,7 +879,7 @@ class BaseAgent(ABC):
 
     def _handle_config_query(self, message: Message) -> None:
         """处理地面站发来的配置查询"""
-        logger.info(f"[Agent] Received config query from station")
+        logger.info("[Agent] Received config query from station")
 
         response = self._factory.config_response(ConfigResponseData(
             robot_id=self.config.robot_id,
@@ -1240,6 +1282,16 @@ class BaseAgent(ABC):
         """获取传感器二进制数据的 MQTT topic"""
         name = ros_topic.lstrip("/").replace("/", "_")
         return robot_sensor_binary(self.config.robot_id, name)
+
+    def _get_stream_base_url(self) -> str:
+        if self.config.stream_base_url:
+            return self.config.stream_base_url.rstrip("/")
+        host = self.config.stream_public_host or self._get_local_ip()
+        return f"http://{host}:{self.config.http_stream_port}"
+
+    def _get_stream_url(self, ros_topic: str) -> str:
+        name = ros_topic.lstrip("/")
+        return f"{self._get_stream_base_url()}/stream/{name}"
 
     def _store_stream_data(self, topic: str, data: bytes) -> None:
         """存储流数据（供 HTTP 流服务端读取）"""

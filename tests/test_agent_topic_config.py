@@ -7,7 +7,10 @@ import yaml
 
 from agent.base_agent import AgentConfig
 from agent.mock_agent import MockAgent
+from agent.mock_pointcloud2_data import FakePointCloud2Message, build_pointcloud2_dict
 from protocol.messages import Message, MessageType
+
+# Agent 订阅配置与重型 snapshot 发布测试。
 
 
 class RecordingAgent(MockAgent):
@@ -52,6 +55,9 @@ class RecordingAgent(MockAgent):
             qos,
             retain,
         ))
+
+    def _start_stream_server(self) -> None:
+        return
 
 
 def test_topic_request_subscribe_updates_runtime_and_persistent_config():
@@ -204,6 +210,53 @@ def test_publish_sensor_data_can_retain_message():
 
     assert agent.published[-1][0] == "robot/robot_001/sensor/tf_static"
     assert agent.published[-1][3] is True
+
+
+def test_publish_heavy_snapshot_data_stores_stream_and_publishes_meta():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_001", http_stream_port=18080))
+    agent.config.stream_public_host = "10.0.0.2"
+    agent._subscribed_topics["/velodyne_points"] = {
+        "msg_type": "sensor_msgs/PointCloud2",
+        "freq_limit": 2.0,
+        "transport": "http_stream",
+        "qos": 0,
+        "options": {},
+    }
+    agent._stream_data = {}
+
+    data = build_pointcloud2_dict(
+        frame_id="velodyne",
+        seq=7,
+        stamp={"secs": 1, "nsecs": 2},
+    )
+    msg = FakePointCloud2Message.from_dict(data)
+    raw_payload = bytes(msg.data)
+
+    agent.publish_heavy_snapshot_data(
+        "/velodyne_points",
+        "sensor_msgs/PointCloud2",
+        raw_payload,
+        seq=msg.header.seq,
+        stamp={"secs": msg.header.stamp.secs, "nsecs": msg.header.stamp.nsecs},
+        frame_id=msg.header.frame_id,
+    )
+
+    assert agent._stream_data["/velodyne_points"] == raw_payload
+    topic, meta_payload, qos, retain = agent.published[-1]
+    assert topic == "robot/robot_001/sensor/velodyne_points/meta"
+    assert qos == 0
+    assert retain is False
+    assert meta_payload["type"] == "sensor_meta"
+    assert meta_payload["data"]["topic"] == "/velodyne_points"
+    assert meta_payload["data"]["msg_type"] == "sensor_msgs/PointCloud2"
+    assert meta_payload["data"]["transport"] == "http_stream"
+    assert meta_payload["data"]["stream_url"] == "http://10.0.0.2:18080/stream/velodyne_points"
+    assert meta_payload["data"]["encoding"] == "ros1_serialized_v1"
+    assert meta_payload["data"]["payload_format"] == "ros1_serialized"
+    assert meta_payload["data"]["payload_size"] == len(raw_payload)
+    assert meta_payload["data"]["seq"] == 7
+    assert meta_payload["data"]["stamp"] == {"secs": 1, "nsecs": 2}
+    assert meta_payload["data"]["frame_id"] == "velodyne"
 
 
 def test_topic_request_unsubscribe_removes_runtime_and_persistent_config():
@@ -452,6 +505,23 @@ def test_agent_config_tracks_missing_source_path_for_first_save(tmp_path):
     config = AgentConfig.from_yaml(str(config_path))
 
     assert config.config_path == str(config_path)
+
+
+def test_agent_config_loads_stream_public_url_fields(tmp_path):
+    config_path = tmp_path / "agent.yaml"
+    config_path.write_text(
+        "robot_id: robot_001\n"
+        "http_stream_port: 18080\n"
+        "stream_public_host: 10.0.0.2\n"
+        "stream_base_url: http://station-reachable:18080/base\n",
+        encoding="utf-8",
+    )
+
+    config = AgentConfig.from_yaml(str(config_path))
+
+    assert config.http_stream_port == 18080
+    assert config.stream_public_host == "10.0.0.2"
+    assert config.stream_base_url == "http://station-reachable:18080/base"
 
 
 def test_save_config_updates_subscriptions_and_fleet_rules(tmp_path):

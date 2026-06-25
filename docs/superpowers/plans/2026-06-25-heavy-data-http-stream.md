@@ -465,7 +465,7 @@ git commit -m "config: 将 PointCloud2 归入重型数据通道"
 - 修改：`agent/base_agent.py`
 - 测试：`tests/test_agent_topic_config.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_agent_topic_config.py` 中增加：
 
@@ -519,7 +519,7 @@ def test_publish_heavy_snapshot_data_stores_stream_and_publishes_meta():
     assert meta_payload["data"]["frame_id"] == "velodyne"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -529,7 +529,7 @@ python3 -m pytest tests/test_agent_topic_config.py::test_publish_heavy_snapshot_
 
 预期：失败，原因是 `publish_heavy_snapshot_data()` 尚未实现，`AgentConfig` 也没有 `stream_public_host` 字段。
 
-- [ ] **步骤 3：扩展 AgentConfig**
+- [x] **步骤 3：扩展 AgentConfig**
 
 在 `agent/base_agent.py` 的 `AgentConfig` 中新增：
 
@@ -551,7 +551,7 @@ stream_public_host=raw.get("stream_public_host", ""),
 stream_base_url=raw.get("stream_base_url", ""),
 ```
 
-- [ ] **步骤 4：实现 stream URL 构造**
+- [x] **步骤 4：实现 stream URL 构造**
 
 在 `agent/base_agent.py` 中新增：
 
@@ -567,7 +567,7 @@ stream_base_url=raw.get("stream_base_url", ""),
         return f"{self._get_stream_base_url()}/stream/{name}"
 ```
 
-- [ ] **步骤 5：实现 heavy snapshot 发布 helper**
+- [x] **步骤 5：实现 heavy snapshot 发布 helper**
 
 在 `agent/base_agent.py` 中新增：
 
@@ -615,7 +615,7 @@ stream_base_url=raw.get("stream_base_url", ""),
         self._rate_limiter.mark_sent(ros_topic)
 ```
 
-- [ ] **步骤 6：运行 Agent 配置测试验证通过**
+- [x] **步骤 6：运行 Agent 配置测试验证通过**
 
 运行：
 
@@ -625,7 +625,7 @@ python3 -m pytest tests/test_agent_topic_config.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 7：Commit**
+- [x] **步骤 7：Commit**
 
 ```bash
 git add agent/base_agent.py tests/test_agent_topic_config.py
