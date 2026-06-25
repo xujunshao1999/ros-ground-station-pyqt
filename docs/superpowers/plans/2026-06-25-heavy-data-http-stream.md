@@ -406,7 +406,7 @@ git commit -m "feat: 扩展重型数据 meta 字段"
 - 修改：`protocol/topic_registry.py`
 - 测试：`tests/test_protocol_registry.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 更新或新增以下测试：
 
@@ -419,7 +419,7 @@ def test_pointcloud2_is_heavy_http_stream():
     assert info.default_freq_limit == 2
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -429,7 +429,7 @@ python3 -m pytest tests/test_protocol_registry.py::test_pointcloud2_is_heavy_htt
 
 预期：失败，原因是当前 `sensor_msgs/PointCloud2` 注册为 `MEDIUM`。
 
-- [ ] **步骤 3：修改 registry**
+- [x] **步骤 3：修改 registry**
 
 在 `protocol/topic_registry.py` 中将 PointCloud2 条目改为：
 
@@ -442,7 +442,7 @@ python3 -m pytest tests/test_protocol_registry.py::test_pointcloud2_is_heavy_htt
 
 保留 `sensor_msgs/PointCloud` 为 `MEDIUM`，除非后续单独验证旧点云类型。
 
-- [ ] **步骤 4：运行 registry 测试验证通过**
+- [x] **步骤 4：运行 registry 测试验证通过**
 
 运行：
 
@@ -452,7 +452,7 @@ python3 -m pytest tests/test_protocol_registry.py -q
 
 预期：全部通过。如有旧测试断言 PointCloud2 为 `MEDIUM`，同步改为 `HEAVY/http_stream`。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add protocol/topic_registry.py tests/test_protocol_registry.py

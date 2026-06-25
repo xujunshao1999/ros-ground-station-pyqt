@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-"""话题类型注册表测试 - Tier 分类、查询、自定义注册"""
-
-import pytest
-
 from protocol.topic_registry import (
-    TopicRegistry,
     TopicInfo,
+    TopicRegistry,
     TopicTier,
     default_registry,
 )
+
+# 话题类型注册表测试 - Tier 分类、查询、自定义注册。
+
+
+def test_pointcloud2_is_heavy_http_stream():
+    info = default_registry.get("sensor_msgs/PointCloud2")
+
+    assert info.tier == TopicTier.HEAVY
+    assert default_registry.get_transport_type("sensor_msgs/PointCloud2") == "http_stream"
+    assert info.default_freq_limit == 2
 
 
 class TestTopicRegistry:
@@ -122,7 +128,7 @@ class TestTopicInfo:
         assert imu.default_freq_limit == 50
 
         pointcloud = registry.get("sensor_msgs/PointCloud2")
-        assert pointcloud.default_freq_limit == 5
+        assert pointcloud.default_freq_limit == 2
 
     def test_compression_defaults(self):
         """部分类型有压缩默认选项"""
