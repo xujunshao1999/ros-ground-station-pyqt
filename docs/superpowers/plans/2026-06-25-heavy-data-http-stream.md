@@ -1157,7 +1157,7 @@ git commit -m "fix: 修正重型数据 topic 发布路径"
 - 修改：`agent/base_agent.py`
 - 测试：`tests/test_agent_topic_config.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_agent_topic_config.py` 增加：
 
@@ -1189,7 +1189,7 @@ def test_publish_heavy_snapshot_data_does_not_publish_meta_when_stream_server_fa
     assert agent.published == []
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -1199,7 +1199,7 @@ python3 -m pytest tests/test_agent_topic_config.py::test_publish_heavy_snapshot_
 
 预期：失败，原因是当前即使 `_stream_server` 仍为 `None` 也会继续发布 meta。
 
-- [ ] **步骤 3：实现 server 可用性检查**
+- [x] **步骤 3：实现 server 可用性检查**
 
 在 `agent/base_agent.py` 的 `publish_heavy_snapshot_data()` 中，调用 `_start_stream_server()` 后增加检查：
 
@@ -1214,7 +1214,7 @@ python3 -m pytest tests/test_agent_topic_config.py::test_publish_heavy_snapshot_
             return
 ```
 
-- [ ] **步骤 4：运行 Agent 配置测试验证通过**
+- [x] **步骤 4：运行 Agent 配置测试验证通过**
 
 运行：
 
@@ -1224,7 +1224,7 @@ python3 -m pytest tests/test_agent_topic_config.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add agent/base_agent.py tests/test_agent_topic_config.py

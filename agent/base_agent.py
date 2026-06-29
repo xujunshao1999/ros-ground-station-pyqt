@@ -435,6 +435,12 @@ class BaseAgent(ABC):
         qos = int(sub_info.get("qos", 0))
         self._store_stream_data(ros_topic, payload)
         self._start_stream_server()
+        if self._stream_server is None:
+            logger.error(
+                "[Agent] HTTP stream server is not available; skip heavy meta for %s",
+                ros_topic,
+            )
+            return
 
         meta_msg = self._factory.sensor_meta(SensorMetaData(
             topic=ros_topic,

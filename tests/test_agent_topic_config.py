@@ -57,7 +57,7 @@ class RecordingAgent(MockAgent):
         ))
 
     def _start_stream_server(self) -> None:
-        return
+        self._stream_server = object()
 
 
 def test_topic_request_subscribe_updates_runtime_and_persistent_config():
@@ -290,6 +290,35 @@ def test_publish_heavy_snapshot_data_stores_stream_and_publishes_meta():
     assert meta_payload["data"]["seq"] == 7
     assert meta_payload["data"]["stamp"] == {"secs": 1, "nsecs": 2}
     assert meta_payload["data"]["frame_id"] == "velodyne"
+
+
+def test_publish_heavy_snapshot_data_does_not_publish_meta_when_stream_server_fails():
+    class FailingStreamAgent(RecordingAgent):
+        def _start_stream_server(self) -> None:
+            self._stream_server = None
+
+    agent = FailingStreamAgent(
+        AgentConfig(robot_id="robot_001", http_stream_port=18080)
+    )
+    agent.config.stream_public_host = "10.0.0.2"
+    agent._subscribed_topics["/velodyne_points"] = {
+        "msg_type": "sensor_msgs/PointCloud2",
+        "freq_limit": 2.0,
+        "transport": "http_stream",
+        "qos": 0,
+        "options": {},
+    }
+
+    agent.publish_heavy_snapshot_data(
+        "/velodyne_points",
+        "sensor_msgs/PointCloud2",
+        b"raw-pointcloud",
+        seq=1,
+        stamp={"secs": 1, "nsecs": 2},
+        frame_id="velodyne",
+    )
+
+    assert agent.published == []
 
 
 def test_topic_request_unsubscribe_removes_runtime_and_persistent_config():
