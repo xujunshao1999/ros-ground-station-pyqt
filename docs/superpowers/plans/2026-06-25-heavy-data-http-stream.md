@@ -1344,7 +1344,9 @@ git commit -m "config: 增加重型数据 HTTP stream 示例"
 ## 任务 8：运行态验证
 
 **文件：**
-- 不修改代码；执行验证命令并记录结果。
+- 创建：`agent/mock_pointcloud2_publisher.py`
+- 测试：`tests/test_mock_pointcloud2_publisher.py`
+- 执行验证命令并记录结果。
 
 - [ ] **步骤 1：启动链路**
 
@@ -1374,9 +1376,37 @@ rostopic list | grep -E "points|cloud|velodyne"
 
 预期：如果机器人 ROS 环境没有点云话题，记录为“运行态 PointCloud2 需要实机或额外仿真传感器验证”，不要用地面站本地 ROS topic 结果冒充机器人侧数据源。
 
-- [ ] **步骤 3：订阅 PointCloud2**
+- [ ] **步骤 3：如无真实点云，准备 mock PointCloud2 publisher 脚本**
 
-如果存在 `/velodyne_points` 或其它 PointCloud2 话题，在配置中启用：
+如果步骤 2 没有发现 `/velodyne_points`、`/camera/depth/points` 或其它真实 `sensor_msgs/PointCloud2` 话题，可以在机器人容器 ROS 环境里启动一个 mock publisher 作为额外仿真传感器。这个 publisher 使用与任务 1 `agent/mock_pointcloud2_data.py` 相同的确定性 XYZ 点阵，但发布的是 ROS 原生 `sensor_msgs.msg.PointCloud2`，不是单元测试用的 `FakePointCloud2Message`。
+
+先新增脚本测试：
+
+```bash
+python3 -m pytest tests/test_mock_pointcloud2_publisher.py -q
+```
+
+预期：测试覆盖默认 topic `/velodyne_points`、默认 `frame_id=velodyne`、默认频率 2Hz、复用任务 1 的点阵，以及在 fake `rospy` 下能构造并发布一帧 ROS PointCloud2。
+
+脚本运行方式：
+
+```bash
+docker compose exec robot-turtlebot-001 bash -lc 'source /opt/ros/noetic/setup.bash && cd /app && python3 -m agent.mock_pointcloud2_publisher --topic /velodyne_points --frame-id velodyne --rate 2.0'
+```
+
+该命令会占用当前终端持续发布数据。若需要后续命令在同一个终端继续执行，可以另开终端运行它，或用后台方式启动并记录 PID。`robot-turtlebot-001` 的 compose 配置已将仓库内 `./agent` 挂载到容器 `/app/agent`，因此修改宿主机脚本后容器内可直接运行。
+
+启动后在机器人容器内确认：
+
+```bash
+docker compose exec robot-turtlebot-001 bash -lc 'source /opt/ros/noetic/setup.bash && rostopic info /velodyne_points && timeout 8 rostopic echo -n 1 /velodyne_points/header'
+```
+
+预期：`/velodyne_points` 类型为 `sensor_msgs/PointCloud2`，header 中的 `frame_id` 为 `velodyne`。工作日志必须说明这次运行态验证使用的是 mock PointCloud2 数据源，不是真实 Velodyne 硬件或真实 3D 激光雷达。
+
+- [ ] **步骤 4：订阅 PointCloud2**
+
+如果存在 `/velodyne_points` 或其它 PointCloud2 话题，在地面站配置 `qt_frontend/config/transmit_config.yaml` 或机器人端配置 `agent/configs/turtlebot_001.yaml` 中启用。若通过 Qt 前端或 MQTT topic request 临时订阅，也必须确认 Agent 的运行态订阅结果里 `transport` 已解析为 `http_stream`，否则 ROS1 Agent 不会进入 heavy snapshot 分支。
 
 ```yaml
 - topic: /velodyne_points
@@ -1387,10 +1417,11 @@ rostopic list | grep -E "points|cloud|velodyne"
   compression: {}
 ```
 
-重启链路后运行：
+如果修改的是机器人端 `agent/configs/turtlebot_001.yaml`，需要重启 `robot-turtlebot-001` 容器内 Agent 或重启容器；如果修改的是前端 `transmit_config.yaml`，需要重启地面站链路让启动恢复订阅重新下发。重启后先确认 Agent ack 或配置响应中该 topic 的 `transport` 为 `http_stream`，再运行：
 
 ```bash
-timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/velodyne_points/meta -C 1
+timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/velodyne_points/meta -C 1 > /tmp/pointcloud2_meta.json
+cat /tmp/pointcloud2_meta.json
 ```
 
 预期：收到 `type=sensor_meta`，`transport=http_stream`，`stream_url` 非空，`encoding=ros1_serialized_v1`。
@@ -1398,12 +1429,13 @@ timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/velodyne_poi
 如果使用的是嵌套 topic，例如 `/camera/depth/points`，订阅的 MQTT meta topic 应使用压平后的 sensor name：
 
 ```bash
-timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/camera_depth_points/meta -C 1
+timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/camera_depth_points/meta -C 1 > /tmp/pointcloud2_meta.json
+cat /tmp/pointcloud2_meta.json
 ```
 
 预期：meta 中的 `topic` 仍为原始 ROS topic `/camera/depth/points`，Bridge 本地发布时应使用 `/turtlebot_001/camera/depth/points`。
 
-- [ ] **步骤 4：验证 HTTP endpoint**
+- [ ] **步骤 5：验证 HTTP endpoint**
 
 从 meta 中取出 `stream_url` 后运行：
 
@@ -1413,11 +1445,24 @@ curl -o /tmp/pointcloud2.raw "<stream_url>"
 wc -c /tmp/pointcloud2.raw
 ```
 
-预期：HTTP 200，`wc -c` 与 meta 中 `payload_size` 一致。
+预期：HTTP 200，`wc -c` 与 meta 中 `payload_size` 一致。建议将 meta 保存到临时文件后用脚本自动比较，避免人工看错：
+
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+meta = json.loads(Path("/tmp/pointcloud2_meta.json").read_text())
+expected = int(meta["data"]["payload_size"])
+actual = Path("/tmp/pointcloud2.raw").stat().st_size
+assert actual == expected, "payload size mismatch: expected %d, got %d" % (expected, actual)
+print("payload size OK:", actual)
+PY
+```
 
 如果 `curl` 连接失败，应先检查 Agent 配置中的 `stream_public_host` 或 `stream_base_url` 是否是 Bridge 可访问地址；Docker 场景不要使用容器内部不可达 IP。
 
-- [ ] **步骤 5：验证 Bridge 本地 ROS 发布**
+- [ ] **步骤 6：验证 Bridge 本地 ROS 发布**
 
 运行：
 
@@ -1438,7 +1483,7 @@ timeout 12 rostopic hz /turtlebot_001/camera/depth/points
 timeout 8 rostopic echo -n 1 /turtlebot_001/camera/depth/points/header
 ```
 
-- [ ] **步骤 6：验证 RViz**
+- [ ] **步骤 7：验证 RViz**
 
 在 RViz 中添加 `PointCloud2` Display，订阅：
 
@@ -1448,7 +1493,7 @@ timeout 8 rostopic echo -n 1 /turtlebot_001/camera/depth/points/header
 
 预期：如果有真实点云数据，RViz 能显示点云；如果没有点云话题，则记录为环境缺口。
 
-- [ ] **步骤 7：关闭链路**
+- [ ] **步骤 8：关闭链路**
 
 运行：
 
@@ -1456,7 +1501,14 @@ timeout 8 rostopic echo -n 1 /turtlebot_001/camera/depth/points/header
 ./qt_frontend/scripts/stop.sh
 ```
 
-预期：Bridge、Qt 前端和地面站本地进程清理完成。
+如果步骤 3 使用了另一个终端或后台进程运行 `agent.mock_pointcloud2_publisher`，同时停止该 publisher。预期：Bridge、Qt 前端、地面站本地进程和临时 mock publisher 都已清理完成。
+
+- [ ] **步骤 9：Commit**
+
+```bash
+git add agent/mock_pointcloud2_publisher.py tests/test_mock_pointcloud2_publisher.py docs/superpowers/plans/2026-06-25-heavy-data-http-stream.md
+git commit -m "test: 增加运行态点云 mock publisher"
+```
 
 ## 任务 9：工作日志与计划状态
 
@@ -1490,7 +1542,7 @@ git commit -m "docs: 记录重型数据 HTTP 通道进展"
 单元测试：
 
 ```bash
-python3 -m pytest tests/test_mock_pointcloud2_data.py tests/test_protocol_messages.py tests/test_protocol_registry.py tests/test_agent_topic_config.py tests/test_ros1_agent.py tests/test_mqtt_ros_bridge.py tests/test_mqtt_client.py -q
+python3 -m pytest tests/test_mock_pointcloud2_data.py tests/test_mock_pointcloud2_publisher.py tests/test_protocol_messages.py tests/test_protocol_registry.py tests/test_agent_topic_config.py tests/test_ros1_agent.py tests/test_mqtt_ros_bridge.py tests/test_mqtt_client.py -q
 ```
 
 预期：全部通过。
@@ -1498,7 +1550,7 @@ python3 -m pytest tests/test_mock_pointcloud2_data.py tests/test_protocol_messag
 新增代码未定义名称检查：
 
 ```bash
-ruff check --select F821 agent/base_agent.py bridge/mqtt_ros_bridge.py qt_frontend/mqtt_client.py tests/test_agent_topic_config.py tests/test_mqtt_ros_bridge.py tests/test_mqtt_client.py
+ruff check --select F821 agent/base_agent.py agent/mock_pointcloud2_publisher.py bridge/mqtt_ros_bridge.py qt_frontend/mqtt_client.py tests/test_agent_topic_config.py tests/test_mock_pointcloud2_publisher.py tests/test_mqtt_ros_bridge.py tests/test_mqtt_client.py
 ```
 
 预期：全部通过。当前仓库部分文件存在既有 import 布局类 lint 问题时，不要用它们掩盖本次新增代码的未定义名称或拼写错误。
@@ -1509,7 +1561,11 @@ ruff check --select F821 agent/base_agent.py bridge/mqtt_ros_bridge.py qt_fronte
 docker compose up -d robot-turtlebot-001
 ./qt_frontend/scripts/start.sh
 docker compose exec robot-turtlebot-001 bash -lc 'source /opt/ros/noetic/setup.bash && rostopic list | grep -E "points|cloud|velodyne"'
-timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/velodyne_points/meta -C 1
+# 如果没有真实 PointCloud2 数据源，另开终端按任务 8 步骤 3 启动 mock /velodyne_points publisher：
+# docker compose exec robot-turtlebot-001 bash -lc 'source /opt/ros/noetic/setup.bash && cd /app && python3 -m agent.mock_pointcloud2_publisher --topic /velodyne_points --frame-id velodyne --rate 2.0'
+docker compose exec robot-turtlebot-001 bash -lc 'source /opt/ros/noetic/setup.bash && rostopic info /velodyne_points && timeout 8 rostopic echo -n 1 /velodyne_points/header'
+timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/velodyne_points/meta -C 1 > /tmp/pointcloud2_meta.json
+cat /tmp/pointcloud2_meta.json
 curl -I "<stream_url>"
 curl -o /tmp/pointcloud2.raw "<stream_url>"
 wc -c /tmp/pointcloud2.raw
@@ -1518,7 +1574,7 @@ timeout 8 rostopic echo -n 1 /turtlebot_001/velodyne_points/header
 ./qt_frontend/scripts/stop.sh
 ```
 
-预期：在存在 PointCloud2 数据源的环境中，MQTT meta、HTTP payload、Bridge ROS 发布和 RViz 显示链路都能闭环。如果当前 Turtlebot3 仿真没有 PointCloud2 话题，运行态验证只能完成“无数据源确认”，不能宣称点云显示通过。
+预期：在存在 PointCloud2 数据源的环境中，MQTT meta、HTTP payload、Bridge ROS 发布和 RViz 显示链路都能闭环。如果当前 Turtlebot3 仿真没有真实 PointCloud2 话题，可以使用任务 8 步骤 3 的 mock publisher 完成链路验证，但必须记录“使用 mock PointCloud2 数据源，不是真实 Velodyne/3D 激光雷达验证”。如果既没有真实数据源，也没有启动 mock publisher，运行态验证只能完成“无数据源确认”，不能宣称点云显示通过。
 
 ## 不在第一版处理
 
