@@ -1348,7 +1348,7 @@ git commit -m "config: 增加重型数据 HTTP stream 示例"
 - 测试：`tests/test_mock_pointcloud2_publisher.py`
 - 执行验证命令并记录结果。
 
-- [ ] **步骤 1：启动链路**
+- [x] **步骤 1：启动链路**
 
 运行：
 
@@ -1359,7 +1359,7 @@ docker compose up -d robot-turtlebot-001
 
 预期：容器、`roscore`、Mosquitto、Bridge、Qt 前端正常启动。
 
-- [ ] **步骤 2：确认 PointCloud2 话题存在**
+- [x] **步骤 2：确认 PointCloud2 话题存在**
 
 先在机器人 ROS 环境内确认原始 PointCloud2 数据源，而不是在地面站本地 ROS master 上确认。Docker 场景优先运行：
 
@@ -1376,7 +1376,7 @@ rostopic list | grep -E "points|cloud|velodyne"
 
 预期：如果机器人 ROS 环境没有点云话题，记录为“运行态 PointCloud2 需要实机或额外仿真传感器验证”，不要用地面站本地 ROS topic 结果冒充机器人侧数据源。
 
-- [ ] **步骤 3：如无真实点云，准备 mock PointCloud2 publisher 脚本**
+- [x] **步骤 3：如无真实点云，准备 mock PointCloud2 publisher 脚本**
 
 如果步骤 2 没有发现 `/velodyne_points`、`/camera/depth/points` 或其它真实 `sensor_msgs/PointCloud2` 话题，可以在机器人容器 ROS 环境里启动一个 mock publisher 作为额外仿真传感器。这个 publisher 使用与任务 1 `agent/mock_pointcloud2_data.py` 相同的确定性 XYZ 点阵，但发布的是 ROS 原生 `sensor_msgs.msg.PointCloud2`，不是单元测试用的 `FakePointCloud2Message`。
 
@@ -1404,7 +1404,7 @@ docker compose exec robot-turtlebot-001 bash -lc 'source /opt/ros/noetic/setup.b
 
 预期：`/velodyne_points` 类型为 `sensor_msgs/PointCloud2`，header 中的 `frame_id` 为 `velodyne`。工作日志必须说明这次运行态验证使用的是 mock PointCloud2 数据源，不是真实 Velodyne 硬件或真实 3D 激光雷达。
 
-- [ ] **步骤 4：订阅 PointCloud2**
+- [x] **步骤 4：订阅 PointCloud2**
 
 如果存在 `/velodyne_points` 或其它 PointCloud2 话题，在地面站配置 `qt_frontend/config/transmit_config.yaml` 或机器人端配置 `agent/configs/turtlebot_001.yaml` 中启用。若通过 Qt 前端或 MQTT topic request 临时订阅，也必须确认 Agent 的运行态订阅结果里 `transport` 已解析为 `http_stream`，否则 ROS1 Agent 不会进入 heavy snapshot 分支。
 
@@ -1435,7 +1435,7 @@ cat /tmp/pointcloud2_meta.json
 
 预期：meta 中的 `topic` 仍为原始 ROS topic `/camera/depth/points`，Bridge 本地发布时应使用 `/turtlebot_001/camera/depth/points`。
 
-- [ ] **步骤 5：验证 HTTP endpoint**
+- [x] **步骤 5：验证 HTTP endpoint**
 
 从 meta 中取出 `stream_url` 后运行：
 
@@ -1462,7 +1462,7 @@ PY
 
 如果 `curl` 连接失败，应先检查 Agent 配置中的 `stream_public_host` 或 `stream_base_url` 是否是 Bridge 可访问地址；Docker 场景不要使用容器内部不可达 IP。
 
-- [ ] **步骤 6：验证 Bridge 本地 ROS 发布**
+- [x] **步骤 6：验证 Bridge 本地 ROS 发布**
 
 运行：
 
@@ -1483,7 +1483,7 @@ timeout 12 rostopic hz /turtlebot_001/camera/depth/points
 timeout 8 rostopic echo -n 1 /turtlebot_001/camera/depth/points/header
 ```
 
-- [ ] **步骤 7：验证 RViz**
+- [x] **步骤 7：验证 RViz**
 
 在 RViz 中添加 `PointCloud2` Display，订阅：
 
@@ -1493,7 +1493,7 @@ timeout 8 rostopic echo -n 1 /turtlebot_001/camera/depth/points/header
 
 预期：如果有真实点云数据，RViz 能显示点云；如果没有点云话题，则记录为环境缺口。
 
-- [ ] **步骤 8：关闭链路**
+- [x] **步骤 8：关闭链路**
 
 运行：
 
@@ -1503,12 +1503,24 @@ timeout 8 rostopic echo -n 1 /turtlebot_001/camera/depth/points/header
 
 如果步骤 3 使用了另一个终端或后台进程运行 `agent.mock_pointcloud2_publisher`，同时停止该 publisher。预期：Bridge、Qt 前端、地面站本地进程和临时 mock publisher 都已清理完成。
 
-- [ ] **步骤 9：Commit**
+- [x] **步骤 9：Commit**
 
 ```bash
 git add agent/mock_pointcloud2_publisher.py tests/test_mock_pointcloud2_publisher.py docs/superpowers/plans/2026-06-25-heavy-data-http-stream.md
 git commit -m "test: 增加运行态点云 mock publisher"
 ```
+
+**本次执行记录（2026-06-29）：**
+
+- `docker compose up -d robot-turtlebot-001` 和 `./qt_frontend/scripts/start.sh` 启动成功，Bridge 和 Qt 前端进程启动过。
+- 容器内原始 Turtlebot3 仿真没有发现 `points|cloud|velodyne` 话题，因此使用 `agent.mock_pointcloud2_publisher` 发布 mock `/velodyne_points`。该数据源是模拟 `sensor_msgs/PointCloud2`，不是真实 Velodyne 或真实 3D 激光雷达。
+- 容器内 `rostopic info /velodyne_points` 显示类型为 `sensor_msgs/PointCloud2`，`header.frame_id` 为 `velodyne`。
+- 通过 MQTT topic request 临时订阅 `/velodyne_points`，收到 `topic_resp`，`transport=http_stream`。
+- 收到 `robot/turtlebot_001/sensor/velodyne_points/meta`，其中 `transport=http_stream`、`encoding=ros1_serialized_v1`、`payload_format=ros1_serialized`、`payload_size=5132`、`stream_url=http://172.19.0.2:8080/stream/velodyne_points`。
+- 在容器内 GET HTTP stream 得到 5132 字节；宿主机沙盒内直接 `curl` 容器 IP 被网络沙盒拦截，提权后宿主机 GET 返回 HTTP 200 和 5132 字节，payload size 与 meta 一致。
+- 地面站本地 ROS topic `/turtlebot_001/velodyne_points` 有数据，`rostopic hz` 观察到约 1.4-2.0 Hz，`rostopic echo -n 1 /turtlebot_001/velodyne_points/header` 显示 `frame_id: "turtlebot_001/velodyne"`。
+- RViz/Qt 前端进程启动过，且 RViz 可订阅的本地 ROS topic 已验证存在并有数据；本次未人工观察 RViz 画面中的点云渲染效果。
+- 已停止 mock publisher，并运行 `./qt_frontend/scripts/stop.sh` 清理 Bridge、Qt 前端和地面站本地进程。运行态 topic request 对 `agent/configs/turtlebot_001.yaml` 的持久化写回已通过 unsubscribe 清理，工作区保持干净。
 
 ## 任务 9：工作日志与计划状态
 
