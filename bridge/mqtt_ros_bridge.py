@@ -938,12 +938,93 @@ class MqttRosBridge:
     def _handle_sensor_meta(
         self, robot_id: str, sensor_name: str, payload: bytes
     ) -> None:
-        """Forward sensor meta information as JSON String."""
+        """Handle sensor meta information.
+
+        Heavy sensor meta is a small MQTT signal that points to the
+        latest ROS1 serialized payload served by the Agent over HTTP.
+        Non-heavy meta is kept as a JSON String for compatibility.
+        """
         try:
             text = payload.decode("utf-8")
-        except Exception:
-            text = str(payload)
-        self._publish_as_json(f"/{robot_id}/{sensor_name}/meta", text)
+            message = Message.from_json(text)
+            meta = message.data if isinstance(message.data, dict) else {}
+        except Exception as e:
+            logger.error(
+                "[Bridge] Failed to decode sensor meta from %s/%s: %s",
+                robot_id,
+                sensor_name,
+                e,
+            )
+            return
+
+        if meta.get("transport") != "http_stream":
+            self._publish_as_json(f"/{robot_id}/{sensor_name}/meta", text)
+            return
+
+        msg_type = str(meta.get("msg_type", ""))
+        stream_url = str(meta.get("stream_url", ""))
+        if not msg_type or not stream_url:
+            logger.warning(
+                "[Bridge] Incomplete heavy meta for %s/%s",
+                robot_id,
+                sensor_name,
+            )
+            return
+
+        total_start = time.monotonic()
+        try:
+            expected_size = int(
+                meta.get("payload_size") or meta.get("size_bytes") or 0
+            )
+            raw_payload = self._fetch_heavy_payload(
+                stream_url,
+                expected_size=expected_size,
+            )
+            decode_start = time.monotonic()
+            ros_msg = self._deserialize_ros_binary_message(
+                {"msg_type": msg_type},
+                raw_payload,
+            )
+            decode_ms = (time.monotonic() - decode_start) * 1000.0
+            self._publish_ros_binary_sensor(
+                robot_id,
+                sensor_name,
+                {
+                    "topic": meta.get("topic", "/" + sensor_name),
+                    "msg_type": msg_type,
+                },
+                ros_msg,
+                payload_size=len(raw_payload),
+                total_start=total_start,
+                decode_ms=decode_ms,
+            )
+        except Exception as e:
+            logger.error(
+                "[Bridge] Failed to fetch/publish heavy sensor %s/%s: %s",
+                robot_id,
+                sensor_name,
+                e,
+            )
+
+    @staticmethod
+    def _fetch_heavy_payload(
+        stream_url: str,
+        expected_size: Optional[int] = None,
+    ) -> bytes:
+        from urllib.request import urlopen
+
+        with urlopen(stream_url, timeout=2.0) as response:
+            payload = response.read()
+        if (
+            expected_size is not None
+            and expected_size > 0
+            and len(payload) != expected_size
+        ):
+            raise ValueError(
+                "HTTP stream payload size mismatch: expected %d, got %d"
+                % (expected_size, len(payload))
+            )
+        return payload
 
     # ================================================================
     # MQTT ---> ROS: status, event, cmd_ack

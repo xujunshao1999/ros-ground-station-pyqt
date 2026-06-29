@@ -655,6 +655,79 @@ class TestBinarySensorData:
         assert published.header.frame_id == "robot_001/odom"
 
 
+def test_sensor_meta_http_stream_fetches_and_publishes_pointcloud(monkeypatch):
+    from agent.mock_pointcloud2_data import (
+        FakePointCloud2Message,
+        build_pointcloud2_dict,
+    )
+
+    bridge = MqttRosBridge.__new__(MqttRosBridge)
+    bridge._lock = threading.Lock()
+    bridge._publishers_lock = threading.Lock()
+    bridge._robots = {}
+    bridge._topic_map = {
+        "robot_001": {
+            "velodyne_points": (
+                "/velodyne_points",
+                "sensor_msgs/PointCloud2",
+            )
+        }
+    }
+    bridge._ros_publishers = {}
+    bridge._namespace_tf_frames = True
+
+    data = build_pointcloud2_dict(frame_id="velodyne", seq=5)
+    raw_payload = bytes(data["data"])
+    published = []
+
+    fake_pub = MagicMock()
+    fake_pub.publish.side_effect = lambda msg: published.append(msg)
+
+    monkeypatch.setattr(
+        "bridge.mqtt_ros_bridge._get_message_class",
+        lambda msg_type: (
+            FakePointCloud2Message
+            if msg_type == "sensor_msgs/PointCloud2"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_get_or_create_typed_publisher",
+        lambda topic, msg_class: fake_pub,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_wait_for_publisher_connection",
+        lambda topic, pub: None,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_fetch_heavy_payload",
+        lambda url, expected_size=None: raw_payload,
+        raising=False,
+    )
+
+    payload = json.dumps({
+        "type": "sensor_meta",
+        "data": {
+            "topic": "/velodyne_points",
+            "msg_type": "sensor_msgs/PointCloud2",
+            "transport": "http_stream",
+            "stream_url": "http://robot:8080/stream/velodyne_points",
+            "encoding": "ros1_serialized_v1",
+            "payload_format": "ros1_serialized",
+            "payload_size": len(raw_payload),
+        },
+    }).encode("utf-8")
+
+    bridge._handle_sensor_meta("robot_001", "velodyne_points", payload)
+
+    assert published
+    assert published[0].data == raw_payload
+    assert published[0].header.frame_id == "robot_001/velodyne"
+
+
 # ===================================================================
 # 6. TestMqttConnect
 # ===================================================================

@@ -771,7 +771,7 @@ git commit -m "feat: 支持 PointCloud2 HTTP snapshot 发布"
 - 修改：`bridge/mqtt_ros_bridge.py`
 - 测试：`tests/test_mqtt_ros_bridge.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_mqtt_ros_bridge.py` 增加：
 
@@ -830,7 +830,7 @@ def test_sensor_meta_http_stream_fetches_and_publishes_pointcloud(monkeypatch):
     assert published[0].header.frame_id == "robot_001/velodyne"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -840,7 +840,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py::test_sensor_meta_http_stream_fe
 
 预期：失败，原因是 `_handle_sensor_meta()` 目前只把 meta 转发为 JSON String，不会拉取 HTTP payload。
 
-- [ ] **步骤 3：实现 HTTP 拉取 helper**
+- [x] **步骤 3：实现 HTTP 拉取 helper**
 
 在 `bridge/mqtt_ros_bridge.py` 中新增：
 
@@ -859,7 +859,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py::test_sensor_meta_http_stream_fe
         return payload
 ```
 
-- [ ] **步骤 4：实现 heavy meta 处理**
+- [x] **步骤 4：实现 heavy meta 处理**
 
 将 `_handle_sensor_meta()` 改为：
 
@@ -911,7 +911,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py::test_sensor_meta_http_stream_fe
 
 注意：如果实现时希望保留 `_handle_sensor_meta()` 的旧 JSON 转发能力，可以将旧逻辑提取为 `_publish_sensor_meta_as_json()`。
 
-- [ ] **步骤 5：运行 Bridge 测试验证通过**
+- [x] **步骤 5：运行 Bridge 测试验证通过**
 
 运行：
 
@@ -921,7 +921,7 @@ python3 -m pytest tests/test_mqtt_ros_bridge.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add bridge/mqtt_ros_bridge.py tests/test_mqtt_ros_bridge.py
