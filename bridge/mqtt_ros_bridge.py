@@ -787,9 +787,13 @@ class MqttRosBridge:
     ) -> None:
         is_canonical = sensor_name in self._CANONICAL_TOPICS
         msg_type = envelope.get("msg_type", "")
-        full_topic = (
-            f"/{sensor_name}" if is_canonical else f"/{robot_id}/{sensor_name}"
-        )
+        ros_topic = str(envelope.get("topic") or "")
+        if is_canonical:
+            full_topic = f"/{sensor_name}"
+        elif ros_topic.startswith("/"):
+            full_topic = f"/{robot_id}{ros_topic}"
+        else:
+            full_topic = f"/{robot_id}/{sensor_name}"
 
         try:
             if self._namespace_tf_frames:

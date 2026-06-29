@@ -728,6 +728,85 @@ def test_sensor_meta_http_stream_fetches_and_publishes_pointcloud(monkeypatch):
     assert published[0].header.frame_id == "robot_001/velodyne"
 
 
+def test_sensor_meta_http_stream_uses_meta_topic_for_nested_ros_topic(monkeypatch):
+    from agent.mock_pointcloud2_data import (
+        FakePointCloud2Message,
+        build_pointcloud2_dict,
+    )
+
+    class FakeCameraDepthPointCloud2Message(FakePointCloud2Message):
+        def deserialize(self, payload):
+            super().deserialize(payload)
+            self.header.frame_id = "camera_depth_frame"
+            return self
+
+    bridge = MqttRosBridge.__new__(MqttRosBridge)
+    bridge._lock = threading.Lock()
+    bridge._publishers_lock = threading.Lock()
+    bridge._robots = {}
+    bridge._topic_map = {
+        "robot_001": {
+            "camera_depth_points": (
+                "/camera/depth/points",
+                "sensor_msgs/PointCloud2",
+            )
+        }
+    }
+    bridge._ros_publishers = {}
+    bridge._namespace_tf_frames = True
+
+    data = build_pointcloud2_dict(frame_id="camera_depth_frame", seq=6)
+    raw_payload = bytes(data["data"])
+    published = []
+    publisher_topics = []
+
+    fake_pub = MagicMock()
+    fake_pub.publish.side_effect = lambda msg: published.append(msg)
+
+    monkeypatch.setattr(
+        "bridge.mqtt_ros_bridge._get_message_class",
+        lambda msg_type: (
+            FakeCameraDepthPointCloud2Message
+            if msg_type == "sensor_msgs/PointCloud2"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_get_or_create_typed_publisher",
+        lambda topic, msg_class: publisher_topics.append(topic) or fake_pub,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_wait_for_publisher_connection",
+        lambda topic, pub: None,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_fetch_heavy_payload",
+        lambda url, expected_size=None: raw_payload,
+    )
+
+    payload = json.dumps({
+        "type": "sensor_meta",
+        "data": {
+            "topic": "/camera/depth/points",
+            "msg_type": "sensor_msgs/PointCloud2",
+            "transport": "http_stream",
+            "stream_url": "http://robot:8080/stream/camera/depth/points",
+            "encoding": "ros1_serialized_v1",
+            "payload_format": "ros1_serialized",
+            "payload_size": len(raw_payload),
+        },
+    }).encode("utf-8")
+
+    bridge._handle_sensor_meta("robot_001", "camera_depth_points", payload)
+
+    assert publisher_topics == ["/robot_001/camera/depth/points"]
+    assert published
+    assert published[0].header.frame_id == "robot_001/camera_depth_frame"
+
+
 # ===================================================================
 # 6. TestMqttConnect
 # ===================================================================

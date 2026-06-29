@@ -106,6 +106,39 @@ def test_topic_request_subscribe_updates_runtime_and_persistent_config():
     )
 
 
+def test_topic_request_auto_transport_uses_registry_default_for_pointcloud2():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
+    message = Message(
+        src="station",
+        dst="robot_001",
+        type=MessageType.TOPIC_REQUEST,
+        data={
+            "action": "subscribe",
+            "topic": "/velodyne_points",
+            "msg_type": "sensor_msgs/PointCloud2",
+            "freq_limit": 2.0,
+            "transport": "auto",
+            "qos": 0,
+            "compression": {},
+        },
+    )
+
+    agent._handle_topic_request(message)
+
+    assert agent._subscribed_topics["/velodyne_points"]["transport"] == "http_stream"
+    assert agent.config.subscriptions[-1]["transport"] == "http_stream"
+    assert agent.subscribed[-1] == (
+        "/velodyne_points",
+        "sensor_msgs/PointCloud2",
+        {
+            "freq_limit": 2.0,
+            "qos": 0,
+            "transport": "http_stream",
+        },
+    )
+    assert agent.published[-1][1]["data"]["transport"] == "http_stream"
+
+
 def test_publish_sensor_data_uses_subscription_qos():
     agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
     agent._subscribed_topics["/scan"] = {

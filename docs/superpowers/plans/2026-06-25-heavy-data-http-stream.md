@@ -46,6 +46,10 @@
   - 对 `transport: http_stream` 或 registry 判定为 HEAVY 的 `PointCloud2`，直接 `serialize()` 后走 HTTP snapshot meta 路径。
 - 修改：`bridge/mqtt_ros_bridge.py`
   - 将 `_handle_sensor_meta()` 从“转发 JSON String”升级为“解析 meta、HTTP GET 拉取、反序列化、namespace、发布 ROS topic”。
+- 修改：`agent/base_agent.py`
+  - 补充 `transport=auto` 解析逻辑，确保注册表中 `HEAVY` 的 `PointCloud2` 自动使用 `http_stream`。
+- 修改：`bridge/mqtt_ros_bridge.py`
+  - 补充嵌套 ROS topic 的发布路径处理，避免 `/camera/depth/points` 被压平成 `/camera_depth_points`。
 - 修改：`qt_frontend/mqtt_client.py`
   - 忽略 `sensor_meta` 普通 UI 解析，或只保留轻量状态摘要，不解析重型 payload。
 - 修改：`qt_frontend/config/transmit_config.yaml`
@@ -928,6 +932,305 @@ git add bridge/mqtt_ros_bridge.py tests/test_mqtt_ros_bridge.py
 git commit -m "feat: 支持 Bridge 拉取重型 HTTP snapshot"
 ```
 
+## 任务 6.5：修正嵌套 topic 与 auto 传输策略
+
+**背景：**
+
+任务 6 已跑通 `/velodyne_points` 这种单层 topic，但计划的 meta 协议允许 `/camera/depth/points` 这类嵌套 ROS topic。MQTT topic 中的 `sensor_name` 会被压平成 `camera_depth_points`，Bridge 发布 ROS topic 时必须优先使用 meta 中的原始 `topic` 字段，不能只用 `sensor_name`。同时，`PointCloud2` 已在 registry 中注册为 `HEAVY`，当订阅请求使用 `transport=auto` 或未显式指定 transport 时，Agent 应自动解析为 `http_stream`。
+
+**文件：**
+- 修改：`bridge/mqtt_ros_bridge.py`
+- 修改：`agent/base_agent.py`
+- 测试：`tests/test_mqtt_ros_bridge.py`
+- 测试：`tests/test_agent_topic_config.py`
+
+- [x] **步骤 1：编写嵌套 topic 失败测试**
+
+在 `tests/test_mqtt_ros_bridge.py` 增加：
+
+```python
+def test_sensor_meta_http_stream_uses_meta_topic_for_nested_ros_topic(monkeypatch):
+    from agent.mock_pointcloud2_data import FakePointCloud2Message, build_pointcloud2_dict
+
+    bridge = MqttRosBridge.__new__(MqttRosBridge)
+    bridge._lock = threading.Lock()
+    bridge._publishers_lock = threading.Lock()
+    bridge._robots = {}
+    bridge._topic_map = {
+        "robot_001": {
+            "camera_depth_points": (
+                "/camera/depth/points",
+                "sensor_msgs/PointCloud2",
+            )
+        }
+    }
+    bridge._ros_publishers = {}
+    bridge._namespace_tf_frames = True
+
+    data = build_pointcloud2_dict(frame_id="camera_depth_frame", seq=6)
+    raw_payload = bytes(data["data"])
+    published = []
+    publisher_topics = []
+
+    fake_pub = MagicMock()
+    fake_pub.publish.side_effect = lambda msg: published.append(msg)
+
+    monkeypatch.setattr(
+        "bridge.mqtt_ros_bridge._get_message_class",
+        lambda msg_type: FakePointCloud2Message if msg_type == "sensor_msgs/PointCloud2" else None,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_get_or_create_typed_publisher",
+        lambda topic, msg_class: publisher_topics.append(topic) or fake_pub,
+    )
+    monkeypatch.setattr(bridge, "_wait_for_publisher_connection", lambda topic, pub: None)
+    monkeypatch.setattr(
+        bridge,
+        "_fetch_heavy_payload",
+        lambda url, expected_size=None: raw_payload,
+    )
+
+    payload = json.dumps({
+        "type": "sensor_meta",
+        "data": {
+            "topic": "/camera/depth/points",
+            "msg_type": "sensor_msgs/PointCloud2",
+            "transport": "http_stream",
+            "stream_url": "http://robot:8080/stream/camera/depth/points",
+            "encoding": "ros1_serialized_v1",
+            "payload_format": "ros1_serialized",
+            "payload_size": len(raw_payload),
+        },
+    }).encode("utf-8")
+
+    bridge._handle_sensor_meta("robot_001", "camera_depth_points", payload)
+
+    assert publisher_topics == ["/robot_001/camera/depth/points"]
+    assert published
+    assert published[0].header.frame_id == "robot_001/camera_depth_frame"
+```
+
+- [x] **步骤 2：编写 auto transport 失败测试**
+
+在 `tests/test_agent_topic_config.py` 增加：
+
+```python
+def test_topic_request_auto_transport_uses_registry_default_for_pointcloud2():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
+    message = Message(
+        src="station",
+        dst="robot_001",
+        type=MessageType.TOPIC_REQUEST,
+        data={
+            "action": "subscribe",
+            "topic": "/velodyne_points",
+            "msg_type": "sensor_msgs/PointCloud2",
+            "freq_limit": 2.0,
+            "transport": "auto",
+            "qos": 0,
+            "compression": {},
+        },
+    )
+
+    agent._handle_topic_request(message)
+
+    assert agent._subscribed_topics["/velodyne_points"]["transport"] == "http_stream"
+    assert agent.config.subscriptions[-1]["transport"] == "http_stream"
+    assert agent.subscribed[-1] == (
+        "/velodyne_points",
+        "sensor_msgs/PointCloud2",
+        {
+            "freq_limit": 2.0,
+            "qos": 0,
+            "transport": "http_stream",
+        },
+    )
+    assert agent.published[-1][1]["data"]["transport"] == "http_stream"
+```
+
+- [x] **步骤 3：运行测试验证失败**
+
+运行：
+
+```bash
+python3 -m pytest \
+  tests/test_mqtt_ros_bridge.py::test_sensor_meta_http_stream_uses_meta_topic_for_nested_ros_topic \
+  tests/test_agent_topic_config.py::test_topic_request_auto_transport_uses_registry_default_for_pointcloud2 \
+  -q
+```
+
+预期：
+
+- 嵌套 topic 测试失败，当前 Bridge 会发布到 `/robot_001/camera_depth_points`，不是 `/robot_001/camera/depth/points`。
+- auto transport 测试失败，当前订阅请求会保留 `auto`，不会解析为 `http_stream`。
+
+- [x] **步骤 4：让 Bridge 发布时优先使用 meta 原始 topic**
+
+在 `bridge/mqtt_ros_bridge.py` 的 `_publish_ros_binary_sensor()` 中，将非 canonical topic 构造改为优先读取 envelope 的 `topic` 字段：
+
+```python
+        is_canonical = sensor_name in self._CANONICAL_TOPICS
+        msg_type = envelope.get("msg_type", "")
+        ros_topic = str(envelope.get("topic") or "")
+        if is_canonical:
+            full_topic = f"/{sensor_name}"
+        elif ros_topic.startswith("/"):
+            full_topic = f"/{robot_id}{ros_topic}"
+        else:
+            full_topic = f"/{robot_id}/{sensor_name}"
+```
+
+保留 canonical topic 的旧行为：`tf`、`tf_static`、`joint_states` 仍发布到标准 ROS topic。
+
+- [x] **步骤 5：让 BaseAgent 将 auto transport 解析为 registry 默认值**
+
+在 `agent/base_agent.py` 中引入 registry：
+
+```python
+from protocol.topic_registry import TopicTier, default_registry
+```
+
+新增 helper：
+
+```python
+    @staticmethod
+    def _resolve_transport(msg_type: str, transport: str) -> str:
+        if not transport or transport == "auto":
+            return default_registry.get_transport_type(msg_type)
+        return transport
+```
+
+在 `_handle_topic_request()` 中，读取请求 transport 后立即解析：
+
+```python
+            requested_transport = data.get("transport", "auto")
+            transport = self._resolve_transport(msg_type, requested_transport)
+            sub_info = {
+                "msg_type": msg_type,
+                "freq_limit": freq_limit,
+                "transport": transport,
+                "qos": qos,
+                "options": options,
+            }
+```
+
+注意：`topic_response` 和持久化配置都应保存解析后的 `transport`，这样后续重启恢复订阅时不再依赖前端是否显式指定 `http_stream`。
+
+- [x] **步骤 6：运行聚焦测试验证通过**
+
+运行：
+
+```bash
+python3 -m pytest \
+  tests/test_mqtt_ros_bridge.py::test_sensor_meta_http_stream_uses_meta_topic_for_nested_ros_topic \
+  tests/test_agent_topic_config.py::test_topic_request_auto_transport_uses_registry_default_for_pointcloud2 \
+  -q
+```
+
+预期：两个测试全部通过。
+
+- [x] **步骤 7：运行相关测试文件**
+
+运行：
+
+```bash
+python3 -m pytest tests/test_mqtt_ros_bridge.py tests/test_agent_topic_config.py -q
+```
+
+预期：全部通过。
+
+- [x] **步骤 8：Commit**
+
+```bash
+git add bridge/mqtt_ros_bridge.py agent/base_agent.py tests/test_mqtt_ros_bridge.py tests/test_agent_topic_config.py
+git commit -m "fix: 修正重型数据 topic 发布路径"
+```
+
+## 任务 6.6：避免 HTTP stream server 启动失败后发布不可用 meta
+
+**背景：**
+
+当前 heavy snapshot helper 会先缓存 payload、尝试启动 HTTP server，然后发布 meta。如果 HTTP server 端口被占用或启动失败，Bridge 会收到 `stream_url` 并持续拉取失败。第一版应至少避免在 stream server 未启动时发布不可用 meta。
+
+**文件：**
+- 修改：`agent/base_agent.py`
+- 测试：`tests/test_agent_topic_config.py`
+
+- [ ] **步骤 1：编写失败测试**
+
+在 `tests/test_agent_topic_config.py` 增加：
+
+```python
+def test_publish_heavy_snapshot_data_does_not_publish_meta_when_stream_server_fails():
+    class FailingStreamAgent(RecordingAgent):
+        def _start_stream_server(self) -> None:
+            self._stream_server = None
+
+    agent = FailingStreamAgent(AgentConfig(robot_id="robot_001", http_stream_port=18080))
+    agent.config.stream_public_host = "10.0.0.2"
+    agent._subscribed_topics["/velodyne_points"] = {
+        "msg_type": "sensor_msgs/PointCloud2",
+        "freq_limit": 2.0,
+        "transport": "http_stream",
+        "qos": 0,
+        "options": {},
+    }
+
+    agent.publish_heavy_snapshot_data(
+        "/velodyne_points",
+        "sensor_msgs/PointCloud2",
+        b"raw-pointcloud",
+        seq=1,
+        stamp={"secs": 1, "nsecs": 2},
+        frame_id="velodyne",
+    )
+
+    assert agent.published == []
+```
+
+- [ ] **步骤 2：运行测试验证失败**
+
+运行：
+
+```bash
+python3 -m pytest tests/test_agent_topic_config.py::test_publish_heavy_snapshot_data_does_not_publish_meta_when_stream_server_fails -q
+```
+
+预期：失败，原因是当前即使 `_stream_server` 仍为 `None` 也会继续发布 meta。
+
+- [ ] **步骤 3：实现 server 可用性检查**
+
+在 `agent/base_agent.py` 的 `publish_heavy_snapshot_data()` 中，调用 `_start_stream_server()` 后增加检查：
+
+```python
+        self._store_stream_data(ros_topic, payload)
+        self._start_stream_server()
+        if self._stream_server is None:
+            logger.error(
+                "[Agent] HTTP stream server is not available; skip heavy meta for %s",
+                ros_topic,
+            )
+            return
+```
+
+- [ ] **步骤 4：运行 Agent 配置测试验证通过**
+
+运行：
+
+```bash
+python3 -m pytest tests/test_agent_topic_config.py -q
+```
+
+预期：全部通过。
+
+- [ ] **步骤 5：Commit**
+
+```bash
+git add agent/base_agent.py tests/test_agent_topic_config.py
+git commit -m "fix: 避免发布不可用 HTTP stream meta"
+```
+
 ## 任务 7：配置示例与前端保护
 
 **文件：**
@@ -943,8 +1246,12 @@ git commit -m "feat: 支持 Bridge 拉取重型 HTTP snapshot"
 ```python
 def test_sensor_meta_does_not_emit_sensor_data(client, mock_paho):
     received = []
+    messages = []
     client.signals.sensor_data_received.connect(
         lambda robot_id, sensor_name, data: received.append((robot_id, sensor_name, data))
+    )
+    client.signals.message_received.connect(
+        lambda topic, message: messages.append((topic, message))
     )
 
     payload = json.dumps({
@@ -964,6 +1271,7 @@ def test_sensor_meta_does_not_emit_sensor_data(client, mock_paho):
     client._on_message(None, None, msg)
 
     assert received == []
+    assert messages == []
 ```
 
 - [ ] **步骤 2：运行测试验证失败或确认现状**
@@ -974,7 +1282,7 @@ def test_sensor_meta_does_not_emit_sensor_data(client, mock_paho):
 python3 -m pytest tests/test_mqtt_client.py::test_sensor_meta_does_not_emit_sensor_data -q
 ```
 
-预期：如果当前前端已经不把 `sensor_meta` 当普通 sensor 数据，则通过；如果失败，说明需要补充保护。
+预期：如果当前前端已经完全忽略 `sensor_meta`，则通过；如果 `sensor_data_received` 或 `message_received` 任一信号收到重型 meta，说明需要补充保护。
 
 - [ ] **步骤 3：补充前端忽略 sensor_meta**
 
@@ -985,6 +1293,8 @@ python3 -m pytest tests/test_mqtt_client.py::test_sensor_meta_does_not_emit_sens
                 logger.debug("[MqttClient] Ignoring heavy sensor meta on %s", msg.topic)
                 return
 ```
+
+注意：保护逻辑应放在普通 `sensor` 分支之前，避免 meta 被 UI 当作普通传感器消息、传感器摘要或大 payload 摘要处理。
 
 - [ ] **步骤 4：配置示例**
 
@@ -1049,13 +1359,20 @@ docker compose up -d robot-turtlebot-001
 
 - [ ] **步骤 2：确认 PointCloud2 话题存在**
 
-运行：
+先在机器人 ROS 环境内确认原始 PointCloud2 数据源，而不是在地面站本地 ROS master 上确认。Docker 场景优先运行：
 
 ```bash
+docker compose exec robot-turtlebot-001 bash -lc 'source /opt/ros/noetic/setup.bash && rostopic list | grep -E "points|cloud|velodyne"'
+```
+
+如果不是 Docker 机器人容器，而是实机或外部 ROS master，应在机器人端终端执行等价命令：
+
+```bash
+source /opt/ros/noetic/setup.bash
 rostopic list | grep -E "points|cloud|velodyne"
 ```
 
-预期：如果当前仿真环境没有点云话题，记录为“运行态 PointCloud2 需要实机或额外仿真传感器验证”，不要伪造通过结果。
+预期：如果机器人 ROS 环境没有点云话题，记录为“运行态 PointCloud2 需要实机或额外仿真传感器验证”，不要用地面站本地 ROS topic 结果冒充机器人侧数据源。
 
 - [ ] **步骤 3：订阅 PointCloud2**
 
@@ -1078,6 +1395,14 @@ timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/velodyne_poi
 
 预期：收到 `type=sensor_meta`，`transport=http_stream`，`stream_url` 非空，`encoding=ros1_serialized_v1`。
 
+如果使用的是嵌套 topic，例如 `/camera/depth/points`，订阅的 MQTT meta topic 应使用压平后的 sensor name：
+
+```bash
+timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/camera_depth_points/meta -C 1
+```
+
+预期：meta 中的 `topic` 仍为原始 ROS topic `/camera/depth/points`，Bridge 本地发布时应使用 `/turtlebot_001/camera/depth/points`。
+
 - [ ] **步骤 4：验证 HTTP endpoint**
 
 从 meta 中取出 `stream_url` 后运行：
@@ -1089,6 +1414,8 @@ wc -c /tmp/pointcloud2.raw
 ```
 
 预期：HTTP 200，`wc -c` 与 meta 中 `payload_size` 一致。
+
+如果 `curl` 连接失败，应先检查 Agent 配置中的 `stream_public_host` 或 `stream_base_url` 是否是 Bridge 可访问地址；Docker 场景不要使用容器内部不可达 IP。
 
 - [ ] **步骤 5：验证 Bridge 本地 ROS 发布**
 
@@ -1103,6 +1430,13 @@ timeout 8 rostopic echo -n 1 /turtlebot_001/velodyne_points/header
 
 - 本地 ROS topic 有数据。
 - `header.frame_id` 已带 `turtlebot_001/` 前缀。
+
+如果验证的是嵌套 topic，命令应保留原始 ROS topic 层级：
+
+```bash
+timeout 12 rostopic hz /turtlebot_001/camera/depth/points
+timeout 8 rostopic echo -n 1 /turtlebot_001/camera/depth/points/header
+```
 
 - [ ] **步骤 6：验证 RViz**
 
@@ -1161,12 +1495,20 @@ python3 -m pytest tests/test_mock_pointcloud2_data.py tests/test_protocol_messag
 
 预期：全部通过。
 
+新增代码未定义名称检查：
+
+```bash
+ruff check --select F821 agent/base_agent.py bridge/mqtt_ros_bridge.py qt_frontend/mqtt_client.py tests/test_agent_topic_config.py tests/test_mqtt_ros_bridge.py tests/test_mqtt_client.py
+```
+
+预期：全部通过。当前仓库部分文件存在既有 import 布局类 lint 问题时，不要用它们掩盖本次新增代码的未定义名称或拼写错误。
+
 运行态验证：
 
 ```bash
 docker compose up -d robot-turtlebot-001
 ./qt_frontend/scripts/start.sh
-rostopic list | grep -E "points|cloud|velodyne"
+docker compose exec robot-turtlebot-001 bash -lc 'source /opt/ros/noetic/setup.bash && rostopic list | grep -E "points|cloud|velodyne"'
 timeout 12 mosquitto_sub -h localhost -t robot/turtlebot_001/sensor/velodyne_points/meta -C 1
 curl -I "<stream_url>"
 curl -o /tmp/pointcloud2.raw "<stream_url>"

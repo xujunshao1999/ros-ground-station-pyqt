@@ -36,7 +36,7 @@ from protocol.messages import (
     TopicAction,
     TopicResponseData,
 )
-from protocol.topic_registry import TopicTier
+from protocol.topic_registry import TopicTier, default_registry
 from protocol.topics import (
     all_robot_to_robot,
     all_robot_to_robot_meta,
@@ -742,10 +742,12 @@ class BaseAgent(ABC):
 
         if action == TopicAction.SUBSCRIBE.value:
             # 订阅话题
-            transport = data.get("transport", "auto")
+            requested_transport = data.get("transport", "auto")
+            transport = self._resolve_transport(msg_type, requested_transport)
             sub_info = {
                 "msg_type": msg_type,
                 "freq_limit": freq_limit,
+                "transport": transport,
                 "qos": qos,
                 "options": options,
             }
@@ -899,19 +901,19 @@ class BaseAgent(ABC):
             topic = sub.get("topic", "")
             msg_type = sub.get("msg_type", "")
             freq_limit = sub.get("freq_limit", self.config.default_freq_limit)
-            options = sub.get("compression", {})
+            runtime_info = self._subscription_runtime_info(sub)
 
             if topic:
-                self._subscribed_topics[topic] = self._subscription_runtime_info(sub)
+                self._subscribed_topics[topic] = runtime_info
                 self._rate_limiter.set_limit(topic, freq_limit)
                 self._on_topic_subscribed(
                     topic,
                     msg_type,
                     self._subscription_callback_options(
                         freq_limit,
-                        sub.get("transport", "mqtt_json"),
-                        int(sub.get("qos", 1)),
-                        options,
+                        runtime_info["transport"],
+                        runtime_info["qos"],
+                        runtime_info["options"],
                     ),
                 )
                 logger.info(f"[Agent] Restored subscription: {topic}")
@@ -981,13 +983,25 @@ class BaseAgent(ABC):
         return
 
     def _subscription_runtime_info(self, sub: Dict[str, Any]) -> Dict[str, Any]:
+        msg_type = sub.get("msg_type", "")
+        transport = self._resolve_transport(
+            msg_type,
+            sub.get("transport", "auto"),
+        )
         return {
-            "msg_type": sub.get("msg_type", ""),
+            "msg_type": msg_type,
             "freq_limit": sub.get("freq_limit", self.config.default_freq_limit),
-            "transport": sub.get("transport", "mqtt_json"),
+            "transport": transport,
             "qos": int(sub.get("qos", 1)),
             "options": dict(sub.get("compression") or {}),
         }
+
+    @staticmethod
+    def _resolve_transport(msg_type: str, transport: str) -> str:
+        normalized = (transport or "").strip().lower()
+        if normalized == "" or normalized == "auto":
+            return default_registry.get_transport_type(msg_type or "")
+        return transport
 
     def _runtime_subscription_changed(self, topic: str, sub: Dict[str, Any]) -> bool:
         current = self._subscribed_topics.get(topic)
