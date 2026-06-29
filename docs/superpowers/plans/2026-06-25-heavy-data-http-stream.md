@@ -638,7 +638,7 @@ git commit -m "feat: 支持重型数据 HTTP snapshot meta"
 - 修改：`agent/ros1_agent.py`
 - 测试：`tests/test_ros1_agent.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_ros1_agent.py` 中增加：
 
@@ -697,7 +697,7 @@ def test_pointcloud2_uses_heavy_snapshot_path(monkeypatch):
     )
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -707,7 +707,7 @@ python3 -m pytest tests/test_ros1_agent.py::test_pointcloud2_uses_heavy_snapshot
 
 预期：失败，原因是 `ROS1Agent` 还没有 `http_stream` 分支。
 
-- [ ] **步骤 3：实现 header stamp helper**
+- [x] **步骤 3：实现 header stamp helper**
 
 在 `agent/ros1_agent.py` 中新增：
 
@@ -729,7 +729,7 @@ python3 -m pytest tests/test_ros1_agent.py::test_pointcloud2_uses_heavy_snapshot
         return str(getattr(header, "frame_id", "") or "")
 ```
 
-- [ ] **步骤 4：实现 http_stream 分支**
+- [x] **步骤 4：实现 http_stream 分支**
 
 在 `_on_topic_subscribed()` callback 中，放在 ROS1 serialized fast path 之前：
 
@@ -748,7 +748,7 @@ python3 -m pytest tests/test_ros1_agent.py::test_pointcloud2_uses_heavy_snapshot
                     return
 ```
 
-- [ ] **步骤 5：运行 ROS1 Agent 测试验证通过**
+- [x] **步骤 5：运行 ROS1 Agent 测试验证通过**
 
 运行：
 
@@ -758,7 +758,7 @@ python3 -m pytest tests/test_ros1_agent.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add agent/ros1_agent.py tests/test_ros1_agent.py

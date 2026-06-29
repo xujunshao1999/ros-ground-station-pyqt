@@ -239,6 +239,19 @@ class ROS1Agent(BaseAgent):
                 return  # 限频：跳过
             lpt["t"] = now
 
+            if tr == "http_stream" and mt == "sensor_msgs/PointCloud2":
+                raw_payload = self._serialize_ros_message(msg)
+                if raw_payload is not None:
+                    self.publish_heavy_snapshot_data(
+                        t,
+                        mt,
+                        raw_payload,
+                        seq=self._message_seq(msg),
+                        stamp=self._message_stamp(msg),
+                        frame_id=self._message_frame_id(msg),
+                    )
+                    return
+
             if tr == "mqtt_binary" and is_ros_message_binary_supported(t, mt):
                 raw_payload = self._serialize_ros_message(msg)
                 if raw_payload is not None:
@@ -299,6 +312,22 @@ class ROS1Agent(BaseAgent):
             return int(seq) if seq is not None else None
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _message_stamp(msg) -> dict:
+        header = getattr(msg, "header", None)
+        stamp = getattr(header, "stamp", None)
+        if stamp is None:
+            return {}
+        return {
+            "secs": int(getattr(stamp, "secs", 0)),
+            "nsecs": int(getattr(stamp, "nsecs", 0)),
+        }
+
+    @staticmethod
+    def _message_frame_id(msg) -> str:
+        header = getattr(msg, "header", None)
+        return str(getattr(header, "frame_id", "") or "")
 
     def _publish_latched_tf_static(self, msg_class: type, msg_type: str) -> None:
         """Fetch and publish the current latched /tf_static message once."""

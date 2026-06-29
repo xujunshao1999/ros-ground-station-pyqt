@@ -309,6 +309,63 @@ def test_allowlisted_topic_uses_json_when_transport_is_mqtt_json(monkeypatch):
     )
 
 
+def test_pointcloud2_uses_heavy_snapshot_path(monkeypatch):
+    from agent.mock_pointcloud2_data import (
+        FakePointCloud2Message,
+        build_pointcloud2_dict,
+    )
+
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: (_ for _ in ()).throw(
+            AssertionError("PointCloud2 heavy path should not use JSON conversion")
+        ),
+    )
+
+    data = build_pointcloud2_dict(
+        frame_id="velodyne",
+        seq=9,
+        stamp={"secs": 3, "nsecs": 4},
+    )
+    msg = FakePointCloud2Message.from_dict(data)
+    raw_payload = bytes(msg.data)
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 2.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_heavy_snapshot_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/velodyne_points",
+        "sensor_msgs/PointCloud2",
+        {"freq_limit": 2.0, "transport": "http_stream"},
+    )
+    captured_callback["callback"](msg)
+
+    agent.publish_heavy_snapshot_data.assert_called_once_with(
+        "/velodyne_points",
+        "sensor_msgs/PointCloud2",
+        raw_payload,
+        seq=9,
+        stamp={"secs": 3, "nsecs": 4},
+        frame_id="velodyne",
+    )
+
+
 def test_fleet_rule_callback_sends_fleet_data(monkeypatch):
     monkeypatch.setattr(
         "agent.ros1_agent.ros_msg_to_dict",
