@@ -167,6 +167,35 @@ class TestOnMessageStatus:
         assert sensor_signal.call_args[0][0] == "robot_001"
         assert sensor_signal.call_args[0][1] == "scan"
 
+    def test_sensor_meta_does_not_emit_sensor_data(self, client, mock_paho):
+        received = []
+        messages = []
+        client.signals.sensor_data_received.connect(
+            lambda robot_id, sensor_name, data: received.append((robot_id, sensor_name, data))
+        )
+        client.signals.message_received.connect(
+            lambda topic, message: messages.append((topic, message))
+        )
+
+        payload = json.dumps({
+            "type": "sensor_meta",
+            "data": {
+                "topic": "/velodyne_points",
+                "msg_type": "sensor_msgs/PointCloud2",
+                "transport": "http_stream",
+                "stream_url": "http://robot:8080/stream/velodyne_points",
+            },
+        }).encode("utf-8")
+
+        msg = MagicMock()
+        msg.topic = "robot/robot_001/sensor/velodyne_points/meta"
+        msg.payload = payload
+
+        client._on_message(None, None, msg)
+
+        assert received == []
+        assert messages == []
+
     def test_sensor_received_keeps_nested_topic_path(self, client, mock_paho):
         sensor_signal = MagicMock()
         client.signals.sensor_data_received.connect(sensor_signal)

@@ -207,6 +207,9 @@ class MqttClient:
                     len(msg.payload),
                 )
                 return
+            if robot_info and robot_info.get("type") == "sensor_meta":
+                logger.debug("[MqttClient] Ignoring heavy sensor meta on %s", msg.topic)
+                return
             if robot_info and robot_info.get("type") == "sensor":
                 sensor_name = robot_info.get("name", "")
                 if self._should_ignore_sensor_payload(sensor_name):

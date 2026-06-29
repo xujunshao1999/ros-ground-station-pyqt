@@ -43,6 +43,12 @@ subscriptions:
     transport: mqtt_binary
     qos: 1
     compression: {}
+  # - topic: /velodyne_points
+  #   msg_type: sensor_msgs/PointCloud2
+  #   freq_limit: 2.0
+  #   transport: http_stream
+  #   qos: 0
+  #   compression: {}
   turtlebot_002:
   - topic: /odom
     msg_type: nav_msgs/Odometry

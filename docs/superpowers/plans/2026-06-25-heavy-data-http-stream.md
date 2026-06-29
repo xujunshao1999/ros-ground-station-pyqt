@@ -1239,7 +1239,7 @@ git commit -m "fix: 避免发布不可用 HTTP stream meta"
 - 修改：`qt_frontend/mqtt_client.py`
 - 测试：`tests/test_mqtt_client.py`
 
-- [ ] **步骤 1：编写前端保护测试**
+- [x] **步骤 1：编写前端保护测试**
 
 在 `tests/test_mqtt_client.py` 增加：
 
@@ -1274,7 +1274,7 @@ def test_sensor_meta_does_not_emit_sensor_data(client, mock_paho):
     assert messages == []
 ```
 
-- [ ] **步骤 2：运行测试验证失败或确认现状**
+- [x] **步骤 2：运行测试验证失败或确认现状**
 
 运行：
 
@@ -1284,7 +1284,7 @@ python3 -m pytest tests/test_mqtt_client.py::test_sensor_meta_does_not_emit_sens
 
 预期：如果当前前端已经完全忽略 `sensor_meta`，则通过；如果 `sensor_data_received` 或 `message_received` 任一信号收到重型 meta，说明需要补充保护。
 
-- [ ] **步骤 3：补充前端忽略 sensor_meta**
+- [x] **步骤 3：补充前端忽略 sensor_meta**
 
 如果步骤 2 失败，在 `qt_frontend/mqtt_client.py` 的 `_on_message()` 中，在普通 sensor 分支前增加：
 
@@ -1296,7 +1296,7 @@ python3 -m pytest tests/test_mqtt_client.py::test_sensor_meta_does_not_emit_sens
 
 注意：保护逻辑应放在普通 `sensor` 分支之前，避免 meta 被 UI 当作普通传感器消息、传感器摘要或大 payload 摘要处理。
 
-- [ ] **步骤 4：配置示例**
+- [x] **步骤 4：配置示例**
 
 在 `agent/configs/turtlebot_001.yaml` 中新增或保留注释示例：
 
@@ -1324,7 +1324,7 @@ python3 -m pytest tests/test_mqtt_client.py::test_sensor_meta_does_not_emit_sens
 #   compression: {}
 ```
 
-- [ ] **步骤 5：运行前端 MQTT 测试**
+- [x] **步骤 5：运行前端 MQTT 测试**
 
 运行：
 
@@ -1334,7 +1334,7 @@ python3 -m pytest tests/test_mqtt_client.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add agent/configs/turtlebot_001.yaml qt_frontend/config/transmit_config.yaml qt_frontend/mqtt_client.py tests/test_mqtt_client.py
