@@ -106,3 +106,27 @@ services:
       - /dev/dri:/dev/dri
     stdin_open: true
     tty: true
+
+  # ------------------------------------------------------------------
+  # Husky 重型数据仿真 — husky_001
+  # (roscore + ROS1 Agent + Gazebo + Velodyne + RealSense + hdl_graph_slam)
+  # ------------------------------------------------------------------
+  robot-husky-001:
+    build:
+      context: /home/lab118/claudeCode_Project/catkin_sim
+      dockerfile: /home/lab118/claudeCode_Project/ros-ground-station-pyqt/docker/Dockerfile.husky
+    container_name: husky-001
+    environment:
+      - ROBOT_ID=husky_001
+      - BROKER_HOST=host-gateway
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    restart: unless-stopped
+    ports:
+      - "18080:8080"
+    volumes:
+      - ./protocol:/app/protocol:ro
+      - ./agent:/app/agent:rw
+      - ./docker/supervisord-husky.conf:/etc/supervisor/conf.d/ros-agent.conf:ro
+    stdin_open: true
+    tty: true

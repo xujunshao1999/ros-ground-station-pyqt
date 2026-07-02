@@ -18,7 +18,7 @@
 
 ## 三、Docker 架构
 
-新增 `docker/Dockerfile.husky`，镜像基于 ROS Noetic 环境构建。构建期将 `catkin_sim/src` 复制到镜像内的 catkin 工作空间并执行 `PYTHONNOUSERSITE=1 catkin_make -j2 -l2`，确保 Husky、Velodyne、RealSense 和 `hdl_graph_slam` 相关包在镜像内完成编译。
+新增 `docker/Dockerfile.husky`，镜像基于 ROS Noetic 环境构建。构建期将 `catkin_sim/src` 复制到镜像内的 catkin 工作空间并执行 `PYTHONNOUSERSITE=1 catkin_make -j2 -l2`，确保 Husky、Velodyne、RealSense 和 `hdl_graph_slam` 相关包在镜像内完成编译。镜像内安装 `xvfb`，用于在无宿主 X11 授权的 headless 容器中为 Gazebo depth camera 提供稳定渲染上下文。
 
 由于 `catkin_sim` 位于当前仓库外部，Compose 中 Husky 服务的 build context 指向 `/home/lab118/claudeCode_Project/catkin_sim`。Dockerfile 从该 context 复制 `src/`；运行期仍挂载当前地面站仓库的 `agent/` 与 `protocol/`，保持与现有 TurtleBot 服务一致的开发方式。
 
@@ -27,7 +27,7 @@
 新增 `docker/supervisord-husky.conf` 管理容器内进程：
 
 - `roscore`：提供容器内 ROS master；
-- `husky_slam`：等待 roscore 可用后启动 headless Husky + Velodyne + RealSense + `hdl_graph_slam`；
+- `husky_slam`：等待 roscore 可用后通过 `xvfb-run` 启动 headless Husky + Velodyne + RealSense + `hdl_graph_slam`；
 - `agent`：等待 roscore 可用后启动 `python3 -m agent.main --agent-type ros1`，使用 Husky 专用配置连接宿主机 MQTT broker。
 
 新增 `docker-compose.yml` 服务 `robot-husky-001`，环境变量使用 `ROBOT_ID=husky_001`、`BROKER_HOST=host-gateway`，并挂载 `agent/`、`protocol/` 和 `docker/supervisord-husky.conf`。
@@ -38,13 +38,12 @@
 
 - `/velodyne_points`：`sensor_msgs/PointCloud2`，使用 `http_stream`；
 - `/realsense/depth/color/points`：`sensor_msgs/PointCloud2`，使用 `http_stream`；
-- `/realsense/color/image_raw`：`sensor_msgs/Image`，使用 `http_stream`；
 - `/hdl_graph_slam/map_points`：`sensor_msgs/PointCloud2`，使用 `http_stream`；
 - `/hdl_graph_slam/odom`：`nav_msgs/Odometry`，使用 `mqtt_binary`；
 - `/tf`、`/tf_static`：`tf2_msgs/TFMessage`，使用 `mqtt_binary`；
 - `/joint_states`：`sensor_msgs/JointState`，使用 `mqtt_json`。
 
-重型 payload 默认不走 MQTT JSON，避免大点云或图像导致 broker 压力和序列化开销过高。
+重型 payload 默认不走 MQTT JSON，避免大点云导致 broker 压力和序列化开销过高。当前 ROS1 Agent 的 HTTP serialized snapshot 优先覆盖 `sensor_msgs/PointCloud2`，所以 RealSense RGB 原始图像不作为默认订阅；如需测试图像链路，可在后续扩展图像 HTTP snapshot 后启用。
 
 ## 六、验证标准
 

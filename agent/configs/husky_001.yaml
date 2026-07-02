@@ -1,0 +1,108 @@
+# Agent 配置文件
+# Husky + Velodyne + RealSense + hdl_graph_slam 仿真机器人
+
+# ============================================================
+# 基础设置
+# ============================================================
+
+robot_id: "husky_001"
+
+broker_host: "localhost"
+broker_port: 1883
+
+# ============================================================
+# 状态上报
+# ============================================================
+
+status_interval: 2.0
+
+# ============================================================
+# 话题控制
+# ============================================================
+
+default_freq_limit: 10.0
+
+# ============================================================
+# HTTP 流服务（重量话题）
+# ============================================================
+
+http_stream_port: 8080
+
+# docker-compose 将容器内 8080 映射到宿主机 18080。
+# Bridge 在宿主机运行时需要使用宿主机可访问的 URL。
+stream_base_url: "http://localhost:18080"
+
+# ============================================================
+# 连接控制
+# ============================================================
+
+auto_reconnect: true
+reconnect_delay: 5.0
+
+# ============================================================
+# ROS Agent 特有配置（Mock Agent 忽略）
+# ============================================================
+
+# ros_master_uri: "http://localhost:11311"
+# ros_namespace: "/"
+
+# ============================================================
+# 订阅与编队通信持久化
+# ============================================================
+
+subscriptions:
+- topic: /velodyne_points
+  msg_type: sensor_msgs/PointCloud2
+  freq_limit: 2.0
+  transport: http_stream
+  qos: 0
+  compression: {}
+- topic: /realsense/depth/color/points
+  msg_type: sensor_msgs/PointCloud2
+  freq_limit: 1.0
+  transport: http_stream
+  qos: 0
+  compression: {}
+- topic: /hdl_graph_slam/map_points
+  msg_type: sensor_msgs/PointCloud2
+  freq_limit: 0.5
+  transport: http_stream
+  qos: 0
+  compression: {}
+- topic: /hdl_graph_slam/odom
+  msg_type: nav_msgs/Odometry
+  freq_limit: 10.0
+  transport: mqtt_binary
+  qos: 0
+  compression: {}
+- topic: /tf
+  msg_type: tf2_msgs/TFMessage
+  freq_limit: 0.0
+  transport: mqtt_binary
+  qos: 0
+  compression: {}
+- topic: /tf_static
+  msg_type: tf2_msgs/TFMessage
+  freq_limit: 10.0
+  transport: mqtt_binary
+  qos: 1
+  compression: {}
+- topic: /joint_states
+  msg_type: sensor_msgs/JointState
+  freq_limit: 10.0
+  transport: mqtt_json
+  qos: 1
+  compression: {}
+
+# 图像话题可按需打开。当前 ROS1 Agent 的 HTTP serialized snapshot
+# 已优先覆盖 PointCloud2；图像默认不启用，避免原始图像走 JSON 路径造成压力。
+# - topic: /realsense/color/image_raw
+#   msg_type: sensor_msgs/Image
+#   freq_limit: 1.0
+#   transport: mqtt_binary
+#   qos: 0
+#   compression:
+#     quality: 60
+#     resize: [640, 480]
+
+fleet_rules: []

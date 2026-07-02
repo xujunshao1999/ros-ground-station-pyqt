@@ -1,0 +1,70 @@
+FROM ros:noetic-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CATKIN_WS=/opt/catkin_sim
+ENV LIBGL_ALWAYS_SOFTWARE=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    libgazebo11-dev \
+    libgl1-mesa-dri \
+    libgl1-mesa-glx \
+    libomp-dev \
+    libsuitesparse-dev \
+    python3-pip \
+    python3-progressbar \
+    python3-scipy \
+    supervisor \
+    ros-noetic-controller-manager \
+    ros-noetic-cpr-onav-description \
+    ros-noetic-cv-bridge \
+    ros-noetic-diff-drive-controller \
+    ros-noetic-fath-pivot-mount-description \
+    ros-noetic-flir-camera-description \
+    ros-noetic-gazebo-plugins \
+    ros-noetic-gazebo-ros \
+    ros-noetic-gazebo-ros-control \
+    ros-noetic-geodesy \
+    ros-noetic-hector-gazebo-plugins \
+    ros-noetic-image-transport \
+    ros-noetic-interactive-marker-twist-server \
+    ros-noetic-joint-state-controller \
+    ros-noetic-joint-trajectory-controller \
+    ros-noetic-libg2o \
+    ros-noetic-lms1xx \
+    ros-noetic-message-generation \
+    ros-noetic-message-runtime \
+    ros-noetic-nmea-msgs \
+    ros-noetic-nodelet \
+    ros-noetic-pcl-ros \
+    ros-noetic-pointcloud-to-laserscan \
+    ros-noetic-realsense2-description \
+    ros-noetic-robot-localization \
+    ros-noetic-robot-state-publisher \
+    ros-noetic-roslaunch \
+    ros-noetic-rostopic \
+    ros-noetic-teleop-twist-joy \
+    ros-noetic-teleop-twist-keyboard \
+    ros-noetic-tf \
+    ros-noetic-tf-conversions \
+    ros-noetic-tf2-ros \
+    ros-noetic-twist-mux \
+    ros-noetic-urdf \
+    ros-noetic-xacro \
+    xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir paho-mqtt pyyaml numpy
+
+RUN mkdir -p ${CATKIN_WS}/src
+COPY src/ ${CATKIN_WS}/src/
+
+WORKDIR ${CATKIN_WS}
+RUN /bin/bash -c "source /opt/ros/noetic/setup.bash && PYTHONNOUSERSITE=1 catkin_make -j2 -l2"
+
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]

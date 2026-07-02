@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 新增一个可复现构建的 Husky 仿真机器人 Docker 服务，默认启动 Gazebo、Velodyne、RealSense、`hdl_graph_slam` 和 ROS1 Agent，用于测试点云、图像和地图点云等重型数据链路。
+**目标：** 新增一个可复现构建的 Husky 仿真机器人 Docker 服务，默认启动 Gazebo、Velodyne、RealSense、`hdl_graph_slam` 和 ROS1 Agent，用于测试点云和地图点云等重型数据链路。
 
 **架构：** 新增 Husky 专用 Dockerfile，在镜像构建期复制并编译 `/home/lab118/claudeCode_Project/catkin_sim/src`。运行期通过 supervisord 管理 `roscore`、headless SLAM launch 和 ROS1 Agent，并在 `docker-compose.yml` 中新增 `robot-husky-001` 服务。Agent 使用 `agent/configs/husky_001.yaml` 默认订阅重型话题，点云和图像优先走 `http_stream`。
 
@@ -14,7 +14,7 @@
 
 - 创建 `docker/Dockerfile.husky`：定义 Husky 仿真镜像的系统依赖、catkin 工作空间复制和构建流程。
 - 创建 `docker/supervisord-husky.conf`：管理 `roscore`、`husky_slam` 和 `agent` 三个进程。
-- 创建 `agent/configs/husky_001.yaml`：定义 Husky 机器人 ID、MQTT broker、HTTP stream 和默认 ROS 话题订阅。
+- 创建 `agent/configs/husky_001.yaml`：定义 Husky 机器人 ID、MQTT broker、HTTP stream、宿主机可访问的 stream URL 和默认 ROS 话题订阅。
 - 修改 `docker-compose.yml`：新增 `robot-husky-001` 服务，使用外部 `catkin_sim` 作为 build context。
 - 创建或更新验证命令记录：使用 `docker compose config`、YAML 解析和可行的 Docker build 检查。
 
@@ -34,6 +34,7 @@ broker_port: 1883
 status_interval: 2.0
 default_freq_limit: 10.0
 http_stream_port: 8080
+stream_base_url: "http://localhost:18080"
 auto_reconnect: true
 reconnect_delay: 5.0
 subscriptions:
@@ -46,12 +47,6 @@ subscriptions:
 - topic: /realsense/depth/color/points
   msg_type: sensor_msgs/PointCloud2
   freq_limit: 1.0
-  transport: http_stream
-  qos: 0
-  compression: {}
-- topic: /realsense/color/image_raw
-  msg_type: sensor_msgs/Image
-  freq_limit: 2.0
   transport: http_stream
   qos: 0
   compression: {}
@@ -139,6 +134,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dri \
     libgl1-mesa-glx \
     libgazebo11-dev \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir paho-mqtt pyyaml numpy
@@ -183,7 +179,7 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 
 [program:husky_slam]
-command=/bin/bash -c "source /opt/ros/noetic/setup.bash && source /opt/catkin_sim/devel/setup.bash && export LIBGL_ALWAYS_SOFTWARE=1 && until rostopic list &>/dev/null; do echo 'waiting for roscore...'; sleep 1; done && roslaunch husky_velodyne_gazebo husky_hdl_graph_slam.launch gui:=false headless:=true"
+command=/bin/bash -c "source /opt/ros/noetic/setup.bash && source /opt/catkin_sim/devel/setup.bash && export LIBGL_ALWAYS_SOFTWARE=1 && until rostopic list &>/dev/null; do echo 'waiting for roscore...'; sleep 1; done && xvfb-run -a -s '-screen 0 1280x1024x24' roslaunch husky_velodyne_gazebo husky_hdl_graph_slam.launch gui:=false headless:=true"
 autorestart=true
 startsecs=8
 stdout_logfile=/dev/stdout
@@ -225,17 +221,15 @@ environment=BROKER_HOST="%(ENV_BROKER_HOST)s",ROBOT_ID="%(ENV_ROBOT_ID)s"
     environment:
       - ROBOT_ID=husky_001
       - BROKER_HOST=host-gateway
-      - DISPLAY=${DISPLAY}
     extra_hosts:
       - "host-gateway:host-gateway"
     restart: unless-stopped
+    ports:
+      - "18080:8080"
     volumes:
       - ./protocol:/app/protocol:ro
       - ./agent:/app/agent:rw
       - ./docker/supervisord-husky.conf:/etc/supervisor/conf.d/ros-agent.conf:ro
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    devices:
-      - /dev/dri:/dev/dri
     stdin_open: true
     tty: true
 ```
