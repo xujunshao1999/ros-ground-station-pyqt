@@ -23,7 +23,7 @@
 **文件：**
 - 创建：`agent/configs/husky_001.yaml`
 
-- [ ] **步骤 1：创建配置文件**
+- [x] **步骤 1：创建配置文件**
 
 写入 Husky 专用配置，重型话题使用 `http_stream`：
 
@@ -83,7 +83,7 @@ subscriptions:
 fleet_rules: []
 ```
 
-- [ ] **步骤 2：运行 YAML 解析检查**
+- [x] **步骤 2：运行 YAML 解析检查**
 
 运行：`python3 -c "import yaml; yaml.safe_load(open('agent/configs/husky_001.yaml')); print('ok')"`
 预期：输出 `ok`。
@@ -93,7 +93,7 @@ fleet_rules: []
 **文件：**
 - 创建：`docker/Dockerfile.husky`
 
-- [ ] **步骤 1：创建 Dockerfile**
+- [x] **步骤 1：创建 Dockerfile**
 
 Dockerfile 使用 `catkin_sim` 作为 build context，因此复制 context 内的 `src/`：
 
@@ -151,7 +151,7 @@ ENV LIBGL_ALWAYS_SOFTWARE=1
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
 ```
 
-- [ ] **步骤 2：检查 Dockerfile 语法入口**
+- [x] **步骤 2：检查 Dockerfile 语法入口**
 
 运行：`docker build -f docker/Dockerfile.husky /home/lab118/claudeCode_Project/catkin_sim --target does-not-exist`
 预期：Docker 能读取 Dockerfile；若失败，应是 `target stage "does-not-exist" could not be found`，而不是 Dockerfile 路径或 build context 错误。
@@ -161,7 +161,7 @@ CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
 **文件：**
 - 创建：`docker/supervisord-husky.conf`
 
-- [ ] **步骤 1：创建 supervisord 配置**
+- [x] **步骤 1：创建 supervisord 配置**
 
 ```ini
 [supervisord]
@@ -198,7 +198,7 @@ stderr_logfile_maxbytes=0
 environment=BROKER_HOST="%(ENV_BROKER_HOST)s",ROBOT_ID="%(ENV_ROBOT_ID)s"
 ```
 
-- [ ] **步骤 2：检查配置包含三个 program**
+- [x] **步骤 2：检查配置包含三个 program**
 
 运行：`rg -n "program:(roscore|husky_slam|agent)" docker/supervisord-husky.conf`
 预期：输出三个 program 行。
@@ -208,7 +208,7 @@ environment=BROKER_HOST="%(ENV_BROKER_HOST)s",ROBOT_ID="%(ENV_ROBOT_ID)s"
 **文件：**
 - 修改：`docker-compose.yml`
 
-- [ ] **步骤 1：新增 `robot-husky-001` 服务**
+- [x] **步骤 1：新增 `robot-husky-001` 服务**
 
 在 TurtleBot 服务之后加入：
 
@@ -234,7 +234,7 @@ environment=BROKER_HOST="%(ENV_BROKER_HOST)s",ROBOT_ID="%(ENV_ROBOT_ID)s"
     tty: true
 ```
 
-- [ ] **步骤 2：验证 Compose 解析**
+- [x] **步骤 2：验证 Compose 解析**
 
 运行：`docker compose config --services`
 预期：输出包含 `robot-husky-001`。
@@ -247,7 +247,7 @@ environment=BROKER_HOST="%(ENV_BROKER_HOST)s",ROBOT_ID="%(ENV_ROBOT_ID)s"
 - 检查：`agent/configs/husky_001.yaml`
 - 检查：`docker-compose.yml`
 
-- [ ] **步骤 1：运行配置验证**
+- [x] **步骤 1：运行配置验证**
 
 运行：
 
@@ -258,12 +258,12 @@ docker compose config --services
 
 预期：第一条输出 `yaml ok`，第二条包含 `robot-husky-001`。
 
-- [ ] **步骤 2：尝试构建 Husky 镜像**
+- [x] **步骤 2：尝试构建 Husky 镜像**
 
 运行：`docker compose build robot-husky-001`
 预期：在网络和 apt 源可用时完成构建；如果因网络、包名或外部源问题失败，记录首个失败命令和错误，不隐瞒未完成的运行态验证。
 
-- [ ] **步骤 3：运行态冒烟验证**
+- [x] **步骤 3：运行态冒烟验证**
 
 运行：
 
