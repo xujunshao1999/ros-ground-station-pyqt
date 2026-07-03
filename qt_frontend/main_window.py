@@ -290,6 +290,7 @@ class MainWindow(QMainWindow):
         sig.event_received.connect(self._event_panel.on_event_received)
         sig.cmd_ack_received.connect(self._command.on_cmd_ack)
         sig.sensor_data_received.connect(self._on_sensor_data)
+        sig.sensor_meta_received.connect(self._on_sensor_meta)
         sig.discover_response_received.connect(self._on_discover)
         sig.topic_response_received.connect(self._topic_config.on_topic_response)
         sig.config_response_received.connect(self._on_config_response)
@@ -595,6 +596,14 @@ class MainWindow(QMainWindow):
     def _on_sensor_data(self, robot_id: str, sensor_name: str, data: object) -> None:
         key = (robot_id, sensor_name)
         self._pending_sensor_data.setdefault(key, []).append((time.monotonic(), data))
+
+    def _on_sensor_meta(self, robot_id: str, sensor_name: str, data: object) -> None:
+        self._traffic_monitor.on_sensor_data_received(
+            robot_id,
+            sensor_name,
+            data,
+            now=time.monotonic(),
+        )
 
     def _flush_sensor_data(self) -> None:
         if not self._pending_sensor_data:

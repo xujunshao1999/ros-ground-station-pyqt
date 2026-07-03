@@ -167,11 +167,19 @@ class TestOnMessageStatus:
         assert sensor_signal.call_args[0][0] == "robot_001"
         assert sensor_signal.call_args[0][1] == "scan"
 
-    def test_sensor_meta_does_not_emit_sensor_data(self, client, mock_paho):
-        received = []
+    def test_sensor_meta_emits_traffic_metadata_without_sensor_data(self, client, mock_paho):
+        sensor_received = []
+        meta_received = []
         messages = []
         client.signals.sensor_data_received.connect(
-            lambda robot_id, sensor_name, data: received.append((robot_id, sensor_name, data))
+            lambda robot_id, sensor_name, data: sensor_received.append(
+                (robot_id, sensor_name, data)
+            )
+        )
+        client.signals.sensor_meta_received.connect(
+            lambda robot_id, sensor_name, data: meta_received.append(
+                (robot_id, sensor_name, data)
+            )
         )
         client.signals.message_received.connect(
             lambda topic, message: messages.append((topic, message))
@@ -184,6 +192,7 @@ class TestOnMessageStatus:
                 "msg_type": "sensor_msgs/PointCloud2",
                 "transport": "http_stream",
                 "stream_url": "http://robot:8080/stream/velodyne_points",
+                "payload_size": 512374,
             },
         }).encode("utf-8")
 
@@ -193,8 +202,22 @@ class TestOnMessageStatus:
 
         client._on_message(None, None, msg)
 
-        assert received == []
-        assert messages == []
+        assert sensor_received == []
+        assert meta_received == [
+            (
+                "robot_001",
+                "velodyne_points",
+                {
+                    "topic": "/velodyne_points",
+                    "msg_type": "sensor_msgs/PointCloud2",
+                    "transport": "http_stream",
+                    "stream_url": "http://robot:8080/stream/velodyne_points",
+                    "payload_size": 512374,
+                },
+            )
+        ]
+        assert messages[0][0] == "robot/robot_001/sensor/velodyne_points/meta"
+        assert messages[0][1].type == "sensor_meta"
 
     def test_sensor_received_keeps_nested_topic_path(self, client, mock_paho):
         sensor_signal = MagicMock()

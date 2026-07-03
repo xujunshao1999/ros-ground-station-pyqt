@@ -53,12 +53,6 @@ reconnect_delay: 5.0
 subscriptions:
 - topic: /velodyne_points
   msg_type: sensor_msgs/PointCloud2
-  freq_limit: 2.0
-  transport: http_stream
-  qos: 0
-  compression: {}
-- topic: /realsense/depth/color/points
-  msg_type: sensor_msgs/PointCloud2
   freq_limit: 1.0
   transport: http_stream
   qos: 0
@@ -72,6 +66,12 @@ subscriptions:
 - topic: /hdl_graph_slam/odom
   msg_type: nav_msgs/Odometry
   freq_limit: 10.0
+  transport: mqtt_binary
+  qos: 0
+  compression: {}
+- topic: /realsense/color/image_raw/compressed
+  msg_type: sensor_msgs/CompressedImage
+  freq_limit: 5.0
   transport: mqtt_binary
   qos: 0
   compression: {}
@@ -94,8 +94,8 @@ subscriptions:
   qos: 1
   compression: {}
 
-# 图像话题可按需打开。当前 ROS1 Agent 的 HTTP serialized snapshot
-# 已优先覆盖 PointCloud2；图像默认不启用，避免原始图像走 JSON 路径造成压力。
+# 如需传输 Realsense RGB 图像，默认使用 image_transport 生成的 compressed
+# 话题，避免原始 Image 走远程链路造成带宽压力。
 # - topic: /realsense/color/image_raw
 #   msg_type: sensor_msgs/Image
 #   freq_limit: 1.0

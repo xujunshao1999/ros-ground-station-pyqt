@@ -1321,6 +1321,28 @@ class TestTrafficMonitor:
     def test_estimate_payload_bytes_uses_large_payload_summary(self):
         assert TrafficMonitor.estimate_payload_bytes({"_payload_bytes": 123456}) == 123456
 
+    def test_estimate_payload_bytes_uses_heavy_meta_payload_size(self):
+        assert TrafficMonitor.estimate_payload_bytes({"payload_size": 512374}) == 512374
+        assert TrafficMonitor.estimate_payload_bytes({"size_bytes": 256000}) == 256000
+
+    def test_sensor_meta_transport_falls_back_to_payload_transport(self, qt_app):
+        panel = TrafficMonitor()
+
+        panel.on_sensor_data_received(
+            "husky_001",
+            "velodyne_points",
+            {
+                "topic": "/velodyne_points",
+                "transport": "http_stream",
+                "payload_size": 512374,
+            },
+            now=100.0,
+        )
+
+        entry = panel._entries[("velodyne_points", "husky_001")]
+        assert entry.transport == "http_stream"
+        assert entry.bytes_received == 512374
+
     def test_subscription_config_updates_transport(self, qt_app):
         panel = TrafficMonitor()
 

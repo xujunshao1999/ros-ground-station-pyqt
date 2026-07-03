@@ -264,6 +264,48 @@ def test_allowlisted_topic_uses_ros1_serialized_fast_path(monkeypatch):
     )
 
 
+def test_compressed_image_uses_ros1_serialized_fast_path(monkeypatch):
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: (_ for _ in ()).throw(
+            AssertionError("compressed image should not use JSON conversion")
+        ),
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 100.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_binary_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/realsense/color/image_raw/compressed",
+        "sensor_msgs/CompressedImage",
+        {"freq_limit": 100.0, "transport": "mqtt_binary"},
+    )
+    captured_callback["callback"](_SerializableRosMsg(b"jpeg-bytes"))
+
+    agent.publish_sensor_binary_data.assert_called_once()
+    assert agent.publish_sensor_binary_data.call_args[0][:3] == (
+        "/realsense/color/image_raw/compressed",
+        "sensor_msgs/CompressedImage",
+        b"jpeg-bytes",
+    )
+
+
 def test_allowlisted_topic_uses_json_when_transport_is_mqtt_json(monkeypatch):
     mock_rospy = MagicMock()
     captured_callback = {}

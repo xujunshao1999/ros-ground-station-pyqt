@@ -84,6 +84,37 @@ class TestMainWindowSensorBatching:
         assert [call[:3] for call in traffic_calls] == sensor_calls
         assert all(call[3] is not None for call in traffic_calls)
 
+    def test_sensor_meta_updates_traffic_without_sensor_summary(self, qt_app, monkeypatch):
+        monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
+        monkeypatch.setattr(MainWindow, "_check_ros", lambda self: None)
+
+        window = MainWindow({})
+        sensor_calls = []
+        traffic_calls = []
+
+        class SensorPanel:
+            def on_sensor_data_received(self, robot_id, sensor_name, data):
+                sensor_calls.append((robot_id, sensor_name, data))
+
+        class TrafficMonitor:
+            def on_sensor_data_received(self, robot_id, sensor_name, data, now=None):
+                traffic_calls.append((robot_id, sensor_name, data, now))
+
+        window._sensor_panel = SensorPanel()
+        window._traffic_monitor = TrafficMonitor()
+
+        meta = {
+            "topic": "/velodyne_points",
+            "transport": "http_stream",
+            "payload_size": 512374,
+        }
+        window._on_sensor_meta("husky_001", "velodyne_points", meta)
+
+        assert sensor_calls == []
+        assert len(traffic_calls) == 1
+        assert traffic_calls[0][:3] == ("husky_001", "velodyne_points", meta)
+        assert traffic_calls[0][3] is not None
+
 
 class TestMainWindowRosMonitor:
     def test_ros_check_runs_in_background(self, qt_app, monkeypatch):

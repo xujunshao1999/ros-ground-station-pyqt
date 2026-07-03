@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-noetic-controller-manager \
     ros-noetic-cpr-onav-description \
     ros-noetic-cv-bridge \
+    ros-noetic-compressed-image-transport \
     ros-noetic-diff-drive-controller \
     ros-noetic-fath-pivot-mount-description \
     ros-noetic-flir-camera-description \

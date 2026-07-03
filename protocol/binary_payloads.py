@@ -20,6 +20,9 @@ _ROS1_SERIALIZED_TOPIC_TYPES = {
     ("/odom", "nav_msgs/Odometry"),
     ("/imu", "sensor_msgs/Imu"),
 }
+_ROS1_SERIALIZED_MESSAGE_TYPES = {
+    "sensor_msgs/CompressedImage",
+}
 _ROS_MESSAGE_BINARY_ENCODINGS = frozenset({ENCODING_ROS1_SERIALIZED})
 
 
@@ -28,7 +31,10 @@ def is_binary_supported(msg_type: str) -> bool:
 
 
 def is_ros_message_binary_supported(topic: str, msg_type: str) -> bool:
-    return (topic, msg_type) in _ROS1_SERIALIZED_TOPIC_TYPES
+    return (
+        (topic, msg_type) in _ROS1_SERIALIZED_TOPIC_TYPES
+        or msg_type in _ROS1_SERIALIZED_MESSAGE_TYPES
+    )
 
 
 def is_ros_message_binary_encoding(envelope: Dict[str, Any]) -> bool:

@@ -146,5 +146,9 @@ def test_ros1_serialized_supported_types_are_controlled_by_allowlist():
     assert is_ros_message_binary_supported("/tf_static", "tf2_msgs/TFMessage") is True
     assert is_ros_message_binary_supported("/odom", "nav_msgs/Odometry") is True
     assert is_ros_message_binary_supported("/imu", "sensor_msgs/Imu") is True
+    assert is_ros_message_binary_supported(
+        "/realsense/color/image_raw/compressed",
+        "sensor_msgs/CompressedImage",
+    ) is True
     assert is_ros_message_binary_supported("/scan", "sensor_msgs/LaserScan") is False
     assert is_ros_message_binary_supported("/map", "nav_msgs/OccupancyGrid") is False

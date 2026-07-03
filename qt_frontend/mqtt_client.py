@@ -37,6 +37,7 @@ class MqttSignals(QObject):
     event_received = pyqtSignal(str, dict)  # (robot_id, event_data)
     cmd_ack_received = pyqtSignal(str, dict)  # (robot_id, ack_data)
     sensor_data_received = pyqtSignal(str, str, object)  # (robot_id, sensor_name, payload)
+    sensor_meta_received = pyqtSignal(str, str, object)  # (robot_id, sensor_name, meta)
     topic_response_received = pyqtSignal(str, dict)  # (robot_id, response_data)
     config_response_received = pyqtSignal(str, dict)  # (robot_id, config_data)
     discover_response_received = pyqtSignal(str, dict)  # (robot_id, response_data)
@@ -208,7 +209,17 @@ class MqttClient:
                 )
                 return
             if robot_info and robot_info.get("type") == "sensor_meta":
-                logger.debug("[MqttClient] Ignoring heavy sensor meta on %s", msg.topic)
+                payload_str = msg.payload.decode("utf-8")
+                message = Message.from_json(payload_str)
+                self.signals.message_received.emit(msg.topic, message)
+                meta_data = message.data if isinstance(message.data, dict) else {}
+                sensor_name = str(meta_data.get("topic") or robot_info.get("name", ""))
+                sensor_name = sensor_name.strip().lstrip("/")
+                self.signals.sensor_meta_received.emit(
+                    robot_info.get("robot_id", ""),
+                    sensor_name,
+                    meta_data,
+                )
                 return
             if robot_info and robot_info.get("type") == "sensor":
                 sensor_name = robot_info.get("name", "")

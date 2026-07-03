@@ -101,9 +101,10 @@ class TrafficMonitor(QWidget):
     def estimate_payload_bytes(data: object) -> int:
         import sys
         if isinstance(data, dict):
-            payload_bytes = data.get("_payload_bytes")
-            if isinstance(payload_bytes, int) and payload_bytes >= 0:
-                return payload_bytes
+            for field in ("_payload_bytes", "payload_size", "size_bytes"):
+                payload_bytes = data.get(field)
+                if isinstance(payload_bytes, int) and payload_bytes >= 0:
+                    return payload_bytes
         return sys.getsizeof(str(data))
 
     @classmethod
@@ -155,7 +156,8 @@ class TrafficMonitor(QWidget):
         normalized_sensor_name = self.normalize_sensor_name(sensor_name)
         key = (normalized_sensor_name, robot_id)
         config = self._topic_config.get(key, {})
-        transport = str(config.get("transport") or "mqtt_json")
+        data_transport = data.get("transport") if isinstance(data, dict) else None
+        transport = str(data_transport or config.get("transport") or "mqtt_json")
 
         if key not in self._entries:
             self._entries[key] = BandwidthEntry(
