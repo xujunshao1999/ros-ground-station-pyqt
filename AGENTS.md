@@ -16,7 +16,7 @@
 
 ## 代码风格与命名约定
 
-项目需兼容 ROS Noetic 的 Python 3.8。每个 Python 文件的首个 import 应为 `from __future__ import annotations`。使用 4 空格缩进；函数和变量使用 `snake_case`，类使用 `PascalCase`，常量使用 `UPPER_CASE`。类型标注使用 `Optional[X]`、`List[X]`、`Dict[K, V]`，不要使用 `X | None` 或 `list[X]`。路径处理使用 `pathlib.Path`。MQTT topic 构造集中在 `protocol/topics.py`，协议消息使用 `MessageFactory` 和 `Message.from_json()`。
+项目需兼容 ROS Noetic 的 Python 3.8。每个 Python 文件的首个 import 应为 `from __future__ import annotations`。使用 4 空格缩进；函数和变量使用 `snake_case`，类使用 `PascalCase`，常量使用 `UPPER_CASE`。类型标注使用 `Optional[X]`、`List[X]`、`Dict[K, V]`，不要使用 `X | None` 或 `list[X]`。路径处理使用 `pathlib.Path`。新增或修改的代码都要配套中文注释，说明代码意图、边界条件或非显而易见的实现原因。MQTT topic 构造集中在 `protocol/topics.py`，协议消息使用 `MessageFactory` 和 `Message.from_json()`。
 
 ## 测试指南
 
