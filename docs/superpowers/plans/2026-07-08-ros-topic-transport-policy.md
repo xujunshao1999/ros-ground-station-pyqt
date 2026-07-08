@@ -10,12 +10,26 @@
 
 ---
 
+## 术语与执行约定
+
+本计划应能在新对话中独立执行，不依赖此前聊天上下文。执行者需要先理解以下术语：
+
+- `transport`：本项目中一个 ROS topic 从机器人端 Agent 到地面站 Bridge 的跨机器传输方式。当前重点使用三类值：`mqtt_json`、`mqtt_binary`、`http_stream`。
+- `mqtt_json`：通过 MQTT 发送 JSON 格式数据，适合控制、状态、配置、发现结果和简单标量文本消息。
+- `mqtt_binary + ros1_serialized_v1`：通过 MQTT 发送二进制 envelope，payload 是 ROS1 原生序列化后的消息字节。它适合大多数普通 ROS topic，因为 Bridge 能按原始消息类型反序列化并重新发布到本地 ROS master。
+- `http_stream + ros1_serialized_v1`：MQTT 只发送 meta 信息，真正的大 payload 通过 HTTP snapshot 拉取。它适合点云、octomap、PCL 等大数据，避免把高带宽数据直接压到 MQTT broker 上。
+- `transport: auto`：前端或配置中让系统按消息类型自动选择最终传输方式。保存和下发时应能看到或写入解析后的实际传输方式。
+- `包级通配符规则`：用 `geometry_msgs/*`、`nav_msgs/*` 这类规则批量匹配同一 ROS 包下的所有消息类型。比如 `geometry_msgs/*` 匹配 `geometry_msgs/PoseStamped`、`geometry_msgs/Twist`、`geometry_msgs/TransformStamped` 等。精确消息类型规则优先于包级通配符规则，例如 `sensor_msgs/PointCloud2` 应先命中精确规则并走 `http_stream`，其它 `sensor_msgs/Image`、`sensor_msgs/JointState` 才落到 `sensor_msgs/*` 的 `mqtt_binary`。
+- `未知 ROS 消息类型`：形如 `custom_msgs/Thing` 的合法 ROS 消息类型字符串，但不在内置注册表中。默认策略是走 `mqtt_binary`，运行时由 Agent 和 Bridge 尝试 import 同名消息类并执行 ROS1 serialize/deserialize。
+
+执行时不要把“包级通配符规则”等同于 shell glob 文件匹配；它只是 `TopicRegistry` 内部根据消息类型字符串做的规则匹配。匹配顺序必须是：精确消息类型 > 包级通配符规则 > 未知合法 ROS 消息类型默认 `mqtt_binary`。
+
 ## 文件职责
 
 - 修改：`protocol/topic_registry.py`
   - 重新定义内置消息类型默认 transport。
   - 未知消息类型默认返回 `mqtt_binary`。
-  - 使用包级 wildcard 覆盖常见 ROS 包，避免只靠手工枚举单个消息类型。
+  - 使用包级通配符规则覆盖常见 ROS 包，避免只靠手工枚举单个消息类型。
   - 保留 `TopicTier` 兼容现有 UI，但不再把 `LIGHT` 简单等同于“所有小 ROS 消息都用 JSON”。
 
 - 修改：`protocol/binary_payloads.py`
@@ -325,12 +339,14 @@
   - 未注册且消息类型字符串合法的类型默认 `mqtt_binary`。
   - 运行时如果 ROS1 Agent 能 import 到消息类并 serialize，Bridge 能 import 到同名消息类并 deserialize，则无需额外配置。
 
-实现时不要求把上述每个类型都逐项写进 `_BUILTIN_REGISTRY`。推荐做法是：
+实现时不要求把上述每个类型都逐项写进 `_BUILTIN_REGISTRY`。推荐做法是用少量精确规则加包级通配符规则表达默认策略：
 
 - 对 `std_msgs` 的简单标量和文本保留逐项 `mqtt_json` 显式注册。
 - 对 `sensor_msgs/PointCloud2`、`sensor_msgs/PointCloud`、`pcl_msgs/*`、`octomap_msgs/*` 显式注册为 `http_stream`。
-- 对 `std_msgs/*`、`geometry_msgs/*`、`nav_msgs/*`、`sensor_msgs/*`、`tf/*`、`tf2_msgs/*`、`visualization_msgs/*`、`diagnostic_msgs/*`、`actionlib_msgs/*`、`trajectory_msgs/*`、`control_msgs/*`、`map_msgs/*`、`geographic_msgs/*`、`gazebo_msgs/*`、`shape_msgs/*`、`stereo_msgs/*`、`move_base_msgs/*`、`costmap_2d/*`、`dynamic_reconfigure/*`、`rosgraph_msgs/*`、`ackermann_msgs/*`、`nmea_msgs/*`、`bond/*`、`uuid_msgs/*`、`vision_msgs/*`、`apriltag_ros/*`、`aruco_msgs/*`、`fiducial_msgs/*` 注册为 `mqtt_binary` wildcard。
+- 对 `std_msgs/*`、`geometry_msgs/*`、`nav_msgs/*`、`sensor_msgs/*`、`tf/*`、`tf2_msgs/*`、`visualization_msgs/*`、`diagnostic_msgs/*`、`actionlib_msgs/*`、`trajectory_msgs/*`、`control_msgs/*`、`map_msgs/*`、`geographic_msgs/*`、`gazebo_msgs/*`、`shape_msgs/*`、`stereo_msgs/*`、`move_base_msgs/*`、`costmap_2d/*`、`dynamic_reconfigure/*`、`rosgraph_msgs/*`、`ackermann_msgs/*`、`nmea_msgs/*`、`bond/*`、`uuid_msgs/*`、`vision_msgs/*`、`apriltag_ros/*`、`aruco_msgs/*`、`fiducial_msgs/*` 注册为 `mqtt_binary` 包级通配符规则。
 - 对所有未注册合法 ROS 消息类型默认返回 `mqtt_binary`。
+
+执行者如果需要在代码中命名变量，可以继续使用 `wildcard` 作为英文变量名；文档语义上它指的就是“包级通配符规则”。不要为覆盖范围清单里的每个消息类型都写一条注册记录，除非该类型需要覆盖包级默认规则。
 
 ### `http_stream + ros1_serialized_v1`
 
@@ -425,7 +441,7 @@ def get(self, msg_type: str) -> TopicInfo:
 
 并将常规 ROS 消息类型注册为 `TopicTier.MEDIUM`，将 `sensor_msgs/PointCloud2`、`sensor_msgs/PointCloud`、`octomap_msgs/*`、`pcl_msgs/*` 注册为 `TopicTier.HEAVY`。
 
-注册顺序要保证精确匹配优先于 wildcard。例如 `std_msgs/Float64` 应命中显式 `mqtt_json`，`std_msgs/Float32MultiArray` 应命中 `std_msgs/*` 的 `mqtt_binary`。
+注册顺序要保证精确匹配优先于包级通配符规则。例如 `std_msgs/Float64` 应命中显式 `mqtt_json`，`std_msgs/Float32MultiArray` 应命中 `std_msgs/*` 的 `mqtt_binary`。
 
 - [ ] **步骤 4：运行测试确认通过**
 
@@ -859,7 +875,8 @@ git commit -m "docs: 记录ROS话题传输策略验证"
 ## 自检
 
 - 覆盖了 `std_msgs`、`geometry_msgs`、`nav_msgs`、`sensor_msgs`、`tf/tf2`、`visualization_msgs`、`diagnostic_msgs`、`actionlib_msgs`、`trajectory_msgs`、`control_msgs`、`map_msgs`、`geographic_msgs`、`gazebo_msgs`、`shape_msgs`、`stereo_msgs`、`move_base_msgs`、`costmap_2d`、`dynamic_reconfigure`、`rosgraph_msgs`、`ackermann_msgs`、`nmea_msgs`、`bond`、`uuid_msgs`、`vision_msgs`、`apriltag_ros`、`aruco_msgs`、`fiducial_msgs`、`pcl_msgs`、`octomap_msgs` 和自定义消息。
-- 计划明确使用 wildcard 和未知类型默认值兜底，不依赖手工枚举覆盖所有 ROS 消息。
+- 计划已解释“包级通配符规则”的含义、匹配顺序和实现目的，新开对话后不需要依赖此前聊天上下文。
+- 计划明确使用包级通配符规则和未知类型默认值兜底，不依赖手工枚举覆盖所有 ROS 消息。
 - 未知消息类型默认 `mqtt_binary`。
 - `PointCloud2` 等大 payload 保持 `http_stream`。
 - 计划包含测试、实现、验证和 commit 步骤。
