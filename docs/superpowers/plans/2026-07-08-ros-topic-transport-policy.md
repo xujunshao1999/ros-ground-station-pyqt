@@ -1,6 +1,6 @@
 # ROS 话题默认传输策略重构实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]` / `- [x]`）语法来跟踪进度。
 
 **目标：** 将常规 ROS topic 默认改为 `mqtt_binary + ros1_serialized_v1`，大 payload 继续使用 `http_stream + ros1_serialized_v1`，只让控制、配置、状态和简单标量数据使用 `mqtt_json`。
 
@@ -369,7 +369,7 @@
 - 修改：`protocol/topic_registry.py`
 - 测试：`tests/test_protocol_registry.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_protocol_registry.py` 增加：
 
@@ -412,7 +412,7 @@ def test_unknown_ros_message_defaults_to_mqtt_binary():
     assert registry.get_transport_type("custom_msgs/Thing") == "mqtt_binary"
 ```
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
 运行：
 
@@ -422,7 +422,7 @@ python3 -m pytest tests/test_protocol_registry.py -q
 
 预期：新增测试失败，当前 `Odometry`、`Imu`、`JointState` 或未知类型仍可能返回 `mqtt_json`。
 
-- [ ] **步骤 3：修改 `protocol/topic_registry.py`**
+- [x] **步骤 3：修改 `protocol/topic_registry.py`**
 
 实现要点：
 
@@ -443,7 +443,7 @@ def get(self, msg_type: str) -> TopicInfo:
 
 注册顺序要保证精确匹配优先于包级通配符规则。例如 `std_msgs/Float64` 应命中显式 `mqtt_json`，`std_msgs/Float32MultiArray` 应命中 `std_msgs/*` 的 `mqtt_binary`。
 
-- [ ] **步骤 4：运行测试确认通过**
+- [x] **步骤 4：运行测试确认通过**
 
 运行：
 
@@ -453,7 +453,7 @@ python3 -m pytest tests/test_protocol_registry.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add protocol/topic_registry.py tests/test_protocol_registry.py
@@ -470,7 +470,7 @@ git commit -m "refactor: 调整ROS话题默认传输策略"
 - 测试：`tests/test_binary_payloads.py`
 - 测试：`tests/test_ros1_agent.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_binary_payloads.py` 增加：
 
@@ -527,7 +527,7 @@ def test_joint_state_uses_ros1_serialized_fast_path(monkeypatch):
     )
 ```
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
 运行：
 
@@ -537,7 +537,7 @@ python3 -m pytest tests/test_binary_payloads.py::test_ros1_serialized_supports_u
 
 预期：当前白名单导致失败。
 
-- [ ] **步骤 3：修改 `protocol/binary_payloads.py`**
+- [x] **步骤 3：修改 `protocol/binary_payloads.py`**
 
 将 `is_ros_message_binary_supported()` 调整为默认允许合法 ROS 消息类型：
 
@@ -550,7 +550,7 @@ def is_ros_message_binary_supported(topic: str, msg_type: str) -> bool:
     return "/" in msg_type and len(msg_type) > 3
 ```
 
-- [ ] **步骤 4：确认 `agent/ros1_agent.py` 不再阻断常规类型**
+- [x] **步骤 4：确认 `agent/ros1_agent.py` 不再阻断常规类型**
 
 保留现有逻辑：
 
@@ -564,7 +564,7 @@ if tr == "mqtt_binary" and is_ros_message_binary_supported(t, mt):
 
 如果 `_serialize_ros_message()` 返回 `None`，继续落到 JSON dict 路径。
 
-- [ ] **步骤 5：运行测试确认通过**
+- [x] **步骤 5：运行测试确认通过**
 
 运行：
 
@@ -574,7 +574,7 @@ python3 -m pytest tests/test_binary_payloads.py tests/test_ros1_agent.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add protocol/binary_payloads.py agent/ros1_agent.py tests/test_binary_payloads.py tests/test_ros1_agent.py
@@ -589,7 +589,7 @@ git commit -m "feat: 默认支持ROS1序列化二进制话题"
 - 修改：`qt_frontend/panels/topic_config_panel.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_panels.py` 的 `TestTopicConfigPanel` 增加：
 
@@ -618,7 +618,7 @@ def test_available_topic_selection_shows_auto_transport_preview(self, qt_app):
     assert "http_stream" in panel._transport_preview.text()
 ```
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
 运行：
 
@@ -628,7 +628,7 @@ python3 -m pytest tests/test_panels.py::TestTopicConfigPanel::test_available_top
 
 预期：失败，因为当前没有 `_transport_preview`。
 
-- [ ] **步骤 3：修改面板**
+- [x] **步骤 3：修改面板**
 
 在表单传输层级行后增加：
 
@@ -671,7 +671,7 @@ self._combo_transport.currentIndexChanged.connect(self._update_transport_preview
 
 在 `_on_available_topic_selected()`、`_show_add_form()`、`_load_selected_entry_into_form()` 末尾调用 `_update_transport_preview()`。
 
-- [ ] **步骤 4：运行测试确认通过**
+- [x] **步骤 4：运行测试确认通过**
 
 运行：
 
@@ -681,7 +681,7 @@ python3 -m pytest tests/test_panels.py::TestTopicConfigPanel -q
 
 预期：通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add qt_frontend/panels/topic_config_panel.py tests/test_panels.py
@@ -698,7 +698,7 @@ git commit -m "feat: 显示话题自动传输方式预览"
 - 修改：`docs/protocol.md`
 - 测试：`tests/test_husky_docker_config.py`
 
-- [ ] **步骤 1：检查当前配置差异**
+- [x] **步骤 1：检查当前配置差异**
 
 运行：
 
@@ -708,7 +708,7 @@ git diff -- qt_frontend/config/transmit_config.yaml agent/configs/husky_001.yaml
 
 预期：确认是否有用户运行态配置。不要覆盖用户未确认的配置。
 
-- [ ] **步骤 2：编写配置测试**
+- [x] **步骤 2：编写配置测试**
 
 在 `tests/test_husky_docker_config.py` 中确认：
 
@@ -722,7 +722,7 @@ def test_husky_joint_states_uses_binary_transport():
     assert subscriptions["/joint_states"]["transport"] == "mqtt_binary"
 ```
 
-- [ ] **步骤 3：运行测试确认失败**
+- [x] **步骤 3：运行测试确认失败**
 
 运行：
 
@@ -732,7 +732,7 @@ python3 -m pytest tests/test_husky_docker_config.py::test_husky_joint_states_use
 
 预期：当前如果仍为 `mqtt_json`，测试失败。
 
-- [ ] **步骤 4：修改默认配置**
+- [x] **步骤 4：修改默认配置**
 
 在 `agent/configs/husky_001.yaml` 中将 `/joint_states` 改为：
 
@@ -747,7 +747,7 @@ python3 -m pytest tests/test_husky_docker_config.py::test_husky_joint_states_use
 
 如果确认 `qt_frontend/config/transmit_config.yaml` 可纳入默认配置，同步将常规 ROS topic 的 `transport` 调整为 `mqtt_binary`，`PointCloud2` 保持 `http_stream`。
 
-- [ ] **步骤 5：更新协议文档**
+- [x] **步骤 5：更新协议文档**
 
 在 `docs/protocol.md` 增加传输策略说明：
 
@@ -760,7 +760,7 @@ python3 -m pytest tests/test_husky_docker_config.py::test_husky_joint_states_use
 - 未注册 ROS 消息类型：默认 `mqtt_binary`
 ```
 
-- [ ] **步骤 6：运行验证**
+- [x] **步骤 6：运行验证**
 
 运行：
 
@@ -771,7 +771,7 @@ git diff --check -- agent/configs/husky_001.yaml qt_frontend/config/transmit_con
 
 预期：测试通过，空白检查无输出。
 
-- [ ] **步骤 7：Commit**
+- [x] **步骤 7：Commit**
 
 ```bash
 git add agent/configs/husky_001.yaml qt_frontend/config/transmit_config.yaml docs/protocol.md tests/test_husky_docker_config.py
@@ -785,7 +785,7 @@ git commit -m "docs: 更新ROS话题默认传输策略"
 **文件：**
 - 不修改文件。
 
-- [ ] **步骤 1：启动 Husky 容器和前端**
+- [x] **步骤 1：启动 Husky 容器和前端**
 
 运行：
 
@@ -796,7 +796,7 @@ docker compose up -d --force-recreate robot-husky-001
 
 预期：Husky 容器、Bridge 和 Qt 前端启动。
 
-- [ ] **步骤 2：验证普通 topic 走 MQTT binary**
+- [x] **步骤 2：验证普通 topic 走 MQTT binary**
 
 运行：
 
@@ -815,7 +815,7 @@ timeout 10 mosquitto_sub -h localhost -t 'robot/husky_001/sensor/joint_states' -
 }
 ```
 
-- [ ] **步骤 3：验证点云继续走 HTTP stream**
+- [x] **步骤 3：验证点云继续走 HTTP stream**
 
 运行：
 
@@ -832,7 +832,7 @@ timeout 10 mosquitto_sub -h localhost -t 'robot/husky_001/sensor/velodyne_points
 }
 ```
 
-- [ ] **步骤 4：验证本地 ROS topic**
+- [x] **步骤 4：验证本地 ROS topic**
 
 运行：
 
@@ -844,7 +844,7 @@ timeout 8 rostopic echo -n 1 /husky_001/joint_states/header
 
 预期：Bridge 已重建本地 ROS topic，echo 能拿到消息。
 
-- [ ] **步骤 5：关闭运行环境**
+- [x] **步骤 5：关闭运行环境**
 
 运行：
 
@@ -855,7 +855,7 @@ docker compose stop robot-husky-001
 
 预期：前端和容器停止。
 
-- [ ] **步骤 6：记录结果**
+- [x] **步骤 6：记录结果**
 
 将运行态结果写入当天工作日志：
 
@@ -863,7 +863,7 @@ docker compose stop robot-husky-001
 docs/work-log-2026-07-08.md
 ```
 
-- [ ] **步骤 7：Commit**
+- [x] **步骤 7：Commit**
 
 ```bash
 git add docs/work-log-2026-07-08.md

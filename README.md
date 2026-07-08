@@ -21,6 +21,7 @@ Robot (ROS) ──► Agent ──MQTT──► Mosquitto Broker ──MQTT─�
 - Agent 端支持 `subscriptions` 和 `fleet_rules` 启动恢复，并将运行态配置写回机器人自己的 `config.yaml`。
 - Bridge 端将 MQTT 数据重新发布到地面站本地 roscore，RViz 只依赖地面站本地 ROS master。
 - 支持多机器人 TF 命名空间化和 `global_map -> robot/map` 统一坐标根，机器人 `/tf_static` 通过 MQTT retained 消息转发并在 Bridge 侧缓存重发。
+- 地面站本地 ROS 中仅 `/tf`、`/tf_static` 使用标准公共话题；普通传感器和状态话题按机器人隔离，例如 `/turtlebot_001/odom`、`/turtlebot_001/joint_states`。
 
 ## 快速开始（Ubuntu 20.04 + ROS Noetic）
 
@@ -157,6 +158,9 @@ docker compose up -d robot-turtlebot-001 robot-turtlebot-002
 
 # 查看宿主机话题
 source /opt/ros/noetic/setup.bash && rostopic list
+
+# 查看某台机器人转发后的关节状态
+source /opt/ros/noetic/setup.bash && rostopic echo -n 1 /turtlebot_001/joint_states/header
 
 # 查看地面站本地 TF
 source /opt/ros/noetic/setup.bash && rosrun tf view_frames

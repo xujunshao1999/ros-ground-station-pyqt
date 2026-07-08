@@ -260,7 +260,7 @@ SQLite、录制和回放在早期设计中出现过，但当前代码主线的�
 | ROS 数据还原 | Bridge 发布本地 ROS 话题 | 让 RViz 订阅真实 typed ROS messages |
 | Agent 语言 | Python | rospy 集成简单，协议代码可复用 |
 | 消息格式 | JSON | 开发期透明可查，后续可替换序列化层 |
-| 话题命名 | `/{robot_id}/{topic}` + canonical TF | 多机器人隔离，同时兼容 RViz TF 习惯 |
+| 话题命名 | 普通话题 `/{robot_id}/{topic}`，仅 `/tf` 和 `/tf_static` 使用公共话题 | 多机器人隔离，同时兼容 RViz TF 习惯 |
 | 仿真验证 | Docker Turtlebot3 + 宿主机 Station | 模拟真实多机边界，避免单 roscore 假联通 |
 | Python 版本 | 3.8+ | 兼容 ROS Noetic |
 
@@ -287,7 +287,7 @@ Turtlebot3 /odom /scan /imu /tf /joint_states
   -> ros1_agent
   -> MQTT
   -> mqtt_ros_bridge
-  -> host roscore
+  -> host roscore (/turtlebot_001/odom, /turtlebot_001/joint_states, /tf ...)
   -> RViz / Qt frontend
 ```
 
