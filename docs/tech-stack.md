@@ -162,8 +162,8 @@ Bridge 的设计要点：
 
 - 优先使用 Station 已知订阅表中的 msg_type。
 - 未注册话题可从 MQTT payload 的 `_msg_type` 自动检测 ROS 类型。
-- `/tf`、`/tf_static`、`/joint_states` 走标准 ROS 话题名，而不是强行加机器人前缀。
-- 普通话题发布为 `/{robot_id}/{original_topic}`，例如 `/turtlebot_001/odom`。
+- `/tf`、`/tf_static` 走标准 ROS 话题名，而不是强行加机器人前缀。
+- 普通话题发布为 `/{robot_id}/{original_topic}`，例如 `/turtlebot_001/odom` 和 `/turtlebot_001/joint_states`。
 - 多机器人 TF 命名空间前缀由 `namespace_tf_frames` 配置控制。
 
 这让 Station 可以同时做到：

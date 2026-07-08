@@ -491,6 +491,49 @@ class TestMqttRouting:
 class TestBinarySensorData:
     """Binary sensor envelopes and payloads are decoded before ROS publish."""
 
+    def test_json_joint_states_publishes_to_robot_namespace(
+        self, bridge: MqttRosBridge
+    ):
+        # 关节状态按机器人隔离，避免多机器人同名关节混到公共话题。
+        data = {
+            "header": {"stamp": {"secs": 1, "nsecs": 2}, "frame_id": ""},
+            "name": ["left_wheel_joint", "right_wheel_joint"],
+            "position": [0.1, 0.2],
+            "velocity": [1.0, 1.1],
+            "effort": [],
+            "_msg_type": "sensor_msgs/JointState",
+        }
+        publisher = MagicMock()
+        ros_msg = types.SimpleNamespace(name=data["name"])
+
+        def fake_dict_to_ros_msg(message_data, msg_type):
+            assert msg_type == "sensor_msgs/JointState"
+            assert message_data["name"] == data["name"]
+            return ros_msg
+
+        with patch(
+            "bridge.mqtt_ros_bridge.dict_to_ros_msg",
+            side_effect=fake_dict_to_ros_msg,
+        ), patch.object(
+            bridge,
+            "_get_or_create_typed_publisher",
+            return_value=publisher,
+        ) as get_pub, patch.object(
+            bridge,
+            "_wait_for_publisher_connection",
+        ):
+            bridge._handle_sensor_data(
+                "robot_001",
+                "joint_states",
+                json.dumps(data).encode("utf-8"),
+            )
+
+        get_pub.assert_called_once_with(
+            "/robot_001/joint_states",
+            type(ros_msg),
+        )
+        publisher.publish.assert_called_once_with(ros_msg)
+
     def test_binary_laser_scan_roundtrip_publishes_ros_message(
         self, bridge: MqttRosBridge
     ):
@@ -542,6 +585,42 @@ class TestBinarySensorData:
 
         get_pub.assert_called_once_with("/robot_001/scan", type(ros_msg))
         publisher.publish.assert_called_once_with(ros_msg)
+
+    def test_binary_joint_states_publishes_to_robot_namespace(
+        self, bridge: MqttRosBridge
+    ):
+        # ROS1 serialized 路径也必须和 JSON 路径使用同一套命名规则。
+        envelope, payload = encode_ros_message_binary(
+            "/joint_states",
+            "sensor_msgs/JointState",
+            b"serialized-joint-states",
+            seq=12,
+        )
+        publisher = MagicMock()
+
+        with patch(
+            "bridge.mqtt_ros_bridge._get_message_class",
+            return_value=MockHeaderMessage,
+        ), patch.object(
+            bridge,
+            "_get_or_create_typed_publisher",
+            return_value=publisher,
+        ) as get_pub, patch.object(
+            bridge,
+            "_wait_for_publisher_connection",
+        ):
+            bridge._handle_sensor_data(
+                "robot_001",
+                "joint_states",
+                json.dumps(envelope).encode("utf-8"),
+            )
+            bridge._handle_sensor_binary("robot_001", "joint_states", payload)
+
+        get_pub.assert_called_once_with(
+            "/robot_001/joint_states",
+            MockHeaderMessage,
+        )
+        publisher.publish.assert_called_once()
 
     def test_binary_tf_message_publishes_deserialized_ros_message_without_dict_conversion(
         self, bridge: MqttRosBridge

@@ -648,9 +648,8 @@ class MqttRosBridge:
     # MQTT ---> ROS: sensor data
     # ================================================================
 
-    # Special sensor names that publish to canonical ROS topics
-    # (RViz and standard tools subscribe to these, not /{robot_id}/...)
-    _CANONICAL_TOPICS = frozenset({"tf", "tf_static", "joint_states"})
+    # TF 必须发布到 ROS 标准公共话题；多机器人隔离依赖 frame 命名空间。
+    _CANONICAL_TOPICS = frozenset({"tf", "tf_static"})
 
     def _handle_sensor_data(
         self, robot_id: str, sensor_name: str, payload: bytes
@@ -662,9 +661,9 @@ class MqttRosBridge:
         topic and message type; when no mapping exists, the ``_msg_type``
         field injected by the agent is used for auto-detection.
 
-        TF, TF_STATIC, and JOINT_STATES are routed to canonical ROS
-        topics (``/tf``, ``/tf_static``, ``/joint_states``) so that
-        RViz and other standard tools can consume them.
+        TF and TF_STATIC are routed to canonical ROS topics
+        (``/tf``, ``/tf_static``) so that RViz and other standard tools
+        can consume them.
         """
         total_start = time.monotonic()
         payload_size = len(payload)
@@ -885,7 +884,7 @@ class MqttRosBridge:
             convert_ms = (time.monotonic() - convert_start) * 1000.0
 
             if is_canonical:
-                full_topic = ros_topic_str  # /tf, /tf_static, /joint_states
+                full_topic = ros_topic_str  # /tf, /tf_static
             else:
                 full_topic = f"/{robot_id}{ros_topic_str}"
 
