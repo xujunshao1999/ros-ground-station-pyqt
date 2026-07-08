@@ -352,19 +352,26 @@ MQTT topic: `robot/{src}/to/{dst}/meta`
 
 ## 5. 话题分层传输策略
 
-### 5.1 分层定义
+### 5.1 默认传输策略
+
+- 控制、状态、配置和简单标量：`mqtt_json`
+- 常规 ROS topic：`mqtt_binary`，payload 使用 `ros1_serialized_v1`
+- 大 payload：`http_stream`，MQTT 仅发送 meta，HTTP payload 使用 `ros1_serialized_v1`
+- 未注册 ROS 消息类型：默认 `mqtt_binary`
+
+### 5.2 分层定义
 
 | 层级 | 条件 | 传输方式 | 典型消息 |
 |------|------|---------|---------|
-| light | < 10KB | MQTT + JSON | IMU、GPS、里程计、Twist |
-| medium | 10KB - 1MB | MQTT + 二进制 | 压缩图像、LaserScan |
-| heavy | > 1MB | HTTP 流 + MQTT 信令 | 原始图像、PointCloud2 |
+| light | 控制、状态、配置、简单标量 | MQTT + JSON | `std_msgs/String`、`std_msgs/Bool` |
+| medium | 常规 ROS topic | MQTT + ROS1 序列化二进制 | Odometry、TF、JointState、压缩图像、LaserScan |
+| heavy | 点云、OctoMap、PCL 等大 payload | HTTP 流 + MQTT 信令 | PointCloud2、Octomap |
 
-### 5.2 自动分类规则
+### 5.3 自动分类规则
 
-Agent 根据 `protocol/topic_registry.py` 中注册的消息类型自动选择传输层级。未注册的类型默认为 light。
+Agent 根据 `protocol/topic_registry.py` 中注册的消息类型自动选择传输层级。精确消息类型规则优先于包级通配符规则，例如 `sensor_msgs/PointCloud2` 先命中 `http_stream`，其它 `sensor_msgs/*` 常规话题默认走 `mqtt_binary`。未注册但合法的 ROS 消息类型默认走 `mqtt_binary`，运行时由 Agent 和 Bridge 尝试按 ROS1 消息类执行 serialize/deserialize。
 
-### 5.3 压缩选项
+### 5.4 压缩选项
 
 | 选项 | 适用类型 | 说明 |
 |------|---------|------|
@@ -372,7 +379,7 @@ Agent 根据 `protocol/topic_registry.py` 中注册的消息类型自动选择�
 | resize | 图像 | [width, height]，如 [320, 240] |
 | voxel_size | 点云 | 体素降采样尺寸（米），如 0.1 |
 
-### 5.4 频率控制
+### 5.5 频率控制
 
 所有话题均支持 `freq_limit` 参数。Agent 内部为每个订阅维护独立的限频器，超过频率的帧直接丢弃。
 

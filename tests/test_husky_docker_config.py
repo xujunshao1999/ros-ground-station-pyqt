@@ -5,7 +5,6 @@ from typing import Any, Dict
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -38,6 +37,16 @@ def test_husky_agent_config_defaults_to_heavy_snapshot_topics() -> None:
     assert subscriptions["/hdl_graph_slam/map_points"]["transport"] == "http_stream"
     assert subscriptions["/hdl_graph_slam/odom"]["transport"] == "mqtt_binary"
     assert subscriptions["/tf_static"]["qos"] == 1
+
+
+def test_husky_joint_states_uses_binary_transport() -> None:
+    """Husky 关节状态是常规 ROS 话题，默认应使用 ROS1 serialized 二进制传输。"""
+    config = _load_yaml("agent/configs/husky_001.yaml")
+    subscriptions = {
+        item["topic"]: item for item in config["subscriptions"]
+    }
+
+    assert subscriptions["/joint_states"]["transport"] == "mqtt_binary"
 
 
 def test_husky_compose_service_uses_catkin_sim_context_and_publishes_stream_port() -> None:
