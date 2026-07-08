@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -16,7 +15,6 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -160,9 +158,18 @@ class TopicConfigPanel(QWidget):
         f3 = QHBoxLayout()
         f3.addWidget(QLabel("传输层级:"))
         self._combo_transport = QComboBox()
-        self._combo_transport.addItems(["AUTO", "LIGHT (mqtt_json)", "MEDIUM (mqtt_binary)", "HEAVY (http_stream)"])
+        self._combo_transport.addItems([
+            "AUTO",
+            "LIGHT (mqtt_json)",
+            "MEDIUM (mqtt_binary)",
+            "HEAVY (http_stream)",
+        ])
         f3.addWidget(self._combo_transport)
         form.addLayout(f3)
+
+        self._transport_preview = QLabel("预计传输方式：-")
+        self._transport_preview.setWordWrap(True)
+        form.addWidget(self._transport_preview)
 
         f4 = QHBoxLayout()
         f4.addWidget(QLabel("频率上限(Hz):"))
@@ -186,6 +193,8 @@ class TopicConfigPanel(QWidget):
         self._btn_cancel = QPushButton("取消")
         self._btn_confirm.clicked.connect(self._confirm_entry)
         self._btn_cancel.clicked.connect(self._hide_form)
+        self._combo_msg_type.currentTextChanged.connect(self._update_transport_preview)
+        self._combo_transport.currentIndexChanged.connect(self._update_transport_preview)
         form_row = QHBoxLayout()
         form_row.addWidget(self._btn_confirm)
         form_row.addWidget(self._btn_cancel)
@@ -216,6 +225,13 @@ class TopicConfigPanel(QWidget):
         elif tier_upper == "HEAVY":
             return "http_stream"
         return "mqtt_json"
+
+    @staticmethod
+    def predicted_transport_for_msg_type(msg_type: str) -> str:
+        """按协议注册表预测 AUTO 最终会解析成的传输方式。"""
+        from protocol.topic_registry import default_registry
+
+        return default_registry.get_transport_type(msg_type)
 
     @staticmethod
     def qos_options() -> List[Tuple[str, int]]:
@@ -652,6 +668,7 @@ class TopicConfigPanel(QWidget):
         self._combo_qos.setCurrentIndex(1)
         self._spin_freq.setValue(0.0)
         self._form_group.setChecked(True)
+        self._update_transport_preview()
 
     def _hide_form(self) -> None:
         self._editing_topic = ""
@@ -687,9 +704,26 @@ class TopicConfigPanel(QWidget):
     def _on_available_topic_selected(self) -> None:
         data = self._combo_available_topics.currentData()
         if not isinstance(data, dict):
+            self._update_transport_preview()
             return
         self._edit_topic.setText(data.get("topic", ""))
         self._combo_msg_type.setCurrentText(data.get("msg_type", ""))
+        self._update_transport_preview()
+
+    def _update_transport_preview(self) -> None:
+        msg_type = self._combo_msg_type.currentText().strip()
+        selected = self._combo_transport.currentText().split()[0].lower()
+        if not msg_type:
+            self._transport_preview.setText("预计传输方式：-")
+            return
+        if selected == "auto":
+            # AUTO 预览使用协议注册表，和保存/下发时的默认策略保持一致。
+            transport = self.predicted_transport_for_msg_type(msg_type)
+            self._transport_preview.setText("预计传输方式：%s" % transport)
+            return
+        self._transport_preview.setText(
+            "已手动选择：%s" % self.transport_from_tier(selected)
+        )
 
     def _set_transport_combo(self, transport: str) -> None:
         mapping = {
@@ -719,6 +753,7 @@ class TopicConfigPanel(QWidget):
         self._spin_freq.setValue(float(entry.freq_limit or 0.0))
         self._form_group.setChecked(True)
         self._set_operation_result("info", f"正在编辑话题：{entry.topic}")
+        self._update_transport_preview()
 
     def _set_operation_result(self, level: str, message: str) -> None:
         result = self.build_operation_result(level, message)

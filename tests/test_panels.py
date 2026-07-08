@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """面板纯逻辑测试 — 不涉及 Qt Widget 渲染"""
+
+from __future__ import annotations
 
 import os
 import time
@@ -19,7 +19,6 @@ from qt_frontend.panels.topic_config_panel import (
     TopicConfigPanel,
 )
 from qt_frontend.panels.traffic_monitor import BandwidthEntry, TrafficMonitor
-
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -622,9 +621,9 @@ class TestTopicConfigPanel:
             "robot_001"
         )
         assert TopicConfigPanel.target_robot_after_refresh("", "-- 选择 --", ["r1", "r2"]) == ""
-        assert TopicConfigPanel.target_robot_after_refresh("robot_001", "-- 选择 --", ["robot_001"]) == (
-            "robot_001"
-        )
+        assert TopicConfigPanel.target_robot_after_refresh(
+            "robot_001", "-- 选择 --", ["robot_001"]
+        ) == "robot_001"
 
     def test_should_load_selected_entry_by_valid_row(self):
         assert TopicConfigPanel.should_load_selected_entry(row=-1, count=1) is False
@@ -703,6 +702,32 @@ class TestTopicConfigPanel:
 
         assert saved_sub["qos"] == 0
         assert emitted[0][1]["subscriptions"][0]["qos"] == 0
+
+    def test_available_topic_selection_shows_auto_transport_preview(self, qt_app):
+        """选择发现话题时，AUTO 旁边显示注册表解析后的实际传输方式。"""
+        panel = TopicConfigPanel()
+        panel.on_robot_list_changed(["husky_001"])
+        panel.on_discover_response(
+            "husky_001",
+            {
+                "topics": [
+                    {"topic": "/odom", "msg_type": "nav_msgs/Odometry"},
+                    {"topic": "/velodyne_points", "msg_type": "sensor_msgs/PointCloud2"},
+                ]
+            },
+        )
+
+        panel._robot_combo.setCurrentText("husky_001")
+        panel._btn_add.click()
+        panel._combo_available_topics.setCurrentIndex(1)
+
+        assert panel._combo_msg_type.currentText() == "nav_msgs/Odometry"
+        assert "mqtt_binary" in panel._transport_preview.text()
+
+        panel._combo_available_topics.setCurrentIndex(2)
+
+        assert panel._combo_msg_type.currentText() == "sensor_msgs/PointCloud2"
+        assert "http_stream" in panel._transport_preview.text()
 
 
 # ------------------------------------------------------------------
