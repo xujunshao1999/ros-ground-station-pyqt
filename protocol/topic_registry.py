@@ -6,8 +6,8 @@ from typing import Any, Dict, Optional
 
 # 话题类型注册表 - 根据消息类型自动分类传输策略。
 # 传输策略分层：
-# - light: 轻量话题 (<10KB) -> MQTT + JSON
-# - medium: 中等话题 (10KB-1MB) -> MQTT + 二进制
+# - light: 控制、状态、简单标量 -> MQTT + JSON
+# - medium: 常规 ROS 话题 -> MQTT + ROS1 序列化二进制
 # - heavy: 重量话题 (>1MB) -> HTTP 流 + MQTT 信令
 
 
@@ -36,107 +36,51 @@ class TopicInfo:
 # ---------------------------------------------------------------------------
 _BUILTIN_REGISTRY: Dict[str, TopicInfo] = {
     # ================================================================
-    # 轻量话题 → MQTT + JSON  (<10 KB per message)
+    # 轻量话题 → MQTT + JSON
     # ================================================================
 
-    # -- std_msgs --
+    # -- std_msgs 简单标量和文本 --
+    "std_msgs/Empty":     TopicInfo("std_msgs/Empty",     TopicTier.LIGHT, "空消息"),
     "std_msgs/Bool":      TopicInfo("std_msgs/Bool",      TopicTier.LIGHT, "布尔值"),
+    "std_msgs/Byte":      TopicInfo("std_msgs/Byte",      TopicTier.LIGHT, "字节"),
+    "std_msgs/Char":      TopicInfo("std_msgs/Char",      TopicTier.LIGHT, "字符"),
+    "std_msgs/Int8":      TopicInfo("std_msgs/Int8",      TopicTier.LIGHT, "8位整数"),
+    "std_msgs/UInt8":     TopicInfo("std_msgs/UInt8",     TopicTier.LIGHT, "8位无符号整数"),
+    "std_msgs/Int16":     TopicInfo("std_msgs/Int16",     TopicTier.LIGHT, "16位整数"),
+    "std_msgs/UInt16":    TopicInfo("std_msgs/UInt16",    TopicTier.LIGHT, "16位无符号整数"),
     "std_msgs/Int32":     TopicInfo("std_msgs/Int32",     TopicTier.LIGHT, "整数"),
+    "std_msgs/UInt32":    TopicInfo("std_msgs/UInt32",    TopicTier.LIGHT, "32位无符号整数"),
+    "std_msgs/Int64":     TopicInfo("std_msgs/Int64",     TopicTier.LIGHT, "64位整数"),
+    "std_msgs/UInt64":    TopicInfo("std_msgs/UInt64",    TopicTier.LIGHT, "64位无符号整数"),
     "std_msgs/Float32":   TopicInfo("std_msgs/Float32",   TopicTier.LIGHT, "浮点数"),
     "std_msgs/Float64":   TopicInfo("std_msgs/Float64",   TopicTier.LIGHT, "双精度浮点"),
     "std_msgs/String":    TopicInfo("std_msgs/String",    TopicTier.LIGHT, "字符串"),
+    "std_msgs/Header":    TopicInfo("std_msgs/Header",    TopicTier.LIGHT, "消息头"),
     "std_msgs/ColorRGBA": TopicInfo("std_msgs/ColorRGBA", TopicTier.LIGHT, "RGBA颜色"),
 
-    # -- geometry_msgs --
-    "geometry_msgs/Twist": TopicInfo("geometry_msgs/Twist", TopicTier.LIGHT, "速度指令"),
-    "geometry_msgs/TwistStamped": TopicInfo(
-        "geometry_msgs/TwistStamped", TopicTier.LIGHT, "带时间戳速度"
-    ),
-    "geometry_msgs/Pose2D": TopicInfo("geometry_msgs/Pose2D", TopicTier.LIGHT, "2D位姿"),
-    "geometry_msgs/Pose": TopicInfo("geometry_msgs/Pose", TopicTier.LIGHT, "3D位姿"),
-    "geometry_msgs/PoseStamped": TopicInfo(
-        "geometry_msgs/PoseStamped", TopicTier.LIGHT, "带时间戳3D位姿"
-    ),
-    "geometry_msgs/PoseArray": TopicInfo(
-        "geometry_msgs/PoseArray", TopicTier.LIGHT, "位姿数组"
-    ),
-    "geometry_msgs/PoseWithCovarianceStamped": TopicInfo(
-        "geometry_msgs/PoseWithCovarianceStamped", TopicTier.LIGHT, "带协方差位姿"
-    ),
-    "geometry_msgs/PointStamped": TopicInfo(
-        "geometry_msgs/PointStamped", TopicTier.LIGHT, "带时间戳3D点"
-    ),
-    "geometry_msgs/PolygonStamped": TopicInfo(
-        "geometry_msgs/PolygonStamped", TopicTier.LIGHT, "多边形"
-    ),
-    "geometry_msgs/AccelStamped": TopicInfo(
-        "geometry_msgs/AccelStamped", TopicTier.LIGHT, "加速度"
-    ),
-    "geometry_msgs/WrenchStamped": TopicInfo(
-        "geometry_msgs/WrenchStamped", TopicTier.LIGHT, "力/力矩"
-    ),
+    # ================================================================
+    # 中等话题 → MQTT + ROS1 序列化二进制
+    # ================================================================
 
-    # -- sensor_msgs (light) --
+    # -- 常见精确类型保留默认频率或压缩参数 --
     "sensor_msgs/Imu": TopicInfo(
-        "sensor_msgs/Imu", TopicTier.LIGHT, "IMU数据", default_freq_limit=50
+        "sensor_msgs/Imu", TopicTier.MEDIUM, "IMU数据", default_freq_limit=50
     ),
     "sensor_msgs/NavSatFix": TopicInfo(
-        "sensor_msgs/NavSatFix", TopicTier.LIGHT, "GPS数据", default_freq_limit=10
-    ),
-    "sensor_msgs/BatteryState": TopicInfo(
-        "sensor_msgs/BatteryState", TopicTier.LIGHT, "电池状态"
+        "sensor_msgs/NavSatFix", TopicTier.MEDIUM, "GPS数据", default_freq_limit=10
     ),
     "sensor_msgs/JointState": TopicInfo(
-        "sensor_msgs/JointState", TopicTier.LIGHT, "关节状态", default_freq_limit=50
+        "sensor_msgs/JointState", TopicTier.MEDIUM, "关节状态", default_freq_limit=50
     ),
     "sensor_msgs/Range": TopicInfo(
-        "sensor_msgs/Range", TopicTier.LIGHT, "超声波/红外测距", default_freq_limit=10
+        "sensor_msgs/Range", TopicTier.MEDIUM, "超声波/红外测距", default_freq_limit=10
     ),
     "sensor_msgs/MagneticField": TopicInfo(
-        "sensor_msgs/MagneticField", TopicTier.LIGHT, "磁力计", default_freq_limit=10
+        "sensor_msgs/MagneticField", TopicTier.MEDIUM, "磁力计", default_freq_limit=10
     ),
     "sensor_msgs/FluidPressure": TopicInfo(
-        "sensor_msgs/FluidPressure", TopicTier.LIGHT, "气压计", default_freq_limit=10
+        "sensor_msgs/FluidPressure", TopicTier.MEDIUM, "气压计", default_freq_limit=10
     ),
-    "sensor_msgs/Temperature": TopicInfo(
-        "sensor_msgs/Temperature", TopicTier.LIGHT, "温度"
-    ),
-    "sensor_msgs/Illuminance": TopicInfo(
-        "sensor_msgs/Illuminance", TopicTier.LIGHT, "光照"
-    ),
-    "sensor_msgs/RelativeHumidity": TopicInfo(
-        "sensor_msgs/RelativeHumidity", TopicTier.LIGHT, "湿度"
-    ),
-    "sensor_msgs/TimeReference": TopicInfo(
-        "sensor_msgs/TimeReference", TopicTier.LIGHT, "时间基准"
-    ),
-    "sensor_msgs/CameraInfo": TopicInfo(
-        "sensor_msgs/CameraInfo", TopicTier.LIGHT, "相机标定信息"
-    ),
-
-    # -- nav_msgs (light) --
-    "nav_msgs/Odometry": TopicInfo(
-        "nav_msgs/Odometry", TopicTier.LIGHT, "里程计", default_freq_limit=50
-    ),
-    "nav_msgs/Path": TopicInfo("nav_msgs/Path", TopicTier.LIGHT, "路径"),
-    "nav_msgs/GridCells": TopicInfo("nav_msgs/GridCells", TopicTier.LIGHT, "网格单元"),
-
-    # -- tf2_msgs --
-    "tf2_msgs/TFMessage": TopicInfo(
-        "tf2_msgs/TFMessage", TopicTier.LIGHT, "TF变换", default_freq_limit=50
-    ),
-
-    # -- visualization_msgs (light) --
-    "visualization_msgs/Marker": TopicInfo(
-        "visualization_msgs/Marker", TopicTier.LIGHT, "可视化标记"
-    ),
-    "visualization_msgs/MarkerArray": TopicInfo(
-        "visualization_msgs/MarkerArray", TopicTier.LIGHT, "标记数组"
-    ),
-
-    # ================================================================
-    # 中等话题 → MQTT + 二进制  (10 KB ~ 1 MB)
-    # ================================================================
     "sensor_msgs/CompressedImage": TopicInfo(
         "sensor_msgs/CompressedImage", TopicTier.MEDIUM, "压缩图像",
         default_freq_limit=10,
@@ -151,9 +95,65 @@ _BUILTIN_REGISTRY: Dict[str, TopicInfo] = {
         "sensor_msgs/LaserScan", TopicTier.MEDIUM, "激光扫描",
         default_freq_limit=10,
     ),
+    "nav_msgs/Odometry": TopicInfo(
+        "nav_msgs/Odometry", TopicTier.MEDIUM, "里程计", default_freq_limit=50
+    ),
     "nav_msgs/OccupancyGrid": TopicInfo(
         "nav_msgs/OccupancyGrid", TopicTier.MEDIUM, "占据栅格地图",
         default_freq_limit=2,
+    ),
+    "tf2_msgs/TFMessage": TopicInfo(
+        "tf2_msgs/TFMessage", TopicTier.MEDIUM, "TF变换", default_freq_limit=50
+    ),
+
+    # 包级通配符用于覆盖同包下常规 ROS 消息，精确类型仍优先覆盖。
+    "std_msgs/*": TopicInfo("std_msgs/*", TopicTier.MEDIUM, "std_msgs数组或复合消息"),
+    "geometry_msgs/*": TopicInfo("geometry_msgs/*", TopicTier.MEDIUM, "geometry_msgs常规消息"),
+    "nav_msgs/*": TopicInfo("nav_msgs/*", TopicTier.MEDIUM, "nav_msgs常规消息"),
+    "sensor_msgs/*": TopicInfo("sensor_msgs/*", TopicTier.MEDIUM, "sensor_msgs常规消息"),
+    "tf/*": TopicInfo("tf/*", TopicTier.MEDIUM, "tf常规消息"),
+    "tf2_msgs/*": TopicInfo("tf2_msgs/*", TopicTier.MEDIUM, "tf2_msgs常规消息"),
+    "visualization_msgs/*": TopicInfo(
+        "visualization_msgs/*", TopicTier.MEDIUM, "visualization_msgs常规消息"
+    ),
+    "diagnostic_msgs/*": TopicInfo(
+        "diagnostic_msgs/*", TopicTier.MEDIUM, "diagnostic_msgs常规消息"
+    ),
+    "actionlib_msgs/*": TopicInfo(
+        "actionlib_msgs/*", TopicTier.MEDIUM, "actionlib_msgs常规消息"
+    ),
+    "trajectory_msgs/*": TopicInfo(
+        "trajectory_msgs/*", TopicTier.MEDIUM, "trajectory_msgs常规消息"
+    ),
+    "control_msgs/*": TopicInfo("control_msgs/*", TopicTier.MEDIUM, "control_msgs常规消息"),
+    "map_msgs/*": TopicInfo("map_msgs/*", TopicTier.MEDIUM, "map_msgs常规消息"),
+    "geographic_msgs/*": TopicInfo(
+        "geographic_msgs/*", TopicTier.MEDIUM, "geographic_msgs常规消息"
+    ),
+    "gazebo_msgs/*": TopicInfo("gazebo_msgs/*", TopicTier.MEDIUM, "gazebo_msgs常规消息"),
+    "shape_msgs/*": TopicInfo("shape_msgs/*", TopicTier.MEDIUM, "shape_msgs常规消息"),
+    "stereo_msgs/*": TopicInfo("stereo_msgs/*", TopicTier.MEDIUM, "stereo_msgs常规消息"),
+    "move_base_msgs/*": TopicInfo(
+        "move_base_msgs/*", TopicTier.MEDIUM, "move_base_msgs常规消息"
+    ),
+    "costmap_2d/*": TopicInfo("costmap_2d/*", TopicTier.MEDIUM, "costmap_2d常规消息"),
+    "dynamic_reconfigure/*": TopicInfo(
+        "dynamic_reconfigure/*", TopicTier.MEDIUM, "dynamic_reconfigure常规消息"
+    ),
+    "rosgraph_msgs/*": TopicInfo("rosgraph_msgs/*", TopicTier.MEDIUM, "rosgraph_msgs常规消息"),
+    "ackermann_msgs/*": TopicInfo(
+        "ackermann_msgs/*", TopicTier.MEDIUM, "ackermann_msgs常规消息"
+    ),
+    "nmea_msgs/*": TopicInfo("nmea_msgs/*", TopicTier.MEDIUM, "nmea_msgs常规消息"),
+    "bond/*": TopicInfo("bond/*", TopicTier.MEDIUM, "bond常规消息"),
+    "uuid_msgs/*": TopicInfo("uuid_msgs/*", TopicTier.MEDIUM, "uuid_msgs常规消息"),
+    "vision_msgs/*": TopicInfo("vision_msgs/*", TopicTier.MEDIUM, "vision_msgs常规消息"),
+    "apriltag_ros/*": TopicInfo(
+        "apriltag_ros/*", TopicTier.MEDIUM, "apriltag_ros常规消息"
+    ),
+    "aruco_msgs/*": TopicInfo("aruco_msgs/*", TopicTier.MEDIUM, "aruco_msgs常规消息"),
+    "fiducial_msgs/*": TopicInfo(
+        "fiducial_msgs/*", TopicTier.MEDIUM, "fiducial_msgs常规消息"
     ),
 
     # ================================================================
@@ -164,11 +164,12 @@ _BUILTIN_REGISTRY: Dict[str, TopicInfo] = {
         default_freq_limit=2,
     ),
 
-    # 遗留 PointCloud 暂时保留为 MEDIUM，避免扩大第一版重型通道范围。
     "sensor_msgs/PointCloud": TopicInfo(
-        "sensor_msgs/PointCloud", TopicTier.MEDIUM, "3D点云(遗留)",
+        "sensor_msgs/PointCloud", TopicTier.HEAVY, "3D点云(遗留)",
         default_freq_limit=2,
     ),
+    "pcl_msgs/*": TopicInfo("pcl_msgs/*", TopicTier.HEAVY, "PCL大数据消息"),
+    "octomap_msgs/*": TopicInfo("octomap_msgs/*", TopicTier.HEAVY, "OctoMap大数据消息"),
 }
 
 
@@ -181,7 +182,7 @@ class TopicRegistry:
 
     - 根据消息类型查询传输策略
     - 支持注册自定义消息类型
-    - 未注册的消息类型默认为 LIGHT
+    - 未注册的合法 ROS 消息类型默认为 MEDIUM
     """
 
     def __init__(self, custom_entries: Optional[Dict[str, TopicInfo]] = None):
@@ -193,19 +194,19 @@ class TopicRegistry:
         """
         查询消息类型信息
 
-        未注册的类型默认为 LIGHT 层级
+        未注册的合法 ROS 消息类型默认为 MEDIUM 层级
         """
         if msg_type in self._registry:
             return self._registry[msg_type]
 
-        # 通配符匹配: "std_msgs/*" 匹配所有 std_msgs 类型
+        # 包级通配符只匹配 ROS 消息类型字符串，不使用 shell glob 语义。
         package = msg_type.rsplit("/", 1)[0] if "/" in msg_type else ""
         wildcard = f"{package}/*"
         if wildcard in self._registry:
             return self._registry[wildcard]
 
-        # 未知类型默认为 LIGHT
-        return TopicInfo(msg_type, TopicTier.LIGHT, description="未注册类型(默认轻量)")
+        # 未知 ROS 消息默认走二进制，运行时再由 Agent/Bridge 尝试导入消息类。
+        return TopicInfo(msg_type, TopicTier.MEDIUM, description="未注册类型(默认ROS二进制)")
 
     def register(self, msg_type: str, info: TopicInfo) -> None:
         """注册自定义消息类型"""

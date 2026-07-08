@@ -18,6 +18,48 @@ def test_pointcloud2_is_heavy_http_stream():
     assert info.default_freq_limit == 2
 
 
+def test_regular_ros_topics_default_to_mqtt_binary():
+    """常规 ROS 话题默认使用二进制传输，避免 JSON 放大结构化消息。"""
+    registry = TopicRegistry()
+
+    assert registry.get_transport_type("nav_msgs/Odometry") == "mqtt_binary"
+    assert registry.get_transport_type("sensor_msgs/Imu") == "mqtt_binary"
+    assert registry.get_transport_type("sensor_msgs/JointState") == "mqtt_binary"
+    assert registry.get_transport_type("geometry_msgs/PoseStamped") == "mqtt_binary"
+    assert registry.get_transport_type("tf2_msgs/TFMessage") == "mqtt_binary"
+    assert registry.get_transport_type("tf/tfMessage") == "mqtt_binary"
+    assert registry.get_transport_type("visualization_msgs/MarkerArray") == "mqtt_binary"
+    assert registry.get_transport_type("rosgraph_msgs/Clock") == "mqtt_binary"
+    assert registry.get_transport_type("dynamic_reconfigure/Config") == "mqtt_binary"
+    assert registry.get_transport_type("ackermann_msgs/AckermannDriveStamped") == "mqtt_binary"
+    assert registry.get_transport_type("std_msgs/Float32MultiArray") == "mqtt_binary"
+    assert registry.get_transport_type("costmap_2d/VoxelGrid") == "mqtt_binary"
+
+
+def test_simple_std_msgs_stay_mqtt_json():
+    """简单标量和文本消息保持 JSON，便于协议可读和轻量处理。"""
+    registry = TopicRegistry()
+
+    assert registry.get_transport_type("std_msgs/String") == "mqtt_json"
+    assert registry.get_transport_type("std_msgs/Bool") == "mqtt_json"
+    assert registry.get_transport_type("std_msgs/Float64") == "mqtt_json"
+
+
+def test_heavy_payloads_default_to_http_stream():
+    """点云等大 payload 默认走 HTTP stream，避免压垮 MQTT broker。"""
+    registry = TopicRegistry()
+
+    assert registry.get_transport_type("sensor_msgs/PointCloud2") == "http_stream"
+    assert registry.get_transport_type("sensor_msgs/PointCloud") == "http_stream"
+
+
+def test_unknown_ros_message_defaults_to_mqtt_binary():
+    """未知但合法的 ROS 消息类型默认按 ROS1 serialized 二进制传输。"""
+    registry = TopicRegistry()
+
+    assert registry.get_transport_type("custom_msgs/Thing") == "mqtt_binary"
+
+
 class TestTopicRegistry:
     """TopicRegistry 基本功能测试"""
 
@@ -39,10 +81,10 @@ class TestTopicRegistry:
         info = self.registry.get("sensor_msgs/PointCloud2")
         assert info.tier == TopicTier.HEAVY
 
-    def test_get_unknown_type_default_light(self):
-        """未知消息类型默认返回 LIGHT"""
+    def test_get_unknown_type_default_medium(self):
+        """未知 ROS 消息类型默认返回 MEDIUM，后续按二进制传输处理。"""
         info = self.registry.get("unknown_pkg/UnknownType")
-        assert info.tier == TopicTier.LIGHT
+        assert info.tier == TopicTier.MEDIUM
         assert "未注册" in info.description
 
     def test_get_tier_shortcut(self):
@@ -67,7 +109,7 @@ class TestTopicRegistry:
         self.registry.register("test/Foo", TopicInfo("test/Foo", TopicTier.HEAVY))
         self.registry.unregister("test/Foo")
         info = self.registry.get("test/Foo")
-        assert info.tier == TopicTier.LIGHT  # 回退到默认
+        assert info.tier == TopicTier.MEDIUM  # 回退到未知 ROS 类型默认二进制
 
     def test_unregister_builtin(self):
         """取消注册内置类型后恢复到默认"""
@@ -76,17 +118,16 @@ class TestTopicRegistry:
         assert self.registry.get("std_msgs/Bool").tier == TopicTier.MEDIUM
         # 取消
         self.registry.unregister("std_msgs/Bool")
-        # 按理说已移除，再次获取应给默认值 LIGHT
+        # 移除精确规则后命中 std_msgs/*，用于避免复合消息回落到 JSON。
         info = self.registry.get("std_msgs/Bool")
-        # 由于 unregister 从 registry 移除，get 会走未知类型逻辑
-        assert info.tier == TopicTier.LIGHT
+        assert info.tier == TopicTier.MEDIUM
 
     def test_get_transport_type(self):
         """get_transport_type 返回正确传输方式"""
         assert self.registry.get_transport_type("std_msgs/String") == "mqtt_json"
         assert self.registry.get_transport_type("sensor_msgs/CompressedImage") == "mqtt_binary"
         assert self.registry.get_transport_type("sensor_msgs/PointCloud2") == "http_stream"
-        assert self.registry.get_transport_type("unknown/Type") == "mqtt_json"
+        assert self.registry.get_transport_type("unknown/Type") == "mqtt_binary"
 
     def test_list_all(self):
         """list_all 返回所有注册类型"""
@@ -153,5 +194,5 @@ class TestDefaultRegistry:
         fresh = TopicRegistry()
         # 新实例不应包含自定义注册的类型
         info = fresh.get("test/Isolated")
-        assert info.tier == TopicTier.LIGHT
+        assert info.tier == TopicTier.MEDIUM
         assert "未注册" in info.description
