@@ -14,6 +14,11 @@ class _SerializableRosMsg:
         buff.write(self.payload)
 
 
+class _UnserializableRosMsg:
+    def serialize(self, buff):
+        raise RuntimeError("serialize failed")
+
+
 def test_ros1_agent_uses_agent_local_dict_to_ros_msg():
     import agent.ros1_agent as ros1_agent
 
@@ -303,6 +308,91 @@ def test_compressed_image_uses_ros1_serialized_fast_path(monkeypatch):
         "/realsense/color/image_raw/compressed",
         "sensor_msgs/CompressedImage",
         b"jpeg-bytes",
+    )
+
+
+def test_joint_state_uses_ros1_serialized_fast_path(monkeypatch):
+    """普通 ROS 话题配置为 mqtt_binary 时优先发送原始 ROS1 序列化字节。"""
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: (_ for _ in ()).throw(
+            AssertionError("mqtt_binary ROS topic should not use JSON conversion")
+        ),
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 100.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_binary_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/joint_states",
+        "sensor_msgs/JointState",
+        {"freq_limit": 100.0, "transport": "mqtt_binary"},
+    )
+    captured_callback["callback"](_SerializableRosMsg(b"joint-state-raw"))
+
+    agent.publish_sensor_binary_data.assert_called_once()
+    assert agent.publish_sensor_binary_data.call_args[0][:3] == (
+        "/joint_states",
+        "sensor_msgs/JointState",
+        b"joint-state-raw",
+    )
+
+
+def test_mqtt_binary_falls_back_to_json_when_ros1_serialize_fails(monkeypatch):
+    """ROS1 原始序列化失败时继续走 JSON 路径，避免中断话题发布。"""
+    mock_rospy = MagicMock()
+    captured_callback = {}
+
+    def fake_subscriber(topic, msg_class, callback):
+        captured_callback["callback"] = callback
+        return MagicMock()
+
+    mock_rospy.Subscriber.side_effect = fake_subscriber
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        lambda msg: {"name": ["front_left"], "position": [1.0]},
+    )
+
+    agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.default_freq_limit = 100.0
+    agent._ros_subscribers = {}
+    agent._sensor_data = {}
+    agent._sensor_lock = MagicMock()
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    agent.publish_sensor_binary_data = MagicMock()
+    agent.publish_sensor_data = MagicMock()
+
+    ROS1Agent._on_topic_subscribed(
+        agent,
+        "/joint_states",
+        "sensor_msgs/JointState",
+        {"freq_limit": 100.0, "transport": "mqtt_binary"},
+    )
+    captured_callback["callback"](_UnserializableRosMsg())
+
+    agent.publish_sensor_binary_data.assert_not_called()
+    agent.publish_sensor_data.assert_called_once_with(
+        "/joint_states",
+        "sensor_msgs/JointState",
+        {"name": ["front_left"], "position": [1.0]},
     )
 
 

@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Binary payload helpers for MQTT sensor transport."""
+
+from __future__ import annotations
 
 import struct
 import zlib
 from typing import Any, Dict, List, Tuple
-
 
 ENCODING_LASER_SCAN = "laser_scan_v1"
 ENCODING_OCCUPANCY_GRID = "occupancy_grid_v1"
@@ -31,10 +30,12 @@ def is_binary_supported(msg_type: str) -> bool:
 
 
 def is_ros_message_binary_supported(topic: str, msg_type: str) -> bool:
-    return (
-        (topic, msg_type) in _ROS1_SERIALIZED_TOPIC_TYPES
-        or msg_type in _ROS1_SERIALIZED_MESSAGE_TYPES
-    )
+    if (topic, msg_type) in _ROS1_SERIALIZED_TOPIC_TYPES:
+        return True
+    if msg_type in _ROS1_SERIALIZED_MESSAGE_TYPES:
+        return True
+    # 合法 ROS 消息类型默认允许 serialized，实际导入和序列化由运行时验证。
+    return "/" in msg_type and len(msg_type) > 3
 
 
 def is_ros_message_binary_encoding(envelope: Dict[str, Any]) -> bool:

@@ -141,7 +141,8 @@ def test_ros1_serialized_envelope_is_not_tf_specific():
     assert is_ros_message_binary_encoding(envelope) is True
 
 
-def test_ros1_serialized_supported_types_are_controlled_by_allowlist():
+def test_ros1_serialized_supports_regular_ros_message_types_by_default():
+    """专用二进制编码仍存在，但 ROS1 serialized 默认覆盖普通 ROS 类型。"""
     assert is_ros_message_binary_supported("/tf", "tf2_msgs/TFMessage") is True
     assert is_ros_message_binary_supported("/tf_static", "tf2_msgs/TFMessage") is True
     assert is_ros_message_binary_supported("/odom", "nav_msgs/Odometry") is True
@@ -150,5 +151,15 @@ def test_ros1_serialized_supported_types_are_controlled_by_allowlist():
         "/realsense/color/image_raw/compressed",
         "sensor_msgs/CompressedImage",
     ) is True
-    assert is_ros_message_binary_supported("/scan", "sensor_msgs/LaserScan") is False
-    assert is_ros_message_binary_supported("/map", "nav_msgs/OccupancyGrid") is False
+    assert is_binary_supported("sensor_msgs/LaserScan") is True
+    assert is_binary_supported("nav_msgs/OccupancyGrid") is True
+    assert is_ros_message_binary_supported("/scan", "sensor_msgs/LaserScan") is True
+    assert is_ros_message_binary_supported("/map", "nav_msgs/OccupancyGrid") is True
+
+
+def test_ros1_serialized_supports_unknown_ros_messages_by_default():
+    """未知 ROS 消息类型默认允许走 ROS1 serialized，由运行时导入消息类。"""
+    assert is_ros_message_binary_supported(
+        "/custom_topic",
+        "custom_msgs/Thing",
+    ) is True
