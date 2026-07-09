@@ -1436,6 +1436,33 @@ class TestSensorSummary:
             "/tf_static",
         ) == "/tf_static"
 
+    def test_binary_envelope_builds_topic_health_snapshot(self):
+        data = {
+            "binary": True,
+            "topic": "/joint_states",
+            "msg_type": "sensor_msgs/JointState",
+            "encoding": "ros1_serialized_v1",
+            "payload_format": "ros1_serialized",
+            "payload_size": 208,
+        }
+
+        snapshot = SensorSummaryPanel.build_topic_snapshot(
+            robot_id="husky_001",
+            sensor_name="joint_states",
+            data=data,
+            now=100.0,
+            previous=None,
+        )
+
+        assert snapshot.msg_type == "sensor_msgs/JointState"
+        assert snapshot.transport == "mqtt_binary"
+        assert snapshot.encoding == "ros1_serialized_v1"
+        assert snapshot.payload_format == "ros1_serialized"
+        assert snapshot.payload_size == 208
+        assert snapshot.local_ros_topic == "/husky_001/joint_states"
+        assert snapshot.health_status == "正常"
+        assert "MQTT binary envelope" in snapshot.diagnostic
+
     def test_topic_snapshot_tracks_hz_summary_and_age(self):
         snapshot = SensorSummaryPanel.build_topic_snapshot(
             robot_id="r1",

@@ -33,6 +33,14 @@ class TopicSnapshot:
     last_time: float
     frame_count: int = 1
     sample_times: List[float] = field(default_factory=list)
+    transport: str = "mqtt_json"
+    expected_transport: str = ""
+    encoding: str = ""
+    payload_format: str = ""
+    payload_size: int = 0
+    local_ros_topic: str = ""
+    health_status: str = "正常"
+    diagnostic: str = "消息持续到达"
 
     @property
     def hz(self) -> float:
@@ -139,6 +147,38 @@ class SensorSummaryPanel(QWidget):
         return "/%s%s" % (robot_id, topic)
 
     @staticmethod
+    def infer_transport(data: Dict[str, Any], config_transport: str = "") -> str:
+        # 优先使用 envelope/meta 显式字段；老 JSON 消息没有字段时回退为 mqtt_json。
+        transport = data.get("transport")
+        if isinstance(transport, str) and transport:
+            return transport
+        if data.get("binary") is True:
+            return "mqtt_binary"
+        if config_transport:
+            return config_transport
+        return "mqtt_json"
+
+    @staticmethod
+    def payload_size_from_data(data: Dict[str, Any]) -> int:
+        # 只接受非负整数字节数，避免把缺失值或异常类型显示成有效 payload。
+        value = data.get("payload_size")
+        if isinstance(value, int) and value >= 0:
+            return value
+        value = data.get("_payload_bytes")
+        if isinstance(value, int) and value >= 0:
+            return value
+        return 0
+
+    @staticmethod
+    def diagnostic_for(data: Dict[str, Any], transport: str) -> str:
+        # 诊断文案描述前端实际收到的轻量 envelope/meta 类型。
+        if transport == "http_stream":
+            return "HTTP stream meta 正常到达"
+        if data.get("binary") is True:
+            return "MQTT binary envelope 正常到达"
+        return "MQTT JSON 数据正常到达"
+
+    @staticmethod
     def build_topic_snapshot(
         robot_id: str,
         sensor_name: str,
@@ -150,6 +190,13 @@ class SensorSummaryPanel(QWidget):
     ) -> TopicSnapshot:
         msg_type = SensorSummaryPanel.infer_msg_type(data, msg_type_hint)
         summary_lines = SensorSummaryPanel.summarize_data(data, msg_type)
+        ros_topic = str(data.get("topic") or "/" + sensor_name)
+        transport = SensorSummaryPanel.infer_transport(data)
+        encoding = str(data.get("encoding") or "")
+        payload_format = str(data.get("payload_format") or "")
+        payload_size = SensorSummaryPanel.payload_size_from_data(data)
+        local_ros_topic = SensorSummaryPanel.local_ros_topic_for(robot_id, ros_topic)
+        diagnostic = SensorSummaryPanel.diagnostic_for(data, transport)
         new_sample_times = sample_times_to_add or [now]
         if previous is None:
             sample_times = list(new_sample_times)
@@ -162,6 +209,13 @@ class SensorSummaryPanel(QWidget):
                 last_time=now,
                 frame_count=len(new_sample_times),
                 sample_times=sample_times,
+                transport=transport,
+                encoding=encoding,
+                payload_format=payload_format,
+                payload_size=payload_size,
+                local_ros_topic=local_ros_topic,
+                health_status="正常",
+                diagnostic=diagnostic,
             )
 
         sample_times = list(previous.sample_times) + list(new_sample_times)
@@ -176,6 +230,13 @@ class SensorSummaryPanel(QWidget):
             last_time=now,
             frame_count=previous.frame_count + len(new_sample_times),
             sample_times=sample_times,
+            transport=transport,
+            encoding=encoding,
+            payload_format=payload_format,
+            payload_size=payload_size,
+            local_ros_topic=local_ros_topic,
+            health_status="正常",
+            diagnostic=diagnostic,
         )
 
     @staticmethod
