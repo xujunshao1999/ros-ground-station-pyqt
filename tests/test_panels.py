@@ -1463,6 +1463,33 @@ class TestSensorSummary:
         assert snapshot.health_status == "正常"
         assert "MQTT binary envelope" in snapshot.diagnostic
 
+    def test_topic_health_overview_uses_compact_columns(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+
+        headers = [
+            panel._topic_table.horizontalHeaderItem(index).text()
+            for index in range(panel._topic_table.columnCount())
+        ]
+
+        assert headers == ["话题", "机器人", "健康", "更新", "本地 ROS"]
+
+    def test_waiting_topic_uses_subscription_topic_for_local_ros_target(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+        panel.on_subscriptions_changed(
+            "husky_001",
+            [{
+                "topic": "/joint_states",
+                "msg_type": "sensor_msgs/JointState",
+                "status": "active",
+            }],
+        )
+        panel._refresh_current_view(force=True)
+
+        assert panel._topic_table.item(0, 2).text() == "等待数据"
+        assert panel._topic_table.item(0, 4).text() == "/husky_001/joint_states"
+
     def test_topic_snapshot_tracks_hz_summary_and_age(self):
         snapshot = SensorSummaryPanel.build_topic_snapshot(
             robot_id="r1",
@@ -1767,9 +1794,9 @@ class TestSensorSummary:
         )
         panel._refresh_current_view(force=True)
 
-        assert panel._topic_table.columnCount() == 6
+        assert panel._topic_table.columnCount() == 5
         assert panel._topic_table.item(0, 2).text() == "正常"
-        assert "OccupancyGrid: 20×10" in panel._topic_table.item(0, 5).text()
+        assert panel._topic_table.item(0, 4).text() == "/r1/map"
 
     def test_retain_robots_removes_offline_robot_observations(self, qt_app):
         panel = SensorSummaryPanel()

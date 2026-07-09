@@ -62,6 +62,7 @@ class TopicSnapshot:
 class ObservedTopic:
     robot_id: str
     sensor_name: str
+    ros_topic: str = ""
     msg_type: str = ""
     status: str = "pending"
 
@@ -85,7 +86,7 @@ class SensorSummaryPanel(QWidget):
 
         layout = QVBoxLayout(self)
 
-        header = QLabel("话题状态面板")
+        header = QLabel("话题健康")
         header.setStyleSheet("font-weight: 700; font-size: 14px;")
         layout.addWidget(header)
 
@@ -97,10 +98,10 @@ class SensorSummaryPanel(QWidget):
         layout.addLayout(selector_row)
 
         metric_grid = QGridLayout()
-        self._lb_status = self._build_metric_label("状态: 等待数据")
-        self._lb_hz = self._build_metric_label("Hz: --")
+        self._lb_status = self._build_metric_label("健康: 等待数据")
+        self._lb_hz = self._build_metric_label("本地 ROS: --")
         self._lb_age = self._build_metric_label("更新: --")
-        self._lb_frames = self._build_metric_label("帧数: 0")
+        self._lb_frames = self._build_metric_label("消息数: 0")
         metric_grid.addWidget(self._lb_status, 0, 0)
         metric_grid.addWidget(self._lb_hz, 0, 1)
         metric_grid.addWidget(self._lb_age, 1, 0)
@@ -112,9 +113,9 @@ class SensorSummaryPanel(QWidget):
         layout.addWidget(self._browser, 1)
 
         self._topic_table = QTableWidget()
-        self._topic_table.setColumnCount(6)
+        self._topic_table.setColumnCount(5)
         self._topic_table.setHorizontalHeaderLabels(
-            ["话题", "机器人", "状态", "Hz", "更新", "摘要"]
+            ["话题", "机器人", "健康", "更新", "本地 ROS"]
         )
         self._topic_table.setMaximumHeight(190)
         header_view = self._topic_table.horizontalHeader()
@@ -122,8 +123,7 @@ class SensorSummaryPanel(QWidget):
         header_view.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(5, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(4, QHeaderView.Stretch)
         self._topic_table.itemSelectionChanged.connect(self._on_table_selection_changed)
         layout.addWidget(self._topic_table)
         self._render_empty_state()
@@ -505,9 +505,11 @@ class SensorSummaryPanel(QWidget):
         self._pending_data[key] = (msg_type, data, sample_times)
 
         previous_topic = self._observed_topics.get(key)
+        ros_topic = str(data.get("topic") or "")
         self._observed_topics[key] = ObservedTopic(
             robot_id=robot_id,
             sensor_name=normalized_sensor_name,
+            ros_topic=ros_topic or (previous_topic.ros_topic if previous_topic else ""),
             msg_type=msg_type or (previous_topic.msg_type if previous_topic else ""),
             status="active",
         )
@@ -555,6 +557,7 @@ class SensorSummaryPanel(QWidget):
             self._observed_topics[key] = ObservedTopic(
                 robot_id=robot_id,
                 sensor_name=sensor_name,
+                ros_topic=topic,
                 msg_type=msg_type,
                 status=status,
             )
@@ -669,14 +672,14 @@ class SensorSummaryPanel(QWidget):
         stale = snapshot.is_stale(now, self._STALE_THRESHOLD_SECONDS)
         snapshot_key = (snapshot.robot_id, snapshot.sensor_name)
         summary_key = (snapshot_key, snapshot.frame_count, stale)
-        status = "断流" if stale else "正常"
-        self._lb_status.setText(f"状态: {status}")
+        status = "断流" if stale else snapshot.health_status
+        self._lb_status.setText(f"健康: {status}")
         self._lb_status.setStyleSheet(
             self._metric_style("#3a2f18" if stale else "#193323")
         )
-        self._lb_hz.setText(f"Hz: {self.format_rate(snapshot.hz)}")
+        self._lb_hz.setText(f"本地 ROS: {snapshot.local_ros_topic or '-'}")
         self._lb_age.setText(f"更新: {self.format_age(snapshot.age(now))}")
-        self._lb_frames.setText(f"帧数: {snapshot.frame_count}")
+        self._lb_frames.setText(f"消息数: {snapshot.frame_count}")
 
         if self._last_rendered_summary_key != summary_key:
             lines = [
@@ -702,7 +705,7 @@ class SensorSummaryPanel(QWidget):
         self._last_rendered_summary_key = None
         self._browser.setPlainText(
             "等待传感器数据...\n\n"
-            "收到 MQTT 入站数据后，这里会按当前订阅话题显示状态、Hz 和最新帧摘要。"
+            "收到 MQTT 入站数据后，这里会按当前订阅话题显示健康状态、更新和本地 ROS 发布目标。"
         )
 
     def _render_waiting_topic(self, key: TopicKey) -> None:
@@ -711,15 +714,19 @@ class SensorSummaryPanel(QWidget):
             self._render_empty_state()
             return
         self._last_rendered_summary_key = None
-        self._lb_status.setText("状态: 等待数据")
+        local_ros_topic = self.local_ros_topic_for(
+            topic.robot_id,
+            topic.ros_topic or "/" + topic.sensor_name,
+        )
+        self._lb_status.setText("健康: 等待数据")
         self._lb_status.setStyleSheet(self._metric_style())
-        self._lb_hz.setText("Hz: --")
+        self._lb_hz.setText("本地 ROS: %s" % local_ros_topic)
         self._lb_age.setText("更新: --")
-        self._lb_frames.setText("帧数: 0")
+        self._lb_frames.setText("消息数: 0")
         self._browser.setPlainText(
             f"机器人: {topic.robot_id}  话题: {topic.sensor_name}\n"
             f"类型: {topic.msg_type or 'unknown'}\n"
-            "状态: 等待数据\n\n"
+            "健康: 等待数据\n\n"
             "该话题已在当前订阅列表中，但地面站还没有收到对应 MQTT 数据。"
         )
 
@@ -774,6 +781,7 @@ class SensorSummaryPanel(QWidget):
                     self._observed_topics[key] = ObservedTopic(
                         robot_id=topic.robot_id,
                         sensor_name=topic.sensor_name,
+                        ros_topic=topic.ros_topic,
                         msg_type=snapshot.msg_type,
                         status=topic.status,
                     )
@@ -796,25 +804,25 @@ class SensorSummaryPanel(QWidget):
             snapshot = self._snapshots.get(key)
             if snapshot is None:
                 status = "等待数据"
-                hz = "--"
                 age = "--"
-                summary = topic.msg_type or "-"
+                local_ros_topic = self.local_ros_topic_for(
+                    topic.robot_id,
+                    topic.ros_topic or "/" + topic.sensor_name,
+                )
             else:
                 status = (
                     "断流"
                     if snapshot.is_stale(now, self._STALE_THRESHOLD_SECONDS)
-                    else "正常"
+                    else snapshot.health_status
                 )
-                hz = self.format_rate(snapshot.hz)
                 age = self.format_age(snapshot.age(now))
-                summary = snapshot.summary_lines[0] if snapshot.summary_lines else "-"
+                local_ros_topic = snapshot.local_ros_topic
             values = [
                 topic.sensor_name,
                 topic.robot_id,
                 status,
-                hz,
                 age,
-                summary,
+                local_ros_topic,
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
