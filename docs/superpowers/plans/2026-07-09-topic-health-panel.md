@@ -575,7 +575,7 @@ git commit -m "feat: 显示选中话题健康详情"
 - 修改：`qt_frontend/panels/sensor_summary_panel.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_panels.py` 的 `TestSensorSummary` 中增加：
 
@@ -607,7 +607,7 @@ def test_http_stream_meta_shows_stream_diagnostic(self, qt_app):
     assert "HTTP stream meta 正常到达" in detail
 ```
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestSensorSummary::test_http_stream_meta_shows_stream_diagnostic -q
@@ -615,7 +615,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_http_stream_meta
 
 预期：如果任务 4 已实现详情区但 meta 诊断不完整，则断言失败。
 
-- [ ] **步骤 3：补充 meta stream URL 详情**
+- [x] **步骤 3：补充 meta stream URL 详情**
 
 扩展 `TopicSnapshot`：
 
@@ -635,7 +635,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_http_stream_meta
                 f"- stream_url: {snapshot.stream_url or '-'}",
 ```
 
-- [ ] **步骤 4：让主窗口把 meta 送给健康面板**
+- [x] **步骤 4：让主窗口把 meta 送给健康面板**
 
 修改 `MainWindow._on_sensor_meta()`：
 
@@ -655,7 +655,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_http_stream_meta
         )
 ```
 
-- [ ] **步骤 5：运行测试确认通过**
+- [x] **步骤 5：运行测试确认通过**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestSensorSummary::test_http_stream_meta_shows_stream_diagnostic -q
@@ -663,7 +663,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_http_stream_meta
 
 预期：通过。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add qt_frontend/main_window.py qt_frontend/panels/sensor_summary_panel.py tests/test_panels.py

@@ -1515,6 +1515,33 @@ class TestSensorSummary:
         assert "本地 ROS: /husky_001/joint_states" in detail
         assert "MQTT binary envelope 正常到达" in detail
 
+    def test_http_stream_meta_shows_stream_diagnostic(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+        panel.on_sensor_data_received(
+            "husky_001",
+            "velodyne_points",
+            {
+                "type": "sensor_meta",
+                "topic": "/velodyne_points",
+                "msg_type": "sensor_msgs/PointCloud2",
+                "transport": "http_stream",
+                "encoding": "ros1_serialized_v1",
+                "payload_format": "ros1_serialized",
+                "payload_size": 5132,
+                "stream_url": "http://localhost:18080/stream/velodyne_points",
+            },
+        )
+        panel._refresh_current_view(force=True)
+
+        detail = panel._detail_browser.toPlainText()
+
+        assert "transport: http_stream" in detail
+        assert "payload_size: 5132 bytes" in detail
+        assert "stream_url: http://localhost:18080/stream/velodyne_points" in detail
+        assert "本地 ROS: /husky_001/velodyne_points" in detail
+        assert "HTTP stream meta 正常到达" in detail
+
     def test_topic_snapshot_tracks_hz_summary_and_age(self):
         snapshot = SensorSummaryPanel.build_topic_snapshot(
             robot_id="r1",

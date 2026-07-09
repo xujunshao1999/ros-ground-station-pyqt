@@ -38,6 +38,7 @@ class TopicSnapshot:
     encoding: str = ""
     payload_format: str = ""
     payload_size: int = 0
+    stream_url: str = ""
     local_ros_topic: str = ""
     health_status: str = "正常"
     diagnostic: str = "消息持续到达"
@@ -196,6 +197,7 @@ class SensorSummaryPanel(QWidget):
         encoding = str(data.get("encoding") or "")
         payload_format = str(data.get("payload_format") or "")
         payload_size = SensorSummaryPanel.payload_size_from_data(data)
+        stream_url = str(data.get("stream_url") or "")
         local_ros_topic = SensorSummaryPanel.local_ros_topic_for(robot_id, ros_topic)
         diagnostic = SensorSummaryPanel.diagnostic_for(data, transport)
         new_sample_times = sample_times_to_add or [now]
@@ -214,6 +216,7 @@ class SensorSummaryPanel(QWidget):
                 encoding=encoding,
                 payload_format=payload_format,
                 payload_size=payload_size,
+                stream_url=stream_url,
                 local_ros_topic=local_ros_topic,
                 health_status="正常",
                 diagnostic=diagnostic,
@@ -235,6 +238,7 @@ class SensorSummaryPanel(QWidget):
             encoding=encoding,
             payload_format=payload_format,
             payload_size=payload_size,
+            stream_url=stream_url,
             local_ros_topic=local_ros_topic,
             health_status="正常",
             diagnostic=diagnostic,
@@ -696,6 +700,7 @@ class SensorSummaryPanel(QWidget):
                 f"- encoding: {snapshot.encoding or '-'}",
                 f"- payload_format: {snapshot.payload_format or '-'}",
                 f"- payload_size: {snapshot.payload_size} bytes",
+                f"- stream_url: {snapshot.stream_url or '-'}",
                 "",
                 f"本地 ROS: {snapshot.local_ros_topic or '-'}",
                 "",

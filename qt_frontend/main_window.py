@@ -598,6 +598,13 @@ class MainWindow(QMainWindow):
         self._pending_sensor_data.setdefault(key, []).append((time.monotonic(), data))
 
     def _on_sensor_meta(self, robot_id: str, sensor_name: str, data: object) -> None:
+        if isinstance(data, dict):
+            # meta 不是完整 ROS 消息，但健康面板需要它展示 HTTP stream 状态。
+            self._sensor_panel.on_sensor_data_received(
+                robot_id,
+                sensor_name,
+                data,
+            )
         self._traffic_monitor.on_sensor_data_received(
             robot_id,
             sensor_name,

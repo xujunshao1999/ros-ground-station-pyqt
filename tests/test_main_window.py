@@ -84,7 +84,7 @@ class TestMainWindowSensorBatching:
         assert [call[:3] for call in traffic_calls] == sensor_calls
         assert all(call[3] is not None for call in traffic_calls)
 
-    def test_sensor_meta_updates_traffic_without_sensor_summary(self, qt_app, monkeypatch):
+    def test_sensor_meta_updates_sensor_summary_and_traffic(self, qt_app, monkeypatch):
         monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
         monkeypatch.setattr(MainWindow, "_check_ros", lambda self: None)
 
@@ -110,7 +110,7 @@ class TestMainWindowSensorBatching:
         }
         window._on_sensor_meta("husky_001", "velodyne_points", meta)
 
-        assert sensor_calls == []
+        assert sensor_calls == [("husky_001", "velodyne_points", meta)]
         assert len(traffic_calls) == 1
         assert traffic_calls[0][:3] == ("husky_001", "velodyne_points", meta)
         assert traffic_calls[0][3] is not None
