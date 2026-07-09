@@ -66,6 +66,7 @@ class ObservedTopic:
     ros_topic: str = ""
     msg_type: str = ""
     status: str = "pending"
+    transport: str = ""
 
 
 class SensorSummaryPanel(QWidget):
@@ -189,6 +190,7 @@ class SensorSummaryPanel(QWidget):
         previous: Optional[TopicSnapshot],
         msg_type_hint: str = "",
         sample_times_to_add: Optional[List[float]] = None,
+        expected_transport: str = "",
     ) -> TopicSnapshot:
         msg_type = SensorSummaryPanel.infer_msg_type(data, msg_type_hint)
         summary_lines = SensorSummaryPanel.summarize_data(data, msg_type)
@@ -200,6 +202,14 @@ class SensorSummaryPanel(QWidget):
         stream_url = str(data.get("stream_url") or "")
         local_ros_topic = SensorSummaryPanel.local_ros_topic_for(robot_id, ros_topic)
         diagnostic = SensorSummaryPanel.diagnostic_for(data, transport)
+        health_status = "正常"
+        if (
+            expected_transport
+            and expected_transport != "auto"
+            and expected_transport != transport
+        ):
+            health_status = "配置不一致"
+            diagnostic = "期望 %s，实际 %s" % (expected_transport, transport)
         new_sample_times = sample_times_to_add or [now]
         if previous is None:
             sample_times = list(new_sample_times)
@@ -213,12 +223,13 @@ class SensorSummaryPanel(QWidget):
                 frame_count=len(new_sample_times),
                 sample_times=sample_times,
                 transport=transport,
+                expected_transport=expected_transport,
                 encoding=encoding,
                 payload_format=payload_format,
                 payload_size=payload_size,
                 stream_url=stream_url,
                 local_ros_topic=local_ros_topic,
-                health_status="正常",
+                health_status=health_status,
                 diagnostic=diagnostic,
             )
 
@@ -235,12 +246,13 @@ class SensorSummaryPanel(QWidget):
             frame_count=previous.frame_count + len(new_sample_times),
             sample_times=sample_times,
             transport=transport,
+            expected_transport=expected_transport,
             encoding=encoding,
             payload_format=payload_format,
             payload_size=payload_size,
             stream_url=stream_url,
             local_ros_topic=local_ros_topic,
-            health_status="正常",
+            health_status=health_status,
             diagnostic=diagnostic,
         )
 
@@ -517,6 +529,7 @@ class SensorSummaryPanel(QWidget):
             ros_topic=ros_topic or (previous_topic.ros_topic if previous_topic else ""),
             msg_type=msg_type or (previous_topic.msg_type if previous_topic else ""),
             status="active",
+            transport=previous_topic.transport if previous_topic else "",
         )
         if previous_topic is None or previous_topic.msg_type != msg_type:
             self._topic_options_dirty = True
@@ -559,12 +572,14 @@ class SensorSummaryPanel(QWidget):
             msg_type = str(
                 item.get("msg_type") or (snapshot.msg_type if snapshot else "")
             )
+            transport = str(item.get("transport") or "")
             self._observed_topics[key] = ObservedTopic(
                 robot_id=robot_id,
                 sensor_name=sensor_name,
                 ros_topic=topic,
                 msg_type=msg_type,
                 status=status,
+                transport=transport,
             )
 
         self._topic_options_dirty = True
@@ -782,6 +797,8 @@ class SensorSummaryPanel(QWidget):
                 continue
             robot_id, sensor_name = key
             previous = self._snapshots.get(key)
+            observed = self._observed_topics.get(key)
+            expected_transport = observed.transport if observed else ""
             snapshot = self.build_topic_snapshot(
                 robot_id=robot_id,
                 sensor_name=sensor_name,
@@ -790,6 +807,7 @@ class SensorSummaryPanel(QWidget):
                 previous=previous,
                 msg_type_hint=msg_type,
                 sample_times_to_add=arrival_times,
+                expected_transport=expected_transport,
             )
             if snapshot is not None:
                 self._snapshots[key] = snapshot
@@ -801,6 +819,7 @@ class SensorSummaryPanel(QWidget):
                         ros_topic=topic.ros_topic,
                         msg_type=snapshot.msg_type,
                         status=topic.status,
+                        transport=topic.transport,
                     )
                     self._topic_options_dirty = True
                 if self._selected_key == key:

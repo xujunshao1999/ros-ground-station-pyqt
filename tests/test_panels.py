@@ -1542,6 +1542,71 @@ class TestSensorSummary:
         assert "本地 ROS: /husky_001/velodyne_points" in detail
         assert "HTTP stream meta 正常到达" in detail
 
+    def test_health_marks_transport_mismatch(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+        panel.on_subscriptions_changed(
+            "husky_001",
+            [{
+                "topic": "/joint_states",
+                "msg_type": "sensor_msgs/JointState",
+                "transport": "mqtt_json",
+                "status": "active",
+            }],
+        )
+        panel.on_sensor_data_received(
+            "husky_001",
+            "joint_states",
+            {
+                "binary": True,
+                "topic": "/joint_states",
+                "msg_type": "sensor_msgs/JointState",
+                "encoding": "ros1_serialized_v1",
+                "payload_format": "ros1_serialized",
+                "payload_size": 208,
+            },
+        )
+        panel._refresh_current_view(force=True)
+
+        snapshot = panel._snapshots[("husky_001", "joint_states")]
+
+        assert snapshot.expected_transport == "mqtt_json"
+        assert snapshot.transport == "mqtt_binary"
+        assert snapshot.health_status == "配置不一致"
+        assert "期望 mqtt_json，实际 mqtt_binary" in snapshot.diagnostic
+
+    def test_transport_auto_does_not_mark_mismatch(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+        panel.on_subscriptions_changed(
+            "husky_001",
+            [{
+                "topic": "/joint_states",
+                "msg_type": "sensor_msgs/JointState",
+                "transport": "auto",
+                "status": "active",
+            }],
+        )
+        panel.on_sensor_data_received(
+            "husky_001",
+            "joint_states",
+            {
+                "binary": True,
+                "topic": "/joint_states",
+                "msg_type": "sensor_msgs/JointState",
+                "encoding": "ros1_serialized_v1",
+                "payload_format": "ros1_serialized",
+                "payload_size": 208,
+            },
+        )
+        panel._refresh_current_view(force=True)
+
+        snapshot = panel._snapshots[("husky_001", "joint_states")]
+
+        assert snapshot.expected_transport == "auto"
+        assert snapshot.transport == "mqtt_binary"
+        assert snapshot.health_status == "正常"
+
     def test_topic_snapshot_tracks_hz_summary_and_age(self):
         snapshot = SensorSummaryPanel.build_topic_snapshot(
             robot_id="r1",

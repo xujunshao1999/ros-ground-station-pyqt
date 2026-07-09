@@ -676,7 +676,7 @@ git commit -m "feat: 在话题健康面板显示HTTP流状态"
 - 修改：`qt_frontend/panels/sensor_summary_panel.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_panels.py` 的 `TestSensorSummary` 中增加：
 
@@ -747,7 +747,7 @@ def test_transport_auto_does_not_mark_mismatch(self, qt_app):
     assert snapshot.health_status == "正常"
 ```
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestSensorSummary::test_health_marks_transport_mismatch tests/test_panels.py::TestSensorSummary::test_transport_auto_does_not_mark_mismatch -q
@@ -755,7 +755,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_health_marks_tra
 
 预期：失败，当前未记录 expected transport，也不会正确区分明确 transport 和 `auto`。
 
-- [ ] **步骤 3：在 `ObservedTopic` 中记录 transport**
+- [x] **步骤 3：在 `ObservedTopic` 中记录 transport**
 
 在任务 3 已加入 `ros_topic` 的基础上，扩展 dataclass：
 
@@ -778,7 +778,7 @@ class ObservedTopic:
 
 创建 `ObservedTopic` 时保留已有 `ros_topic=topic`，并增加 `transport=transport`。
 
-- [ ] **步骤 4：让 pending 数据携带期望 transport**
+- [x] **步骤 4：让 pending 数据携带期望 transport**
 
 在 `_process_pending_data()` 中取出 observed topic：
 
@@ -799,7 +799,7 @@ class ObservedTopic:
         expected_transport: str = "",
 ```
 
-- [ ] **步骤 5：实现不一致诊断**
+- [x] **步骤 5：实现不一致诊断**
 
 在 `build_topic_snapshot()` 中推导：
 
@@ -822,7 +822,7 @@ class ObservedTopic:
                 diagnostic=diagnostic,
 ```
 
-- [ ] **步骤 6：运行测试确认通过**
+- [x] **步骤 6：运行测试确认通过**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestSensorSummary::test_health_marks_transport_mismatch tests/test_panels.py::TestSensorSummary::test_transport_auto_does_not_mark_mismatch -q
@@ -830,7 +830,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_health_marks_tra
 
 预期：通过。
 
-- [ ] **步骤 7：Commit**
+- [x] **步骤 7：Commit**
 
 ```bash
 git add qt_frontend/panels/sensor_summary_panel.py tests/test_panels.py
