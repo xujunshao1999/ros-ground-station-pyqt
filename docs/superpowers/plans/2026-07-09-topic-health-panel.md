@@ -844,7 +844,7 @@ git commit -m "feat: 标记话题传输配置不一致"
 - 修改：`docs/tech-stack.md`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：运行面板测试**
+- [x] **步骤 1：运行面板测试**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestSensorSummary -q
@@ -852,7 +852,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary -q
 
 预期：`TestSensorSummary` 全部通过。
 
-- [ ] **步骤 2：运行相关前端测试**
+- [x] **步骤 2：运行相关前端测试**
 
 ```bash
 python3 -m pytest tests/test_panels.py -q
@@ -860,7 +860,7 @@ python3 -m pytest tests/test_panels.py -q
 
 预期：`tests/test_panels.py` 全部通过。
 
-- [ ] **步骤 3：运行 lint**
+- [x] **步骤 3：运行 lint**
 
 ```bash
 ruff check qt_frontend/panels/sensor_summary_panel.py qt_frontend/main_window.py tests/test_panels.py
@@ -868,7 +868,7 @@ ruff check qt_frontend/panels/sensor_summary_panel.py qt_frontend/main_window.py
 
 预期：无新增 lint 错误。如果命令暴露既有无关错误，只记录具体文件和规则，不在本任务中重构无关区域。
 
-- [ ] **步骤 4：更新 README**
+- [x] **步骤 4：更新 README**
 
 在 `README.md` 的主要能力列表中，将传感器摘要相关描述调整为：
 
@@ -888,7 +888,7 @@ ruff check qt_frontend/panels/sensor_summary_panel.py qt_frontend/main_window.py
 话题健康、数据推送等
 ```
 
-- [ ] **步骤 5：更新技术栈文档**
+- [x] **步骤 5：更新技术栈文档**
 
 在 `docs/tech-stack.md` 的 Bridge 或 Qt 前端说明中补充：
 
@@ -896,7 +896,7 @@ ruff check qt_frontend/panels/sensor_summary_panel.py qt_frontend/main_window.py
 - 话题健康面板不负责带宽统计；带宽、总流量和吞吐趋势由流量面板展示。健康面板只展示订阅状态、最近更新时间、transport/encoding、本地 ROS topic 和诊断说明。
 ```
 
-- [ ] **步骤 6：空白检查**
+- [x] **步骤 6：空白检查**
 
 ```bash
 git diff --check -- qt_frontend/panels/sensor_summary_panel.py qt_frontend/main_window.py tests/test_panels.py README.md docs/tech-stack.md
@@ -904,7 +904,7 @@ git diff --check -- qt_frontend/panels/sensor_summary_panel.py qt_frontend/main_
 
 预期：无输出。
 
-- [ ] **步骤 7：Commit**
+- [x] **步骤 7：Commit**
 
 ```bash
 git add qt_frontend/panels/sensor_summary_panel.py qt_frontend/main_window.py tests/test_panels.py README.md docs/tech-stack.md

@@ -22,6 +22,7 @@ Robot (ROS) ──► Agent ──MQTT──► Mosquitto Broker ──MQTT─�
 - Bridge 端将 MQTT 数据重新发布到地面站本地 roscore，RViz 只依赖地面站本地 ROS master。
 - 支持多机器人 TF 命名空间化和 `global_map -> robot/map` 统一坐标根，机器人 `/tf_static` 通过 MQTT retained 消息转发并在 Bridge 侧缓存重发。
 - 地面站本地 ROS 中仅 `/tf`、`/tf_static` 使用标准公共话题；普通传感器和状态话题按机器人隔离，例如 `/turtlebot_001/odom`、`/turtlebot_001/joint_states`。
+- 话题健康面板按机器人展示订阅话题的链路状态、最近更新时间、传输方式和 Bridge 本地 ROS 发布目标，用于排查 MQTT、HTTP stream 和 ROS topic 重发布链路。
 
 ## 快速开始（Ubuntu 20.04 + ROS Noetic）
 
@@ -121,7 +122,7 @@ ros-ground-station-pyqt/
 │   │   ├── robot_list_panel.py   #     机器人列表 + 心跳检测
 │   │   ├── command_panel.py      #     速度/模式控制
 │   │   ├── event_panel.py        #     事件/告警列表
-│   │   └── ...                   #     传感器摘要、数据推送等
+│   │   └── ...                   #     话题健康、数据推送等
 │   ├── native/                   #   C++ RViz 胶水库
 │   │   ├── rviz_widget.h / .cpp  #     extern "C" 接口
 │   │   └── CMakeLists.txt

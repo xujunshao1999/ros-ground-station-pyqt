@@ -893,8 +893,11 @@ class TestFleetCommPanel:
 
         assert panel._form_group.isChecked() is True
 
-    def test_confirm_adds_rule_from_form(self, qt_app):
+    def test_confirm_adds_rule_from_form(self, qt_app, tmp_path):
         panel = FleetCommPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        panel._rules = []
+        panel._refresh_table()
         panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
         panel._btn_add.click()
         panel._combo_src.setCurrentText("turtlebot_001")
@@ -1028,6 +1031,8 @@ class TestFleetCommPanel:
     def test_config_response_loads_fleet_rules_into_table(self, qt_app, tmp_path):
         panel = FleetCommPanel()
         panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        panel._rules = []
+        panel._refresh_table()
         panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
 
         panel.on_config_response(

@@ -140,6 +140,8 @@ RViz 嵌入方式：
 - `qt_frontend/main_window.py` 通过 `ctypes.CDLL` 加载 `librviz_widget.so`。
 - PyQt5 使用原生窗口句柄把 RViz 面板嵌入主窗口。
 
+Qt 前端中的话题健康面板不负责带宽统计；带宽、总流量和吞吐趋势由流量面板展示。健康面板只展示订阅状态、最近更新时间、transport/encoding、本地 ROS topic 和诊断说明，用来排查 MQTT、HTTP stream 与 Bridge 重发布链路是否一致。
+
 已知工程约束：
 
 - 需要 Ubuntu + ROS Noetic 才能构建和运行 RViz 胶水库。
