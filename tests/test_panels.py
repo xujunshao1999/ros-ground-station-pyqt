@@ -1418,6 +1418,24 @@ class TestTrafficMonitor:
 # SensorSummaryPanel
 # ------------------------------------------------------------------
 class TestSensorSummary:
+    def test_local_ros_topic_uses_robot_namespace_except_tf(self):
+        assert SensorSummaryPanel.local_ros_topic_for(
+            "husky_001",
+            "/joint_states",
+        ) == "/husky_001/joint_states"
+        assert SensorSummaryPanel.local_ros_topic_for(
+            "husky_001",
+            "/hdl_graph_slam/odom",
+        ) == "/husky_001/hdl_graph_slam/odom"
+        assert SensorSummaryPanel.local_ros_topic_for(
+            "husky_001",
+            "/tf",
+        ) == "/tf"
+        assert SensorSummaryPanel.local_ros_topic_for(
+            "husky_001",
+            "/tf_static",
+        ) == "/tf_static"
+
     def test_topic_snapshot_tracks_hz_summary_and_age(self):
         snapshot = SensorSummaryPanel.build_topic_snapshot(
             robot_id="r1",

@@ -129,6 +129,16 @@ class SensorSummaryPanel(QWidget):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def local_ros_topic_for(robot_id: str, ros_topic: str) -> str:
+        # Bridge 侧保留 TF 公共坐标树，普通话题进入机器人命名空间。
+        topic = ros_topic.strip()
+        if not topic.startswith("/"):
+            topic = "/" + topic
+        if topic in ("/tf", "/tf_static"):
+            return topic
+        return "/%s%s" % (robot_id, topic)
+
+    @staticmethod
     def build_topic_snapshot(
         robot_id: str,
         sensor_name: str,
