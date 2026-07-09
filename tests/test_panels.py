@@ -1490,6 +1490,31 @@ class TestSensorSummary:
         assert panel._topic_table.item(0, 2).text() == "等待数据"
         assert panel._topic_table.item(0, 4).text() == "/husky_001/joint_states"
 
+    def test_selected_topic_detail_shows_transport_and_ros_target(self, qt_app):
+        panel = SensorSummaryPanel()
+        panel.show()
+        panel.on_sensor_data_received(
+            "husky_001",
+            "joint_states",
+            {
+                "binary": True,
+                "topic": "/joint_states",
+                "msg_type": "sensor_msgs/JointState",
+                "encoding": "ros1_serialized_v1",
+                "payload_format": "ros1_serialized",
+                "payload_size": 208,
+            },
+        )
+        panel._refresh_current_view(force=True)
+
+        detail = panel._detail_browser.toPlainText()
+
+        assert "transport: mqtt_binary" in detail
+        assert "encoding: ros1_serialized_v1" in detail
+        assert "payload_size: 208 bytes" in detail
+        assert "本地 ROS: /husky_001/joint_states" in detail
+        assert "MQTT binary envelope 正常到达" in detail
+
     def test_topic_snapshot_tracks_hz_summary_and_age(self):
         snapshot = SensorSummaryPanel.build_topic_snapshot(
             robot_id="r1",

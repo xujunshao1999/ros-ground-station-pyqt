@@ -467,7 +467,7 @@ git commit -m "refactor: 收敛话题健康总览表"
 - 修改：`qt_frontend/panels/sensor_summary_panel.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_panels.py` 的 `TestSensorSummary` 中增加：
 
@@ -498,7 +498,7 @@ def test_selected_topic_detail_shows_transport_and_ros_target(self, qt_app):
     assert "MQTT binary envelope 正常到达" in detail
 ```
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestSensorSummary::test_selected_topic_detail_shows_transport_and_ros_target -q
@@ -506,7 +506,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_selected_topic_d
 
 预期：失败，当前没有 `_detail_browser`。
 
-- [ ] **步骤 3：增加详情区 UI**
+- [x] **步骤 3：增加详情区 UI**
 
 在 `__init__()` 中用 `_detail_browser` 替代旧 `_browser` 的主展示职责：
 
@@ -519,7 +519,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_selected_topic_d
 
 保留 `self._browser` 是为了兼容现有测试；本计划不删除这个兼容属性。
 
-- [ ] **步骤 4：更新 `_render_snapshot()` 详情内容**
+- [x] **步骤 4：更新 `_render_snapshot()` 详情内容**
 
 将详情内容改为健康字段优先：
 
@@ -553,7 +553,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_selected_topic_d
                 lines.extend("- " + line for line in snapshot.summary_lines[:4])
 ```
 
-- [ ] **步骤 5：运行测试确认通过**
+- [x] **步骤 5：运行测试确认通过**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestSensorSummary::test_selected_topic_detail_shows_transport_and_ros_target -q
@@ -561,7 +561,7 @@ python3 -m pytest tests/test_panels.py::TestSensorSummary::test_selected_topic_d
 
 预期：通过。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add qt_frontend/panels/sensor_summary_panel.py tests/test_panels.py

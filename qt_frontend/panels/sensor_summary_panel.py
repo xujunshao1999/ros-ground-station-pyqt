@@ -108,9 +108,10 @@ class SensorSummaryPanel(QWidget):
         metric_grid.addWidget(self._lb_frames, 1, 1)
         layout.addLayout(metric_grid)
 
-        self._browser = QTextBrowser()
-        self._browser.setOpenExternalLinks(False)
-        layout.addWidget(self._browser, 1)
+        self._detail_browser = QTextBrowser()
+        self._detail_browser.setOpenExternalLinks(False)
+        layout.addWidget(self._detail_browser, 1)
+        self._browser = self._detail_browser
 
         self._topic_table = QTableWidget()
         self._topic_table.setColumnCount(5)
@@ -683,21 +684,32 @@ class SensorSummaryPanel(QWidget):
 
         if self._last_rendered_summary_key != summary_key:
             lines = [
-                f"机器人: {snapshot.robot_id}  话题: {snapshot.sensor_name}",
+                f"机器人: {snapshot.robot_id}",
+                f"话题: {snapshot.sensor_name}",
                 f"类型: {snapshot.msg_type}",
-                "统计口径: 当前订阅话题的轻量入站状态",
+                f"健康: {'断流' if stale else snapshot.health_status}",
+                f"Hz: {self.format_rate(snapshot.hz)}",
+                f"更新: {self.format_age(snapshot.age(now))}",
                 "",
+                "传输:",
+                f"- transport: {snapshot.transport}",
+                f"- encoding: {snapshot.encoding or '-'}",
+                f"- payload_format: {snapshot.payload_format or '-'}",
+                f"- payload_size: {snapshot.payload_size} bytes",
+                "",
+                f"本地 ROS: {snapshot.local_ros_topic or '-'}",
+                "",
+                "诊断:",
             ]
-            lines.extend(snapshot.summary_lines)
-            lines.extend(["", "诊断:"])
             if stale:
                 lines.append(
                     f"- {self.format_age(snapshot.age(now))} 未收到新消息，可能断流或已取消订阅"
                 )
-            elif snapshot.hz <= 0 and snapshot.frame_count < 2:
-                lines.append("- 已收到首帧，等待更多样本计算 Hz")
             else:
-                lines.append("- 消息持续到达")
+                lines.append(f"- {snapshot.diagnostic}")
+            if snapshot.summary_lines:
+                lines.extend(["", "补充摘要:"])
+                lines.extend("- " + line for line in snapshot.summary_lines[:4])
             self._browser.setPlainText("\n".join(lines))
             self._last_rendered_summary_key = summary_key
 
