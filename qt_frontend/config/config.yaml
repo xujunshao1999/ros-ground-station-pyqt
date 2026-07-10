@@ -8,10 +8,18 @@ ros:
   default_max_freq: 30.0
 
 rviz:
+  # RViz 启动时加载的 Display 配置文件，路径相对于 qt_frontend 目录。
   default_config: "config/default.rviz"
+  # 兼容旧配置字段：前端启动和默认全局视角都使用 global_map。
   fixed_frame: "global_map"
+  # “全局视角”按钮切换到的 fixed frame，用于多机器人统一显示。
   global_frame: "global_map"
+  # 未在 robot_fixed_frames 中单独配置的机器人，会按该模板生成局部视角 frame。
+  # 例如 turtlebot_001 会自动切换到 turtlebot_001/base_link。
   robot_frame_template: "{robot_id}/base_link"
+  # 是否在点击机器人列表时自动把 RViz fixed frame 切到该机器人的局部 frame。
   follow_selected_robot_frame: true
+  # 单机器人覆盖配置；只有默认模板不适用时才需要填写。
+  # 例如某台机器人希望跟随 base_footprint，可写为 robot_id: "robot_id/base_footprint"。
   robot_fixed_frames:
     husky_001: "husky_001/base_link"
