@@ -770,7 +770,7 @@ git commit -m "feat: 增加RViz frame可解析性检查"
 - 修改：`qt_frontend/config/config.yaml`
 - 修改：`tests/test_rviz_config_loading.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_rviz_config_loading.py` 中增加：
 
@@ -790,7 +790,7 @@ def test_frontend_config_declares_rviz_frame_switching_defaults() -> None:
     assert rviz["robot_fixed_frames"]["husky_001"] == "husky_001/base_link"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 python3 -m pytest tests/test_rviz_config_loading.py::test_frontend_config_declares_rviz_frame_switching_defaults -v
@@ -798,7 +798,7 @@ python3 -m pytest tests/test_rviz_config_loading.py::test_frontend_config_declar
 
 预期：失败，提示配置字段缺失或 `fixed_frame` 仍为 `map`。
 
-- [ ] **步骤 3：更新默认配置**
+- [x] **步骤 3：更新默认配置**
 
 将 `qt_frontend/config/config.yaml` 的 `rviz` 段调整为：
 
@@ -813,7 +813,7 @@ rviz:
     husky_001: "husky_001/base_link"
 ```
 
-- [ ] **步骤 4：运行配置测试验证通过**
+- [x] **步骤 4：运行配置测试验证通过**
 
 ```bash
 python3 -m pytest tests/test_rviz_config_loading.py::test_frontend_config_declares_rviz_frame_switching_defaults -v
@@ -821,7 +821,7 @@ python3 -m pytest tests/test_rviz_config_loading.py::test_frontend_config_declar
 
 预期：测试通过。
 
-- [ ] **步骤 5：运行相关 Python 测试**
+- [x] **步骤 5：运行相关 Python 测试**
 
 ```bash
 python3 -m pytest tests/test_rviz_frame_policy.py tests/test_panels.py::TestRobotListFrameControls tests/test_main_window.py::TestMainWindowRvizFrameSwitch tests/test_rviz_config_loading.py -v
@@ -829,7 +829,7 @@ python3 -m pytest tests/test_rviz_frame_policy.py tests/test_panels.py::TestRobo
 
 预期：所有相关测试通过。
 
-- [ ] **步骤 6：运行 lint**
+- [x] **步骤 6：运行 lint**
 
 ```bash
 ruff check qt_frontend/rviz_frame_policy.py qt_frontend/panels/robot_list_panel.py qt_frontend/main_window.py tests/test_rviz_frame_policy.py tests/test_panels.py tests/test_main_window.py tests/test_rviz_config_loading.py
@@ -837,7 +837,7 @@ ruff check qt_frontend/rviz_frame_policy.py qt_frontend/panels/robot_list_panel.
 
 预期：无 lint 错误。
 
-- [ ] **步骤 7：构建原生库**
+- [x] **步骤 7：构建原生库**
 
 ```bash
 cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(nproc)
@@ -845,7 +845,7 @@ cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(npro
 
 预期：`qt_frontend/native/build/librviz_widget.so` 更新成功。
 
-- [ ] **步骤 8：运行态验证全局和机器人视角**
+- [x] **步骤 8：运行态验证全局和机器人视角**
 
 启动地面站链路：
 
@@ -867,7 +867,7 @@ timeout 6 rosrun tf tf_echo global_map husky_001/base_link
 - 点击“全局视角”后，当前视角显示 `global_map`。
 - 关闭“跟随选中”后再点击机器人，命令面板目标机器人仍会变化，但当前视角不跟随变化。
 
-- [ ] **步骤 9：Commit**
+- [x] **步骤 9：Commit**
 
 ```bash
 git add qt_frontend/config/config.yaml tests/test_rviz_config_loading.py

@@ -9,4 +9,9 @@ ros:
 
 rviz:
   default_config: "config/default.rviz"
-  fixed_frame: "map"
+  fixed_frame: "global_map"
+  global_frame: "global_map"
+  robot_frame_template: "{robot_id}/base_link"
+  follow_selected_robot_frame: true
+  robot_fixed_frames:
+    husky_001: "husky_001/base_link"

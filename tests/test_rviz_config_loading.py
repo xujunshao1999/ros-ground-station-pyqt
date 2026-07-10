@@ -149,3 +149,16 @@ def test_main_window_registers_can_resolve_frame_ctypes_signature() -> None:
     assert "lib.can_resolve_frame.argtypes" in source
     assert "lib.can_resolve_frame.restype = ctypes.c_int" in source
     assert "except AttributeError" in source
+
+
+def test_frontend_config_declares_rviz_frame_switching_defaults() -> None:
+    import yaml
+
+    config = yaml.safe_load(_read_repo_file("qt_frontend/config/config.yaml"))
+    rviz = config["rviz"]
+
+    assert rviz["fixed_frame"] == "global_map"
+    assert rviz["global_frame"] == "global_map"
+    assert rviz["robot_frame_template"] == "{robot_id}/base_link"
+    assert rviz["follow_selected_robot_frame"] is True
+    assert rviz["robot_fixed_frames"]["husky_001"] == "husky_001/base_link"
