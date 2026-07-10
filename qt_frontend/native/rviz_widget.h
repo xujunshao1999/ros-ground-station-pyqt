@@ -16,6 +16,8 @@ int has_config_changes(void* widget_ptr);
 
 void set_fixed_frame(void* widget_ptr, const char* frame);
 
+int can_resolve_frame(void* widget_ptr, const char* frame);
+
 void* get_display_panel(void* widget_ptr);
 
 void set_dock_layout(void* widget_ptr, void* layout_ptr);

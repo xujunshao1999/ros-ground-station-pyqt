@@ -10,12 +10,15 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <OGRE/OgreQuaternion.h>
+#include <OGRE/OgreVector3.h>
 #include <rviz/visualization_frame.h>
 #include <rviz/visualization_manager.h>
 #include <rviz/render_panel.h>
 #include <rviz/displays_panel.h>
 #include <rviz/display.h>
 #include <rviz/display_group.h>
+#include <rviz/frame_manager.h>
 #include <rviz/panel_dock_widget.h>
 #include <rviz/tool.h>
 #include <rviz/tool_manager.h>
@@ -286,6 +289,24 @@ void set_fixed_frame(void* widget_ptr, const char* frame) {
     auto it = g_instances.find(widget_ptr);
     if (it == g_instances.end()) return;
     it->second->manager->setFixedFrame(QString::fromUtf8(frame));
+}
+
+int can_resolve_frame(void* widget_ptr, const char* frame) {
+    if (!widget_ptr || !frame) return 0;
+    auto it = g_instances.find(widget_ptr);
+    if (it == g_instances.end()) return 0;
+
+    RvizInstance* instance = it->second;
+    if (!instance->manager || !instance->manager->getFrameManager()) return 0;
+
+    Ogre::Vector3 position;
+    Ogre::Quaternion orientation;
+    // 只做当前 TF tree 的可解析性探测；Python 层仍允许切换并等待后续 TF 到达。
+    return instance->manager->getFrameManager()->getTransform(
+        QString::fromUtf8(frame).toStdString(),
+        ros::Time(0),
+        position,
+        orientation) ? 1 : 0;
 }
 
 void* get_display_panel(void* widget_ptr) {

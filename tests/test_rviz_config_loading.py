@@ -131,3 +131,21 @@ def test_native_docks_rviz_image_panels_in_bottom_host_after_config_change_settl
     assert "inst->dock_host->show();" in move_source
     assert "setWidget(nullptr)" not in move_source
     assert "QVBoxLayout" not in move_source
+
+
+def test_rviz_native_exposes_can_resolve_frame() -> None:
+    header = _read_repo_file("qt_frontend/native/rviz_widget.h")
+    source = _read_repo_file("qt_frontend/native/rviz_widget.cpp")
+
+    assert "int can_resolve_frame(void* widget_ptr, const char* frame);" in header
+    assert "int can_resolve_frame(void* widget_ptr, const char* frame)" in source
+    assert "getFrameManager()" in source
+    assert "getTransform(" in source
+
+
+def test_main_window_registers_can_resolve_frame_ctypes_signature() -> None:
+    source = _read_repo_file("qt_frontend/main_window.py")
+
+    assert "lib.can_resolve_frame.argtypes" in source
+    assert "lib.can_resolve_frame.restype = ctypes.c_int" in source
+    assert "except AttributeError" in source

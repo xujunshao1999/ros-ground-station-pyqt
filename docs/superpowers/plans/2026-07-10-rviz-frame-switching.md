@@ -668,7 +668,7 @@ git commit -m "feat: 接入RViz fixed frame切换"
 - 修改：`qt_frontend/native/rviz_widget.cpp`
 - 修改：`tests/test_rviz_config_loading.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_rviz_config_loading.py` 中增加：
 
@@ -691,7 +691,7 @@ def test_main_window_registers_can_resolve_frame_ctypes_signature() -> None:
     assert "except AttributeError" in source
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 python3 -m pytest tests/test_rviz_config_loading.py::test_rviz_native_exposes_can_resolve_frame tests/test_rviz_config_loading.py::test_main_window_registers_can_resolve_frame_ctypes_signature -v
@@ -699,7 +699,7 @@ python3 -m pytest tests/test_rviz_config_loading.py::test_rviz_native_exposes_ca
 
 预期：`test_rviz_native_exposes_can_resolve_frame` 失败，提示 C++ 声明或实现缺失；`test_main_window_registers_can_resolve_frame_ctypes_signature` 在任务 3 已完成后应通过。
 
-- [ ] **步骤 3：修改头文件声明**
+- [x] **步骤 3：修改头文件声明**
 
 在 `qt_frontend/native/rviz_widget.h` 中加入：
 
@@ -707,7 +707,7 @@ python3 -m pytest tests/test_rviz_config_loading.py::test_rviz_native_exposes_ca
 int can_resolve_frame(void* widget_ptr, const char* frame);
 ```
 
-- [ ] **步骤 4：修改 C++ include**
+- [x] **步骤 4：修改 C++ include**
 
 在 `qt_frontend/native/rviz_widget.cpp` 的 RViz include 区加入：
 
@@ -717,7 +717,7 @@ int can_resolve_frame(void* widget_ptr, const char* frame);
 #include <OGRE/OgreVector3.h>
 ```
 
-- [ ] **步骤 5：实现 `can_resolve_frame()`**
+- [x] **步骤 5：实现 `can_resolve_frame()`**
 
 在 `set_fixed_frame()` 后加入：
 
@@ -741,7 +741,7 @@ int can_resolve_frame(void* widget_ptr, const char* frame) {
 }
 ```
 
-- [ ] **步骤 6：运行静态测试验证通过**
+- [x] **步骤 6：运行静态测试验证通过**
 
 ```bash
 python3 -m pytest tests/test_rviz_config_loading.py::test_rviz_native_exposes_can_resolve_frame tests/test_rviz_config_loading.py::test_main_window_registers_can_resolve_frame_ctypes_signature -v
@@ -749,7 +749,7 @@ python3 -m pytest tests/test_rviz_config_loading.py::test_rviz_native_exposes_ca
 
 预期：2 个测试通过。
 
-- [ ] **步骤 7：构建原生 RViz 胶水库**
+- [x] **步骤 7：构建原生 RViz 胶水库**
 
 ```bash
 cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(nproc)
@@ -757,7 +757,7 @@ cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(npro
 
 预期：`librviz_widget.so` 构建成功。如果编译器提示 `getTransform()` 参数类型不匹配，将 frame 参数改为当前 ROS Noetic RViz 头文件要求的字符串类型，并保持函数名、返回值和 Python ctypes 签名不变。
 
-- [ ] **步骤 8：Commit**
+- [x] **步骤 8：Commit**
 
 ```bash
 git add qt_frontend/native/rviz_widget.h qt_frontend/native/rviz_widget.cpp tests/test_rviz_config_loading.py
