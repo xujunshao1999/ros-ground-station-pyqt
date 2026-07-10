@@ -24,7 +24,7 @@
 
 - 第一版不增加 ROS topic 订阅，不在 Python 层主动读取 `/tf`，避免给前端引入新的 ROS 线程和运行时依赖。
 - 点击机器人列表继续保留现有语义：选中机器人会传给命令面板作为控制目标。RViz 跟随是这个选择事件的可关闭副作用。
-- 当前用户入口是 `qt_frontend/main.py` 创建的 `qt_frontend.main_window.MainWindow`，本计划优先覆盖这个入口。`qt_frontend/panels_setup.py` 是备用 C++ 嵌入入口，本计划不接入其 RViz frame 切换；如果后续仍使用该入口，需要单独同步 `RobotListPanel` 新信号到 `RvizPanelWrapper.set_fixed_frame()`。
+- 当前用户入口是 `qt_frontend/main.py` 创建的 `qt_frontend.main_window.MainWindow`，本计划优先覆盖这个入口。`qt_frontend/panels_setup.py` 是备用 C++ 嵌入入口，本计划不接入其 RViz frame 切换；执行本计划后，该备用入口仍会使用 `map` 且不会响应新增视角控件。如果测试、演示或发布流程会通过 `qt_frontend/native/rviz_app.cpp` 调用 `panels_setup.py`，必须先扩展本计划，把备用入口的 `RvizPanelWrapper.set_fixed_frame()` 和新增信号接入同一套策略函数。
 - 机器人 fixed frame 的默认规则是 `{robot_id}/base_link`。如果 `qt_frontend/config/config.yaml` 中存在 `rviz.robot_fixed_frames.<robot_id>`，优先使用覆盖值。
 - frame 字符串统一去掉首尾空白和开头 `/`。RViz/TF frame ID 使用 `husky_001/base_link`，不使用 `/husky_001/base_link`。
 - `global_frame` 默认为 `global_map`。保留现有 `rviz.fixed_frame` 字段作为启动 fixed frame 的兼容字段，并把仓库默认值从 `map` 调整为 `global_map`。
@@ -66,7 +66,7 @@
   - 覆盖机器人面板新增控件、信号和当前视角显示。
 
 - 修改：`tests/test_main_window.py`
-  - 覆盖 MainWindow 中机器人选择、跟随开关、全局按钮、RViz 未初始化和 frame 暂不可解析的行为。
+  - 覆盖 MainWindow 中机器人选择、跟随开关、全局按钮、真实信号接线、RViz 未初始化后延迟应用 pending frame，以及 frame 暂不可解析的行为。
 
 - 修改：`tests/test_rviz_config_loading.py`
   - 用静态测试覆盖 C++ 头文件、实现文件和 ctypes 签名。
@@ -78,7 +78,7 @@
 - 创建：`qt_frontend/rviz_frame_policy.py`
 - 创建：`tests/test_rviz_frame_policy.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 创建 `tests/test_rviz_frame_policy.py`：
 
@@ -131,6 +131,12 @@ def test_robot_fixed_frame_falls_back_when_template_is_invalid() -> None:
     assert robot_fixed_frame_for("husky_001", config) == "husky_001/base_link"
 
 
+def test_robot_fixed_frame_falls_back_when_template_has_unknown_field() -> None:
+    config = {"rviz": {"robot_frame_template": "{robot_id}/{bad_field}"}}
+
+    assert robot_fixed_frame_for("husky_001", config) == "husky_001/base_link"
+
+
 def test_follow_selected_robot_defaults_to_enabled() -> None:
     assert follow_selected_robot_default({}) is True
     assert follow_selected_robot_default(
@@ -138,7 +144,7 @@ def test_follow_selected_robot_defaults_to_enabled() -> None:
     ) is False
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 python3 -m pytest tests/test_rviz_frame_policy.py -v
@@ -146,7 +152,7 @@ python3 -m pytest tests/test_rviz_frame_policy.py -v
 
 预期：失败，提示 `ModuleNotFoundError: No module named 'qt_frontend.rviz_frame_policy'`。
 
-- [ ] **步骤 3：实现最少策略模块**
+- [x] **步骤 3：实现最少策略模块**
 
 创建 `qt_frontend/rviz_frame_policy.py`：
 
@@ -202,19 +208,23 @@ def robot_fixed_frame_for(robot_id: str, config: Dict[str, Any]) -> str:
     if not isinstance(template, str) or "{robot_id}" not in template:
         template = DEFAULT_ROBOT_FRAME_TEMPLATE
 
-    # 模板只暴露 robot_id 一个变量，避免配置误写时抛出格式化异常。
-    return normalize_frame_id(template.format(robot_id=clean_robot_id))
+    try:
+        formatted = template.format(robot_id=clean_robot_id)
+    except (KeyError, IndexError, ValueError):
+        # 配置模板只能引用 robot_id；误写其他占位符时回退到稳定默认值。
+        formatted = DEFAULT_ROBOT_FRAME_TEMPLATE.format(robot_id=clean_robot_id)
+    return normalize_frame_id(formatted)
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 ```bash
 python3 -m pytest tests/test_rviz_frame_policy.py -v
 ```
 
-预期：7 个测试通过。
+预期：8 个测试通过。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add qt_frontend/rviz_frame_policy.py tests/test_rviz_frame_policy.py
@@ -407,13 +417,49 @@ class TestMainWindowRvizFrameSwitch:
 
         assert fake.frames == []
 
-    def test_global_frame_button_switches_to_global_map(self, qt_app, monkeypatch):
+    def test_switch_to_global_frame_sets_global_map(self, qt_app, monkeypatch):
         window, fake = self._window_with_fake_rviz(qt_app, monkeypatch)
 
         window._switch_to_global_frame()
 
         assert fake.frames == ["global_map"]
         assert window._current_fixed_frame == "global_map"
+
+    def test_robot_list_frame_signals_are_connected(self, qt_app, monkeypatch):
+        window, fake = self._window_with_fake_rviz(qt_app, monkeypatch)
+        window._robot_list.on_status_received("husky_001", {"battery": 90.0})
+        item = window._robot_list._tree.topLevelItem(0)
+        item.setSelected(True)
+        fake.frames = []
+
+        window._robot_list.global_frame_requested.emit()
+        window._robot_list.robot_selected.emit("husky_001")
+        window._robot_list.set_follow_selected_robot_enabled(False)
+        window._robot_list.set_follow_selected_robot_enabled(True)
+
+        assert fake.frames == [
+            "global_map",
+            "husky_001/base_link",
+            "husky_001/base_link",
+        ]
+
+    def test_rviz_init_applies_pending_fixed_frame_after_dock_host_setup(self):
+        import inspect
+
+        source = inspect.getsource(MainWindow._init_rviz)
+        apply_call = 'self._set_rviz_fixed_frame(requested_frame, "初始视角")'
+        dock_host_call = (
+            "lib.set_dock_host(rviz_ptr, ctypes.c_void_p(image_dock_host_ptr))"
+        )
+
+        assert "requested_frame = (" in source
+        assert (
+            "self._pending_fixed_frame or global_fixed_frame_for(self._config)"
+            in source
+        )
+        assert dock_host_call in source
+        assert apply_call in source
+        assert source.index(dock_host_call) < source.index(apply_call)
 
     def test_missing_resolve_checker_still_switches_frame(self, qt_app, monkeypatch):
         monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
@@ -475,7 +521,7 @@ class TestMainWindowRvizFrameSwitch:
 python3 -m pytest tests/test_main_window.py::TestMainWindowRvizFrameSwitch -v
 ```
 
-预期：失败，提示 `MainWindow` 没有 `_on_robot_selected_for_rviz` 或 `_set_rviz_fixed_frame`。
+预期：失败，提示 `MainWindow` 没有 `_on_robot_selected_for_rviz`、`_set_rviz_fixed_frame`，或 `_init_rviz()` 尚未应用 pending frame。
 
 - [ ] **步骤 3：导入 frame 策略函数**
 
@@ -594,7 +640,9 @@ from qt_frontend.rviz_frame_policy import (
 在 `_init_rviz()` 成功设置 dock host 后加入：
 
 ```python
-        requested_frame = self._pending_fixed_frame or global_fixed_frame_for(self._config)
+        requested_frame = (
+            self._pending_fixed_frame or global_fixed_frame_for(self._config)
+        )
         self._set_rviz_fixed_frame(requested_frame, "初始视角")
 ```
 
@@ -604,7 +652,7 @@ from qt_frontend.rviz_frame_policy import (
 python3 -m pytest tests/test_main_window.py::TestMainWindowRvizFrameSwitch -v
 ```
 
-预期：6 个测试通过。
+预期：8 个测试通过。
 
 - [ ] **步骤 9：Commit**
 
@@ -847,6 +895,6 @@ cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(npro
 
 - 本计划不依赖此前聊天记录即可理解目标、frame 命名、配置字段和执行顺序。
 - 新增术语覆盖了 `fixed frame`、`global_map`、机器人局部 frame、跟随选中、全局视角和 frame 可解析性检查。
-- 每个关键行为都有对应测试：策略推导、面板信号、主窗口接线、C++ 符号暴露、配置默认值和运行态 RViz/TF 验证。
+- 每个关键行为都有对应测试：策略推导、模板误写回退、面板信号、主窗口真实信号接线、RViz pending frame 初始化后应用、C++ 符号暴露、配置默认值和运行态 RViz/TF 验证。
 - 第一版不读取 ROS master、不新增 TF 订阅、不改 Bridge frame 发布逻辑，范围集中在前端视角切换。
 - 计划没有使用未定义的函数名或类型；所有新增 Python 接口都在对应任务中定义。
