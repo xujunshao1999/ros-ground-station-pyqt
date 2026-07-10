@@ -74,6 +74,7 @@ class RobotListPanel(QWidget):
         self._tree.header().setStretchLastSection(True)
         self._tree.setRootIsDecorated(False)
         self._tree.itemSelectionChanged.connect(self._on_selection_changed)
+        self._tree.itemPressed.connect(self._on_item_pressed)
         self._tree.setAlternatingRowColors(True)
         layout.addWidget(self._tree)
 
@@ -256,6 +257,15 @@ class RobotListPanel(QWidget):
         else:
             self._clear_detail()
             self.robot_deselected.emit()
+
+    def _on_item_pressed(self, item: QTreeWidgetItem, column: int) -> None:
+        _ = column
+        robot_id = item.data(0, Qt.UserRole)
+        if not item.isSelected() or not robot_id or robot_id not in self._robots:
+            return
+        # 已选中的同一行再次点击不会触发 selectionChanged，但仍代表用户重新选择该机器人。
+        self._update_detail(self._robots[robot_id])
+        self.robot_selected.emit(robot_id)
 
     def _update_detail(self, info: RobotInfo) -> None:
         x, y, theta = info.position

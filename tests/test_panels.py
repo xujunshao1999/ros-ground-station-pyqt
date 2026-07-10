@@ -198,6 +198,19 @@ class TestRobotListFrameControls:
 
         assert panel._lb_current_frame.text() == "当前视角: husky_001/base_link"
 
+    def test_pressing_selected_robot_emits_selection_again(self, qt_app):
+        panel = RobotListPanel()
+        panel.on_status_received("husky_001", {"battery": 90.0})
+        item = panel._tree.topLevelItem(0)
+        emitted = []
+        panel.robot_selected.connect(lambda robot_id: emitted.append(robot_id))
+
+        item.setSelected(True)
+        emitted.clear()
+        panel._tree.itemPressed.emit(item, 1)
+
+        assert emitted == ["husky_001"]
+
 
 # ------------------------------------------------------------------
 # CommandPanel slider value mapping
