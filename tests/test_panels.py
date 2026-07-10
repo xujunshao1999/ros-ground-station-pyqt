@@ -7,7 +7,7 @@ import time
 
 import pytest
 import yaml
-from PyQt5.QtWidgets import QApplication, QHeaderView, QLabel
+from PyQt5.QtWidgets import QApplication, QCheckBox, QHeaderView, QLabel
 
 from qt_frontend.panels.command_panel import CommandPanel
 from qt_frontend.panels.event_panel import EventPanel
@@ -168,6 +168,35 @@ class TestRobotListSubscriptions:
         panel = RobotListPanel()
 
         assert all(label.text() != "电量:" for label in panel.findChildren(QLabel))
+
+
+class TestRobotListFrameControls:
+    def test_global_frame_button_emits_request(self, qt_app):
+        panel = RobotListPanel()
+        emitted = []
+        panel.global_frame_requested.connect(lambda: emitted.append(True))
+
+        panel._btn_global_frame.click()
+
+        assert emitted == [True]
+
+    def test_follow_frame_checkbox_emits_state(self, qt_app):
+        panel = RobotListPanel()
+        emitted = []
+        panel.follow_frame_changed.connect(lambda enabled: emitted.append(enabled))
+
+        panel.set_follow_selected_robot_enabled(False)
+
+        assert emitted == [False]
+        assert panel.follow_selected_robot_enabled() is False
+        assert isinstance(panel._chk_follow_frame, QCheckBox)
+
+    def test_current_fixed_frame_label_updates(self, qt_app):
+        panel = RobotListPanel()
+
+        panel.set_current_fixed_frame("husky_001/base_link")
+
+        assert panel._lb_current_frame.text() == "当前视角: husky_001/base_link"
 
 
 # ------------------------------------------------------------------

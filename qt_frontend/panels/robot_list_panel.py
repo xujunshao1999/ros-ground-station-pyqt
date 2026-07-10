@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -33,6 +34,8 @@ class RobotListPanel(QWidget):
     robot_selected = pyqtSignal(str)
     robot_deselected = pyqtSignal()
     discover_requested = pyqtSignal()
+    global_frame_requested = pyqtSignal()
+    follow_frame_changed = pyqtSignal(bool)
 
     _HEARTBEAT_TIMEOUT = 30.0
 
@@ -43,11 +46,20 @@ class RobotListPanel(QWidget):
 
         layout = QVBoxLayout(self)
 
-        # 发现按钮
+        # 视角控制和发现操作放在同一行，减少用户在机器人面板内寻找入口的成本。
         btn_row = QHBoxLayout()
         btn_discover = QPushButton("发现机器人")
         btn_discover.clicked.connect(self.discover_requested.emit)
         btn_row.addWidget(btn_discover)
+
+        self._btn_global_frame = QPushButton("全局视角")
+        self._btn_global_frame.clicked.connect(self.global_frame_requested.emit)
+        btn_row.addWidget(self._btn_global_frame)
+
+        self._chk_follow_frame = QCheckBox("跟随选中")
+        self._chk_follow_frame.setChecked(True)
+        self._chk_follow_frame.toggled.connect(self.follow_frame_changed.emit)
+        btn_row.addWidget(self._chk_follow_frame)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -82,6 +94,8 @@ class RobotListPanel(QWidget):
         self._battery_bar.setFormat("电量 %v%")
         detail_layout.addWidget(self._lb_position)
         detail_layout.addWidget(self._lb_velocity)
+        self._lb_current_frame = QLabel("当前视角: --")
+        detail_layout.addWidget(self._lb_current_frame)
         detail_layout.addWidget(self._battery_bar)
 
         layout.addWidget(detail_group)
@@ -105,6 +119,16 @@ class RobotListPanel(QWidget):
 
     def get_online_robots(self) -> List[str]:
         return [r.robot_id for r in self._robots.values() if r.online]
+
+    def follow_selected_robot_enabled(self) -> bool:
+        return self._chk_follow_frame.isChecked()
+
+    def set_follow_selected_robot_enabled(self, enabled: bool) -> None:
+        self._chk_follow_frame.setChecked(enabled)
+
+    def set_current_fixed_frame(self, frame: str) -> None:
+        text = frame.strip() if frame.strip() else "--"
+        self._lb_current_frame.setText("当前视角: %s" % text)
 
     # ------------------------------------------------------------------
     # MQTT 回调 slots

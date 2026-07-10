@@ -237,7 +237,7 @@ git commit -m "feat: 增加RViz视角frame策略"
 - 修改：`qt_frontend/panels/robot_list_panel.py`
 - 修改：`tests/test_panels.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_panels.py` 的 import 中增加：
 
@@ -277,7 +277,7 @@ class TestRobotListFrameControls:
         assert panel._lb_current_frame.text() == "当前视角: husky_001/base_link"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestRobotListFrameControls -v
@@ -285,7 +285,7 @@ python3 -m pytest tests/test_panels.py::TestRobotListFrameControls -v
 
 预期：失败，提示 `RobotListPanel` 没有 `global_frame_requested` 或相关属性。
 
-- [ ] **步骤 3：修改面板 import 和信号**
+- [x] **步骤 3：修改面板 import 和信号**
 
 在 `qt_frontend/panels/robot_list_panel.py` 的 Widgets import 中加入 `QCheckBox`，并在 `RobotListPanel` 信号区增加：
 
@@ -294,7 +294,7 @@ python3 -m pytest tests/test_panels.py::TestRobotListFrameControls -v
     follow_frame_changed = pyqtSignal(bool)
 ```
 
-- [ ] **步骤 4：替换按钮行 UI**
+- [x] **步骤 4：替换按钮行 UI**
 
 将 `__init__()` 中“发现按钮”区域替换为：
 
@@ -317,7 +317,7 @@ python3 -m pytest tests/test_panels.py::TestRobotListFrameControls -v
         layout.addLayout(btn_row)
 ```
 
-- [ ] **步骤 5：在详情区域显示当前视角**
+- [x] **步骤 5：在详情区域显示当前视角**
 
 在 `detail_layout.addWidget(self._lb_velocity)` 后加入：
 
@@ -326,7 +326,7 @@ python3 -m pytest tests/test_panels.py::TestRobotListFrameControls -v
         detail_layout.addWidget(self._lb_current_frame)
 ```
 
-- [ ] **步骤 6：新增面板公共接口**
+- [x] **步骤 6：新增面板公共接口**
 
 在 `get_online_robots()` 后加入：
 
@@ -342,7 +342,7 @@ python3 -m pytest tests/test_panels.py::TestRobotListFrameControls -v
         self._lb_current_frame.setText("当前视角: %s" % text)
 ```
 
-- [ ] **步骤 7：运行测试验证通过**
+- [x] **步骤 7：运行测试验证通过**
 
 ```bash
 python3 -m pytest tests/test_panels.py::TestRobotListFrameControls -v
@@ -350,7 +350,7 @@ python3 -m pytest tests/test_panels.py::TestRobotListFrameControls -v
 
 预期：3 个测试通过。
 
-- [ ] **步骤 8：Commit**
+- [x] **步骤 8：Commit**
 
 ```bash
 git add qt_frontend/panels/robot_list_panel.py tests/test_panels.py
