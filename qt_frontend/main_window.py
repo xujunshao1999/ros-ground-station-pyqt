@@ -38,6 +38,12 @@ from qt_frontend.panels import (
     TopicConfigPanel,
     TrafficMonitor,
 )
+from qt_frontend.rviz_frame_policy import (
+    follow_selected_robot_default,
+    global_fixed_frame_for,
+    normalize_frame_id,
+    robot_fixed_frame_for,
+)
 from qt_frontend.theme import DANGER, SUCCESS
 
 logger = logging.getLogger(__name__)
@@ -63,6 +69,8 @@ class MainWindow(QMainWindow):
         ] = {}
         self._signals = MainWindowSignals()
         self._ros_check_inflight = False
+        self._current_fixed_frame = ""
+        self._pending_fixed_frame: Optional[str] = None
 
         self._init_window()
         self._init_panels()
@@ -97,6 +105,13 @@ class MainWindow(QMainWindow):
 
         self._robot_list.robot_selected.connect(self._command.on_robot_selected)
         self._robot_list.robot_deselected.connect(lambda: self._command.on_robot_selected(""))
+        self._robot_list.robot_selected.connect(self._on_robot_selected_for_rviz)
+        self._robot_list.global_frame_requested.connect(self._switch_to_global_frame)
+        self._robot_list.follow_frame_changed.connect(self._on_follow_frame_changed)
+        self._robot_list.set_follow_selected_robot_enabled(
+            follow_selected_robot_default(self._config)
+        )
+        self._robot_list.set_current_fixed_frame(global_fixed_frame_for(self._config))
         self._topic_config.config_changed.connect(
             self._refresh_robot_subscription_counts
         )
@@ -362,6 +377,63 @@ class MainWindow(QMainWindow):
             f"color: {SUCCESS if ok else DANGER}; font-weight: bold;"
         )
 
+    def _on_robot_selected_for_rviz(self, robot_id: str) -> None:
+        if not self._robot_list.follow_selected_robot_enabled():
+            return
+        frame = robot_fixed_frame_for(robot_id, self._config)
+        self._set_rviz_fixed_frame(frame, "机器人视角")
+
+    def _on_follow_frame_changed(self, enabled: bool) -> None:
+        if not enabled:
+            return
+        robot_id = self._robot_list.selected_robot()
+        if robot_id:
+            self._on_robot_selected_for_rviz(robot_id)
+
+    def _switch_to_global_frame(self) -> None:
+        self._set_rviz_fixed_frame(global_fixed_frame_for(self._config), "全局视角")
+
+    def _rviz_frame_is_resolvable(self, frame: str) -> bool:
+        if not self._rviz_lib or not self._rviz_ptr:
+            return False
+        checker = getattr(self._rviz_lib, "can_resolve_frame", None)
+        if checker is None:
+            return True
+        return bool(checker(self._rviz_ptr, frame.encode("utf-8")))
+
+    def _set_rviz_fixed_frame(self, frame: str, source: str) -> bool:
+        clean_frame = normalize_frame_id(frame)
+        if not clean_frame:
+            self.statusBar().showMessage("RViz 视角切换失败：frame 为空", 4000)
+            return False
+
+        # RViz 初始化前记录用户意图，初始化完成后再补一次 set_fixed_frame。
+        self._robot_list.set_current_fixed_frame(clean_frame)
+        if not self._rviz_lib or not self._rviz_ptr:
+            self._pending_fixed_frame = clean_frame
+            self.statusBar().showMessage(
+                "RViz 未就绪，已记录%s：%s" % (source, clean_frame),
+                4000,
+            )
+            return False
+
+        resolvable = self._rviz_frame_is_resolvable(clean_frame)
+        self._rviz_lib.set_fixed_frame(self._rviz_ptr, clean_frame.encode("utf-8"))
+        self._current_fixed_frame = clean_frame
+        self._pending_fixed_frame = None
+
+        if resolvable:
+            self.statusBar().showMessage(
+                "已切换 RViz %s：%s" % (source, clean_frame),
+                3000,
+            )
+        else:
+            self.statusBar().showMessage(
+                "已切换 RViz %s：%s，TF 暂不可解析" % (source, clean_frame),
+                5000,
+            )
+        return True
+
     # ------------------------------------------------------------------
     # RViz
     # ------------------------------------------------------------------
@@ -382,6 +454,14 @@ class MainWindow(QMainWindow):
             lib.has_config_changes.restype = ctypes.c_int
             lib.set_fixed_frame.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
             lib.set_fixed_frame.restype = None
+            try:
+                lib.can_resolve_frame.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+                lib.can_resolve_frame.restype = ctypes.c_int
+            except AttributeError:
+                logger.warning(
+                    "librviz_widget.so does not expose can_resolve_frame; "
+                    "RViz frame resolution checks are disabled"
+                )
             lib.get_display_panel.argtypes = [ctypes.c_void_p]
             lib.get_display_panel.restype = ctypes.c_void_p
             lib.set_dock_layout.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -434,6 +514,11 @@ class MainWindow(QMainWindow):
         image_dock_host_ptr = sip.unwrapinstance(self._image_dock_host)
         if image_dock_host_ptr:
             lib.set_dock_host(rviz_ptr, ctypes.c_void_p(image_dock_host_ptr))
+
+        requested_frame = (
+            self._pending_fixed_frame or global_fixed_frame_for(self._config)
+        )
+        self._set_rviz_fixed_frame(requested_frame, "初始视角")
 
     def _default_rviz_config_path(self) -> Path:
         return Path(__file__).resolve().parent / "config" / "default.rviz"

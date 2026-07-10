@@ -363,7 +363,7 @@ git commit -m "feat: 增加机器人视角切换控件"
 - 修改：`qt_frontend/main_window.py`
 - 修改：`tests/test_main_window.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_main_window.py` 中新增测试类：
 
@@ -515,7 +515,7 @@ class TestMainWindowRvizFrameSwitch:
         assert any("TF 暂不可解析" in text for text in messages)
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 python3 -m pytest tests/test_main_window.py::TestMainWindowRvizFrameSwitch -v
@@ -523,7 +523,7 @@ python3 -m pytest tests/test_main_window.py::TestMainWindowRvizFrameSwitch -v
 
 预期：失败，提示 `MainWindow` 没有 `_on_robot_selected_for_rviz`、`_set_rviz_fixed_frame`，或 `_init_rviz()` 尚未应用 pending frame。
 
-- [ ] **步骤 3：导入 frame 策略函数**
+- [x] **步骤 3：导入 frame 策略函数**
 
 在 `qt_frontend/main_window.py` import 区加入：
 
@@ -536,7 +536,7 @@ from qt_frontend.rviz_frame_policy import (
 )
 ```
 
-- [ ] **步骤 4：初始化 RViz frame 状态字段**
+- [x] **步骤 4：初始化 RViz frame 状态字段**
 
 在 `MainWindow.__init__()` 中 `_ros_check_inflight = False` 后加入：
 
@@ -545,7 +545,7 @@ from qt_frontend.rviz_frame_policy import (
         self._pending_fixed_frame: Optional[str] = None
 ```
 
-- [ ] **步骤 5：连接机器人列表信号**
+- [x] **步骤 5：连接机器人列表信号**
 
 在 `_init_panels()` 中现有机器人选择连接后加入：
 
@@ -559,7 +559,7 @@ from qt_frontend.rviz_frame_policy import (
         self._robot_list.set_current_fixed_frame(global_fixed_frame_for(self._config))
 ```
 
-- [ ] **步骤 6：新增 RViz frame 切换方法**
+- [x] **步骤 6：新增 RViz frame 切换方法**
 
 在 `# RViz` 分节前加入：
 
@@ -622,7 +622,7 @@ from qt_frontend.rviz_frame_policy import (
         return True
 ```
 
-- [ ] **步骤 7：RViz 初始化后应用配置和待处理 frame**
+- [x] **步骤 7：RViz 初始化后应用配置和待处理 frame**
 
 在 `_init_rviz()` 注册 ctypes 函数签名区域中，`lib.set_fixed_frame.restype = None` 后加入。这里必须用 `try/except AttributeError`，因为任务 3 可能先于任务 4 提交；旧的 `librviz_widget.so` 尚未包含 `can_resolve_frame` 符号时，前端仍应能启动，只是暂时跳过可解析性检查：
 
@@ -646,7 +646,7 @@ from qt_frontend.rviz_frame_policy import (
         self._set_rviz_fixed_frame(requested_frame, "初始视角")
 ```
 
-- [ ] **步骤 8：运行测试验证通过**
+- [x] **步骤 8：运行测试验证通过**
 
 ```bash
 python3 -m pytest tests/test_main_window.py::TestMainWindowRvizFrameSwitch -v
@@ -654,7 +654,7 @@ python3 -m pytest tests/test_main_window.py::TestMainWindowRvizFrameSwitch -v
 
 预期：8 个测试通过。
 
-- [ ] **步骤 9：Commit**
+- [x] **步骤 9：Commit**
 
 ```bash
 git add qt_frontend/main_window.py tests/test_main_window.py
