@@ -6,7 +6,7 @@ Agent 启动入口
     python -m agent.main
 
     # 指定配置文件
-    python -m agent.main --config agent/config.yaml
+    python -m agent.main --config agent/configs/default.yaml
 
     # 指定机器人 ID
     python -m agent.main --robot-id robot_002
@@ -18,10 +18,12 @@ Agent 启动入口
     python -m agent.main --agent-type ros1
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
-import sys
 import os
+import sys
 from pathlib import Path
 
 # 确保项目根目录在 path 中
@@ -34,8 +36,8 @@ def main():
     parser = argparse.ArgumentParser(description="ROS Ground Station Agent")
     parser.add_argument(
         "--config",
-        default="agent/config.yaml",
-        help="配置文件路径 (default: agent/config.yaml)",
+        default="agent/configs/default.yaml",
+        help="配置文件路径 (default: agent/configs/default.yaml)",
     )
     parser.add_argument(
         "--robot-id",

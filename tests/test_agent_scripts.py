@@ -15,10 +15,18 @@ def _read_repo_file(relative_path: str) -> str:
 def test_agent_start_script_tracks_pid_and_log_file() -> None:
     source = _read_repo_file("agent/scripts/start.sh")
 
+    assert 'CONFIG_PATH="${CONFIG_PATH:-$PROJECT_ROOT/agent/configs/default.yaml}"' in source
     assert 'PID_FILE="${PID_FILE:-$PROJECT_ROOT/logs/agent.pid}"' in source
     assert 'LOG_FILE="${LOG_FILE:-$PROJECT_ROOT/logs/agent.log}"' in source
     assert 'echo "$pid" > "$PID_FILE"' in source
     assert 'python3 -m agent.main --agent-type ros1 --config "$CONFIG_PATH"' in source
+
+
+def test_agent_main_uses_default_config_under_configs_dir() -> None:
+    source = _read_repo_file("agent/main.py")
+
+    assert 'default="agent/configs/default.yaml"' in source
+    assert "default: agent/configs/default.yaml" in source
 
 
 def test_agent_stop_script_uses_pid_file_not_global_pkill() -> None:

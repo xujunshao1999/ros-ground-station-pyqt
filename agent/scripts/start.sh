@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # 物理机器人端 ROS1 Agent 启动脚本。
-# 默认从 agent/config.yaml 读取 robot_id、broker_host、broker_port 和订阅配置。
+# 默认从 agent/configs/default.yaml 读取 robot_id、broker_host、broker_port 和订阅配置。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CONFIG_PATH="${CONFIG_PATH:-$PROJECT_ROOT/agent/config.yaml}"
+CONFIG_PATH="${CONFIG_PATH:-$PROJECT_ROOT/agent/configs/default.yaml}"
 ROBOT_WS_SETUP="${ROBOT_WS_SETUP:-$HOME/catkin_ws/devel/setup.bash}"
 PID_FILE="${PID_FILE:-$PROJECT_ROOT/logs/agent.pid}"
 LOG_FILE="${LOG_FILE:-$PROJECT_ROOT/logs/agent.log}"

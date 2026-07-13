@@ -18,7 +18,7 @@ Robot (ROS) ──► Agent ──MQTT──► Mosquitto Broker ──MQTT─�
 - 多机器人在线发现、状态显示、命令控制和事件告警。
 - 通过前端传输面板配置每台机器人需要上报的 ROS topic，支持保存、下发和从机器人拉取当前配置。
 - 通过编队通信面板配置机器人之间的 ROS topic 转发规则，支持按源机器人分组下发、拉取、合并和本地持久化。
-- Agent 端支持 `subscriptions` 和 `fleet_rules` 启动恢复，并将运行态配置写回机器人自己的 `config.yaml`。
+- Agent 端支持 `subscriptions` 和 `fleet_rules` 启动恢复，并将运行态配置写回机器人自己的配置文件。
 - Bridge 端将 MQTT 数据重新发布到地面站本地 roscore，RViz 只依赖地面站本地 ROS master。
 - 支持多机器人 TF 命名空间化和 `global_map -> robot/map` 统一坐标根，机器人 `/tf_static` 通过 MQTT retained 消息转发并在 Bridge 侧缓存重发。
 - 地面站本地 ROS 中仅 `/tf`、`/tf_static` 使用标准公共话题；普通传感器和状态话题按机器人隔离，例如 `/turtlebot_001/odom`、`/turtlebot_001/joint_states`。
@@ -53,11 +53,11 @@ docker compose stop robot-turtlebot-001 robot-turtlebot-002
 | 路径 | 作用 |
 |------|------|
 | `qt_frontend/config/transmit_config.yaml` | 地面站侧配置，保存每台机器人的 `subscriptions` 和跨机器人视角的 `fleet_rules` |
-| `agent/config.yaml` | 默认机器人端配置，适合单 Agent 或物理机器人部署 |
-| `agent/configs/<robot_id>.yaml` | 多容器仿真时每台 TurtleBot 的独立 Agent 配置，避免不同机器人互相覆盖 |
+| `agent/configs/default.yaml` | 默认机器人端配置，适合单 Agent 或单机器人物理部署 |
+| `agent/configs/<robot_id>.yaml` | 多机器人部署或仿真时每台机器人的独立 Agent 配置，避免不同机器人互相覆盖 |
 | `bridge/bridge_config.yaml` | Bridge 配置，包括 MQTT、ROS topic 发布和 fleet TF 配置 |
 
-实际机器人部署时，每台机器人仍使用自己的 `agent/config.yaml` 或等价配置文件；地面站维护跨机器人视角的 `transmit_config.yaml`，并通过 MQTT `config_sync` / `config_query` 与机器人端同步。
+实际机器人部署时，每台机器人使用自己的 `agent/configs/<robot_id>.yaml`，或在单机器人机器上直接维护 `agent/configs/default.yaml`；地面站维护跨机器人视角的 `transmit_config.yaml`，并通过 MQTT `config_sync` / `config_query` 与机器人端同步。
 
 ## 编队通信规则
 
