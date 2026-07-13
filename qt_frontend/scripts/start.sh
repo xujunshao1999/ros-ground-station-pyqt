@@ -8,12 +8,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LOG_DIR="$PROJECT_ROOT/logs"
+PID_DIR="$LOG_DIR/pids"
 ROSCORE_LOG="$LOG_DIR/roscore.log"
 BROKER_LOG="$LOG_DIR/mosquitto-start.log"
 STATION_LAUNCH_LOG="$LOG_DIR/station.launch.log"
 BRIDGE_LOG="$LOG_DIR/bridge.log"
+STATION_LAUNCH_PID_FILE="$PID_DIR/station.launch.pid"
+BRIDGE_PID_FILE="$PID_DIR/bridge.pid"
+FRONTEND_PID_FILE="$PID_DIR/qt_frontend.pid"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$PID_DIR"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -24,6 +28,45 @@ NC='\033[0m'
 echo_green()  { echo -e "${GREEN}[OK]${NC} $1"; }
 echo_fail()   { echo -e "${RED}[FAIL]${NC} $1"; }
 echo_warn()   { echo -e "${YELLOW}[WARN]${NC} $1"; }
+
+STATION_LAUNCH_PID=""
+BRIDGE_PID=""
+FRONTEND_PID=""
+CLEANED_UP=0
+
+stop_child_process() {
+    local pid="$1"
+    local name="$2"
+
+    if [ -z "$pid" ]; then
+        return
+    fi
+
+    if kill -0 "$pid" 2>/dev/null; then
+        echo_warn "Stopping $name pid=$pid"
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+}
+
+cleanup() {
+    if [ "$CLEANED_UP" -eq 1 ]; then
+        return
+    fi
+    CLEANED_UP=1
+
+    echo ""
+    echo "正在清理地面站本地进程..."
+    stop_child_process "$FRONTEND_PID" "Qt frontend"
+    stop_child_process "$BRIDGE_PID" "MQTT-ROS bridge"
+    stop_child_process "$STATION_LAUNCH_PID" "station launch"
+    rm -f "$FRONTEND_PID_FILE" "$BRIDGE_PID_FILE" "$STATION_LAUNCH_PID_FILE"
+    echo "清理完成。"
+}
+
+trap cleanup EXIT
+trap 'exit 130' SIGINT
+trap 'exit 143' SIGTERM
 
 # ------------------------------------------------------------------
 # 1. Python 版本检查
@@ -37,7 +80,21 @@ echo_green "Python $(python3 --version)"
 echo_green "Background logs: $LOG_DIR"
 
 # ------------------------------------------------------------------
-# 2. librviz_widget.so 检查
+# 2. Source ROS setup
+# 新地面站终端通常不会提前 source ROS，这里先准备 rostopic/roslaunch 等命令环境。
+# ------------------------------------------------------------------
+# 默认使用 ROS Noetic 标准安装路径；非标准环境可通过 ROS_SETUP 覆盖。
+ROS_SETUP="${ROS_SETUP:-/opt/ros/noetic/setup.bash}"
+if [ -f "$ROS_SETUP" ]; then
+    source "$ROS_SETUP"
+    echo_green "ROS Noetic sourced"
+else
+    echo_fail "ROS Noetic setup not found: $ROS_SETUP"
+    exit 1
+fi
+
+# ------------------------------------------------------------------
+# 3. librviz_widget.so 检查
 # ------------------------------------------------------------------
 SO_PATH="$PROJECT_ROOT/qt_frontend/native/build/librviz_widget.so"
 if [ ! -f "$SO_PATH" ]; then
@@ -59,10 +116,10 @@ except Exception as e:
 echo_green "librviz_widget.so OK"
 
 # ------------------------------------------------------------------
-# 3. roscore 检查 + 自动启动
+# 4. roscore 检查 + 自动启动
 # ------------------------------------------------------------------
 if ! command -v rostopic &>/dev/null; then
-    echo_fail "rostopic not found. Source ROS setup first."
+    echo_fail "rostopic not found after sourcing ROS setup."
     exit 1
 fi
 
@@ -78,7 +135,7 @@ fi
 echo_green "roscore OK"
 
 # ------------------------------------------------------------------
-# 4. Mosquitto Broker 检查
+# 5. Mosquitto Broker 检查
 # ------------------------------------------------------------------
 if ! pgrep -x mosquitto >/dev/null 2>&1; then
     echo_warn "Mosquitto broker is not running. Starting..."
@@ -99,7 +156,7 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 5. transmit_config.yaml 检查
+# 6. transmit_config.yaml 检查
 # ------------------------------------------------------------------
 CONFIG_PATH="$PROJECT_ROOT/qt_frontend/config/transmit_config.yaml"
 if [ ! -f "$CONFIG_PATH" ]; then
@@ -109,21 +166,13 @@ fi
 echo_green "transmit_config.yaml OK"
 
 # ------------------------------------------------------------------
-# 6. Source ROS setup
-# ------------------------------------------------------------------
-ROS_SETUP="/opt/ros/noetic/setup.bash"
-if [ -f "$ROS_SETUP" ]; then
-    source "$ROS_SETUP"
-    echo_green "ROS Noetic sourced"
-fi
-
-# ------------------------------------------------------------------
 # 7. 静态 TF（通过 launch 文件）
 # ------------------------------------------------------------------
 roslaunch "$PROJECT_ROOT/qt_frontend/launch/station.launch" > "$STATION_LAUNCH_LOG" 2>&1 &
 STATION_LAUNCH_PID=$!
+echo "$STATION_LAUNCH_PID" > "$STATION_LAUNCH_PID_FILE"
 sleep 1
-echo_green "Station launch log: $STATION_LAUNCH_LOG"
+echo_green "Station launch PID: $STATION_LAUNCH_PID (log: $STATION_LAUNCH_LOG)"
 
 # ------------------------------------------------------------------
 # 8. 启动 bridge（后台）
@@ -132,6 +181,7 @@ echo_green "Starting MQTT-ROS bridge..."
 cd "$PROJECT_ROOT"
 python3 -m bridge.mqtt_ros_bridge > "$BRIDGE_LOG" 2>&1 &
 BRIDGE_PID=$!
+echo "$BRIDGE_PID" > "$BRIDGE_PID_FILE"
 sleep 2
 
 if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
@@ -141,21 +191,15 @@ fi
 echo_green "Bridge PID: $BRIDGE_PID (log: $BRIDGE_LOG)"
 
 # ------------------------------------------------------------------
-# 9. 启动 Qt 前端（前台）
+# 9. 启动 Qt 前端
+# Qt 仍然作为主进程等待；额外写入 PID，方便 stop.sh 从另一个终端停止。
 # ------------------------------------------------------------------
 echo_green "Starting Qt frontend..."
-cleanup() {
-    echo ""
-    echo "Shutting down..."
-    kill "$BRIDGE_PID" 2>/dev/null || true
-    kill "$STATION_LAUNCH_PID" 2>/dev/null || true
-    wait "$BRIDGE_PID" 2>/dev/null || true
-    wait "$STATION_LAUNCH_PID" 2>/dev/null || true
-    echo "Done."
-}
-trap cleanup SIGINT SIGTERM
-
 cd "$PROJECT_ROOT"
-python3 qt_frontend/main.py
+python3 qt_frontend/main.py &
+FRONTEND_PID=$!
+echo "$FRONTEND_PID" > "$FRONTEND_PID_FILE"
 
-cleanup
+FRONTEND_EXIT=0
+wait "$FRONTEND_PID" || FRONTEND_EXIT=$?
+exit "$FRONTEND_EXIT"
