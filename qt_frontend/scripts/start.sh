@@ -99,7 +99,7 @@ fi
 SO_PATH="$PROJECT_ROOT/qt_frontend/native/build/librviz_widget.so"
 if [ ! -f "$SO_PATH" ]; then
     echo_fail "librviz_widget.so not found at $SO_PATH"
-    echo "  Build it: cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j\$(nproc)"
+    echo "  Build it: ./qt_frontend/scripts/build_rviz_widget.sh"
     exit 1
 fi
 

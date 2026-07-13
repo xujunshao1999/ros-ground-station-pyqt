@@ -32,7 +32,7 @@ sudo apt install mosquitto mosquitto-clients python3-pip
 pip install -e ".[qt,dev]"
 
 # 2. 构建 RViz C++ 胶水库
-cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(nproc) && cd ../../..
+./qt_frontend/scripts/build_rviz_widget.sh
 
 # 3. Docker 混合测试（TurtleBot3 仿真 + 地面站）
 docker compose up -d robot-turtlebot-001        # 启动单机器人仿真容器
@@ -47,6 +47,10 @@ docker compose stop robot-turtlebot-001 robot-turtlebot-002
 ```
 
 > 仿真容器首次构建约需 20 分钟（需下载 Gazebo 等依赖）。详见 `docs/work-log-2026-05-08.md`。
+
+## 真实环境部署
+
+一台地面站 PC 和多台机器人上位机的真实部署流程见 [DEPLOYMENT.md](DEPLOYMENT.md)，包括环境依赖、网络端口、配置文件、启动顺序和验证命令。
 
 ## 配置文件
 
@@ -108,7 +112,7 @@ ros-ground-station-pyqt/
 │   ├── topic_handler.py          #   话题分层处理
 │   ├── rate_limiter.py           #   按话题独立限频
 │   ├── ros_msg_converter.py      #   ROS 消息 → dict
-│   ├── config.yaml               #   Agent 配置文件
+│   ├── configs/                  #   Agent 配置文件
 │   └── main.py                   #   启动入口
 ├── bridge/                       # 宿主机 MQTT-ROS 桥接
 │   ├── mqtt_ros_bridge.py        #   双向翻译核心

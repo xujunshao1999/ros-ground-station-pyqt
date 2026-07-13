@@ -99,8 +99,26 @@ def test_frontend_stop_script_stops_pid_file_process(tmp_path: Path) -> None:
 
 
 def test_frontend_scripts_have_valid_bash_syntax() -> None:
-    for relative_path in ["qt_frontend/scripts/start.sh", "qt_frontend/scripts/stop.sh"]:
+    for relative_path in [
+        "qt_frontend/scripts/start.sh",
+        "qt_frontend/scripts/stop.sh",
+        "qt_frontend/scripts/build_rviz_widget.sh",
+    ]:
         subprocess.run(
             ["bash", "-n", str(PROJECT_ROOT / relative_path)],
             check=True,
         )
+
+
+def test_rviz_widget_build_script_is_documented_and_referenced() -> None:
+    script = _read_repo_file("qt_frontend/scripts/build_rviz_widget.sh")
+    readme = _read_repo_file("README.md")
+    deployment = _read_repo_file("DEPLOYMENT.md")
+    start_script = _read_repo_file("qt_frontend/scripts/start.sh")
+
+    assert 'BUILD_DIR="$PROJECT_ROOT/qt_frontend/native/build"' in script
+    assert "cmake .." in script
+    assert "make -j\"$JOBS\"" in script
+    assert "./qt_frontend/scripts/build_rviz_widget.sh" in readme
+    assert "./qt_frontend/scripts/build_rviz_widget.sh" in deployment
+    assert "./qt_frontend/scripts/build_rviz_widget.sh" in start_script
