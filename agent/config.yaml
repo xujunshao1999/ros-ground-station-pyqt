@@ -30,8 +30,18 @@ default_freq_limit: 30.0
 # HTTP 流服务（重量话题）
 # ============================================================
 
-# HTTP 流端口
+# Agent 在机器人端监听的 HTTP stream 端口。
+# 当订阅 PointCloud2 等重型话题并使用 transport: http_stream 时，
+# Agent 会通过该端口提供数据，Bridge 再从这个 URL 拉取。
 http_stream_port: 8080
+
+# Bridge 可访问的机器人 IP 或主机名。
+# 如果为空，Agent 会自动探测本机 IP；真实机器人多网卡、Docker、VPN 场景下建议显式填写。
+# stream_public_host: "192.168.1.23"
+
+# 完整覆盖 HTTP stream base URL，优先级高于 stream_public_host + http_stream_port。
+# 适合端口映射、反向代理、Docker 容器等场景。
+# stream_base_url: "http://192.168.1.23:8080"
 
 # ============================================================
 # 连接控制
