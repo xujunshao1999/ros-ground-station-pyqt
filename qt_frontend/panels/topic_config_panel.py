@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -57,6 +58,15 @@ class SubscriptionEntry:
 
 
 class TopicConfigPanel(QWidget):
+    _TABLE_COLUMN_MIN_WIDTHS = {
+        0: 120,
+        1: 120,
+        2: 88,
+        3: 118,
+        4: 88,
+    }
+    _TABLE_COLUMN_PADDING = 34
+
     config_changed = pyqtSignal()
     topic_request_requested = pyqtSignal(str, dict)  # (robot_id, request)
     config_sync_requested = pyqtSignal(str, dict)  # (robot_id, config)
@@ -88,8 +98,7 @@ class TopicConfigPanel(QWidget):
         self._table = QTableWidget()
         self._table.setColumnCount(5)
         self._table.setHorizontalHeaderLabels(["话题", "类型", "频率(Hz)", "传输方式", "状态"])
-        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self._configure_table_columns()
         self._table.itemSelectionChanged.connect(self._load_selected_entry_into_form)
         layout.addWidget(self._table)
 
@@ -612,6 +621,50 @@ class TopicConfigPanel(QWidget):
     def _selected_robot_id(self) -> str:
         return self._robot_combo.currentData() or ""
 
+    def _configure_table_columns(self) -> None:
+        """设置订阅表列宽策略，内容溢出时交给横向滚动条。"""
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
+        # 使用 Interactive 允许用户手动调整，同时禁用 Stretch 避免窄面板压缩长话题。
+        for column in range(self._table.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self._resize_table_columns_to_content()
+
+    def _text_width(self, text: str) -> int:
+        """兼容不同 Qt 版本计算当前字体下的文本宽度。"""
+        metrics = self._table.fontMetrics()
+        if hasattr(metrics, "horizontalAdvance"):
+            return metrics.horizontalAdvance(text)
+        return metrics.width(text)
+
+    def _resize_table_columns_to_content(self) -> None:
+        """按当前订阅内容重算列宽，新增或删除长话题后同步调整。"""
+        headers = [
+            self._table.horizontalHeaderItem(column).text()
+            for column in range(self._table.columnCount())
+        ]
+        rows = [
+            [
+                entry.topic,
+                entry.msg_type,
+                f"{entry.freq_limit:g}" if entry.freq_limit else "不限",
+                entry.transport,
+                entry.status,
+            ]
+            for entry in self._entries
+        ]
+        for column, header_text in enumerate(headers):
+            max_width = self._text_width(header_text)
+            for row in rows:
+                max_width = max(max_width, self._text_width(row[column]))
+            width = max(
+                self._TABLE_COLUMN_MIN_WIDTHS.get(column, 80),
+                max_width + self._TABLE_COLUMN_PADDING,
+            )
+            self._table.setColumnWidth(column, width)
+
     def _refresh_table(self) -> None:
         self._table.blockSignals(True)
         self._table.setRowCount(len(self._entries))
@@ -625,6 +678,7 @@ class TopicConfigPanel(QWidget):
             ]
             for col, value in enumerate(values):
                 self._table.setItem(row, col, QTableWidgetItem(value))
+        self._resize_table_columns_to_content()
         self._table.blockSignals(False)
 
     def _refresh_available_topics(self) -> None:

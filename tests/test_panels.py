@@ -7,6 +7,7 @@ import time
 
 import pytest
 import yaml
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QCheckBox, QHeaderView, QLabel
 
 from qt_frontend.panels.command_panel import CommandPanel
@@ -710,6 +711,49 @@ class TestTopicConfigPanel:
         )
         assert TopicConfigPanel.config_response_failed({"subscriptions": []}) == ""
 
+    def test_subscription_table_keeps_readable_columns_with_horizontal_scroll(
+        self, qt_app
+    ):
+        """订阅表窄屏时应横向滚动，不应把话题列压到不可读。"""
+        panel = TopicConfigPanel()
+        header = panel._table.horizontalHeader()
+
+        assert panel._table.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+        assert header.stretchLastSection() is False
+        assert header.sectionResizeMode(0) == QHeaderView.Interactive
+        assert header.sectionResizeMode(1) == QHeaderView.Interactive
+
+    def test_subscription_table_topic_width_tracks_current_longest_topic(
+        self, qt_app
+    ):
+        """订阅表按当前最长话题算列宽，新增和删除后都重新收敛。"""
+        panel = TopicConfigPanel()
+        panel._entries = [
+            SubscriptionEntry(
+                topic="/tf",
+                msg_type="tf2_msgs/TFMessage",
+                transport="mqtt_binary",
+            )
+        ]
+        panel._refresh_table()
+        short_width = panel._table.columnWidth(0)
+
+        panel._entries.append(
+            SubscriptionEntry(
+                topic="/realsense/color/image_raw/compressed",
+                msg_type="sensor_msgs/CompressedImage",
+                transport="mqtt_binary",
+            )
+        )
+        panel._refresh_table()
+        long_width = panel._table.columnWidth(0)
+
+        panel._entries = panel._entries[:1]
+        panel._refresh_table()
+
+        assert long_width > short_width
+        assert panel._table.columnWidth(0) == short_width
+
     def test_confirm_then_deploy_preserves_qos_zero(self, qt_app, tmp_path):
         panel = TopicConfigPanel()
         panel._transmit_config_path = tmp_path / "transmit_config.yaml"
@@ -1389,6 +1433,36 @@ class TestTrafficMonitor:
         assert entry.topic == "/scan"
         assert entry.robot_id == "r1"
         assert entry.bytes_received == 10000
+
+    def test_table_keeps_readable_columns_with_horizontal_scroll(self, qt_app):
+        """流量面板窄屏时应横向滚动，不应把话题列压到不可读。"""
+        panel = TrafficMonitor()
+        header = panel._table.horizontalHeader()
+
+        assert panel._table.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+        assert header.stretchLastSection() is False
+        assert header.sectionResizeMode(0) == QHeaderView.Interactive
+        assert header.sectionResizeMode(2) == QHeaderView.Interactive
+
+    def test_table_topic_width_tracks_topics_without_refresh_jitter(self, qt_app):
+        """流量表按 topic 集合调列宽，普通带宽刷新不改变话题列。"""
+        panel = TrafficMonitor()
+        panel.on_sensor_data_received("r1", "tf", {"payload_size": 1}, now=100.0)
+        panel._update_stats(now=101.0)
+        short_width = panel._table.columnWidth(0)
+
+        panel.on_sensor_data_received(
+            "r1",
+            "realsense/color/image_raw/compressed",
+            {"payload_size": 1},
+            now=102.0,
+        )
+        panel._update_stats(now=103.0)
+        long_width = panel._table.columnWidth(0)
+        panel._update_stats(now=104.0)
+
+        assert long_width > short_width
+        assert panel._table.columnWidth(0) == long_width
 
     def test_estimate_payload_bytes_uses_large_payload_summary(self):
         assert TrafficMonitor.estimate_payload_bytes({"_payload_bytes": 123456}) == 123456

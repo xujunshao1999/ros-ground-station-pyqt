@@ -4,8 +4,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QHBoxLayout,
     QHeaderView,
@@ -36,6 +37,14 @@ class BandwidthEntry:
 
 class TrafficMonitor(QWidget):
     _HZ_WINDOW_SECONDS = 5.0
+    _TABLE_COLUMN_MIN_WIDTHS = {
+        0: 120,
+        1: 118,
+        2: 118,
+        3: 150,
+        4: 88,
+    }
+    _TABLE_COLUMN_PADDING = 34
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -48,12 +57,7 @@ class TrafficMonitor(QWidget):
         self._table = QTableWidget()
         self._table.setColumnCount(5)
         self._table.setHorizontalHeaderLabels(["话题", "机器人", "传输方式", "带宽", "频率"])
-        header = self._table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self._configure_table_columns()
         layout.addWidget(self._table)
 
         # 底部状态
@@ -82,6 +86,50 @@ class TrafficMonitor(QWidget):
     # ------------------------------------------------------------------
     # 纯逻辑方法（可测试）
     # ------------------------------------------------------------------
+
+    def _configure_table_columns(self) -> None:
+        """设置流量表列宽策略，窄面板下用横向滚动保留长话题可读性。"""
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
+        # 使用 Interactive 允许用户手动调整，同时禁用 Stretch 避免窄面板压缩长话题。
+        for column in range(self._table.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self._resize_table_columns_to_content()
+
+    def _text_width(self, text: str) -> int:
+        """兼容不同 Qt 版本计算当前字体下的文本宽度。"""
+        metrics = self._table.fontMetrics()
+        if hasattr(metrics, "horizontalAdvance"):
+            return metrics.horizontalAdvance(text)
+        return metrics.width(text)
+
+    def _resize_table_columns_to_content(self) -> None:
+        """按当前话题集合重算列宽，带宽刷新不参与避免列宽抖动。"""
+        headers = [
+            self._table.horizontalHeaderItem(column).text()
+            for column in range(self._table.columnCount())
+        ]
+        rows = [
+            [
+                entry.topic,
+                entry.robot_id,
+                entry.transport,
+                "",
+                "",
+            ]
+            for entry in self._entries.values()
+        ]
+        for column, header_text in enumerate(headers):
+            max_width = self._text_width(header_text)
+            for row in rows:
+                max_width = max(max_width, self._text_width(row[column]))
+            width = max(
+                self._TABLE_COLUMN_MIN_WIDTHS.get(column, 80),
+                max_width + self._TABLE_COLUMN_PADDING,
+            )
+            self._table.setColumnWidth(column, width)
 
     @staticmethod
     def calculate_bandwidth(bytes_diff: int, time_diff: float) -> float:
@@ -236,6 +284,7 @@ class TrafficMonitor(QWidget):
 
             self._table.setItem(row, 4, QTableWidgetItem(f"{entry.current_hz:.1f} Hz"))
 
+        self._resize_table_columns_to_content()
         total_label = f"总带宽: {total_bps / 1024:.1f} KB/s"
         if total_bps > 1_000_000:
             total_label = f"总带宽: {total_bps / 1_000_000:.2f} MB/s"
