@@ -319,6 +319,8 @@ class BaseAgent(ABC):
                     data,
                     seq=seq,
                 )
+                # 前端流量面板只消费 JSON envelope；这里显式标记实际数据面。
+                envelope["transport"] = transport
                 sensor_topic = self._get_sensor_mqtt_topic(ros_topic, TopicTier.MEDIUM)
                 binary_topic = self._get_sensor_binary_mqtt_topic(ros_topic)
                 self._mqtt_publish(
@@ -397,6 +399,8 @@ class BaseAgent(ABC):
             payload,
             seq=seq if seq is not None else int(time.time() * 1000),
         )
+        # ROS1 serialized envelope 是前端可见消息，必须带实际 transport 供 UI 统计。
+        envelope["transport"] = "mqtt_binary"
         sensor_topic = self._get_sensor_mqtt_topic(ros_topic, TopicTier.MEDIUM)
         binary_topic = self._get_sensor_binary_mqtt_topic(ros_topic)
         self._mqtt_publish(

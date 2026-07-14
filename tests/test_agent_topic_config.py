@@ -202,6 +202,29 @@ def test_publish_sensor_data_uses_mqtt_binary_transport_for_scan():
     assert binary_qos == 2
 
 
+def test_publish_sensor_binary_data_marks_transport_mqtt_binary():
+    agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
+    agent._subscribed_topics["/hdl_graph_slam/odom"] = {
+        "msg_type": "nav_msgs/Odometry",
+        "freq_limit": 0.0,
+        "transport": "mqtt_binary",
+        "qos": 0,
+        "options": {},
+    }
+
+    agent.publish_sensor_binary_data(
+        "/hdl_graph_slam/odom",
+        "nav_msgs/Odometry",
+        b"serialized-odom",
+        seq=7,
+    )
+
+    envelope = agent.published[0][1]
+    assert envelope["topic"] == "/hdl_graph_slam/odom"
+    assert envelope["transport"] == "mqtt_binary"
+    assert envelope["encoding"] == "ros1_serialized_v1"
+
+
 def test_publish_sensor_data_keeps_json_transport_single_payload():
     agent = RecordingAgent(AgentConfig(robot_id="robot_001"))
     agent._subscribed_topics["/scan"] = {

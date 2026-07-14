@@ -97,6 +97,15 @@ class TrafficMonitor(QWidget):
     def normalize_sensor_name(topic: str) -> str:
         return topic.strip().lstrip("/")
 
+    @classmethod
+    def sensor_name_for_sample(cls, sensor_name: str, data: object) -> str:
+        if isinstance(data, dict):
+            ros_topic = data.get("topic")
+            if isinstance(ros_topic, str) and ros_topic.strip():
+                # 二进制 envelope 的 MQTT 名可能把 "/" 替成 "_"；以 payload 原始 ROS topic 合并。
+                return cls.normalize_sensor_name(ros_topic)
+        return cls.normalize_sensor_name(sensor_name)
+
     @staticmethod
     def estimate_payload_bytes(data: object) -> int:
         import sys
@@ -144,6 +153,14 @@ class TrafficMonitor(QWidget):
             entry = self._entries.get(key)
             if entry is not None:
                 entry.transport = str(item.get("transport") or entry.transport)
+                continue
+            # 订阅配置先创建空行；TF 等被 MQTT 客户端限流忽略的话题也应在流量面板可见。
+            self._entries[key] = BandwidthEntry(
+                topic=sensor_name,
+                robot_id=robot_id,
+                transport=str(item.get("transport") or "mqtt_json"),
+                last_time=time.monotonic(),
+            )
 
     def on_sensor_data_received(
         self,
@@ -153,7 +170,7 @@ class TrafficMonitor(QWidget):
         now: Optional[float] = None,
     ) -> None:
         now = time.monotonic() if now is None else now
-        normalized_sensor_name = self.normalize_sensor_name(sensor_name)
+        normalized_sensor_name = self.sensor_name_for_sample(sensor_name, data)
         key = (normalized_sensor_name, robot_id)
         config = self._topic_config.get(key, {})
         data_transport = data.get("transport") if isinstance(data, dict) else None

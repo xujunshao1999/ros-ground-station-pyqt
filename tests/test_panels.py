@@ -1437,6 +1437,66 @@ class TestTrafficMonitor:
         entry = panel._entries[("camera/image_raw/compressed", "r1")]
         assert entry.transport == "mqtt_binary"
 
+    def test_subscription_config_creates_idle_rows_for_all_topics(self, qt_app):
+        panel = TrafficMonitor()
+
+        panel.on_subscriptions_changed(
+            "husky_001",
+            [
+                {
+                    "topic": "/hdl_graph_slam/odom",
+                    "transport": "mqtt_binary",
+                },
+                {
+                    "topic": "/realsense/color/image_raw/compressed",
+                    "transport": "mqtt_binary",
+                },
+                {
+                    "topic": "/tf",
+                    "transport": "mqtt_binary",
+                },
+                {
+                    "topic": "/tf_static",
+                    "transport": "mqtt_binary",
+                },
+            ],
+        )
+
+        assert set(panel._entries) == {
+            ("hdl_graph_slam/odom", "husky_001"),
+            ("realsense/color/image_raw/compressed", "husky_001"),
+            ("tf", "husky_001"),
+            ("tf_static", "husky_001"),
+        }
+        assert panel._entries[("tf", "husky_001")].transport == "mqtt_binary"
+        assert panel._entries[("tf", "husky_001")].bytes_received == 0
+
+    def test_sensor_data_uses_payload_topic_to_merge_alias_row(self, qt_app):
+        panel = TrafficMonitor()
+
+        panel.on_subscriptions_changed(
+            "husky_001",
+            [
+                {
+                    "topic": "/hdl_graph_slam/odom",
+                    "transport": "mqtt_binary",
+                },
+            ],
+        )
+        panel.on_sensor_data_received(
+            "husky_001",
+            "hdl_graph_slam_odom",
+            {
+                "topic": "/hdl_graph_slam/odom",
+                "transport": "mqtt_binary",
+                "payload_size": 128,
+            },
+            now=100.0,
+        )
+
+        assert set(panel._entries) == {("hdl_graph_slam/odom", "husky_001")}
+        assert panel._entries[("hdl_graph_slam/odom", "husky_001")].bytes_received == 128
+
     def test_frequency_uses_message_intervals_not_refresh_interval(self, qt_app):
         panel = TrafficMonitor()
 

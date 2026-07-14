@@ -201,6 +201,13 @@ class MqttClient:
     def _on_message(self, client, userdata, msg) -> None:
         try:
             robot_info = parse_robot_topic(msg.topic)
+            if robot_info and robot_info.get("type", "").startswith("sensor"):
+                if getattr(msg, "retain", False) is True:
+                    logger.debug(
+                        "[MqttClient] Ignoring retained sensor payload on %s",
+                        msg.topic,
+                    )
+                    return
             if robot_info and robot_info.get("type") == "sensor_binary":
                 logger.debug(
                     "[MqttClient] Ignoring binary sensor payload on %s (%d bytes)",
@@ -227,6 +234,12 @@ class MqttClient:
                     logger.debug(
                         "[MqttClient] Ignoring high-frequency sensor payload on %s",
                         msg.topic,
+                    )
+                    # TF 数据量高且摘要面板不需要完整内容；流量面板仍需要轻量计数样本。
+                    self.signals.sensor_data_received.emit(
+                        robot_info.get("robot_id", ""),
+                        sensor_name,
+                        self._ignored_sensor_payload_summary(sensor_name, msg.payload),
                     )
                     return
                 if self._should_summarize_sensor_payload(sensor_name, msg.payload):
@@ -290,6 +303,28 @@ class MqttClient:
             "_payload_bytes": len(payload),
         }
 
+    def _ignored_sensor_payload_summary(
+        self,
+        sensor_name: str,
+        payload: bytes,
+    ) -> Dict[str, Any]:
+        normalized = sensor_name.strip().lstrip("/")
+        msg_type = "tf2_msgs/TFMessage" if normalized in {"tf", "tf_static"} else ""
+        return {
+            "_msg_type": msg_type,
+            "_payload_skipped": True,
+            "_payload_bytes": len(payload),
+            "_traffic_only": True,
+        }
+
+    @staticmethod
+    def _sensor_name_from_payload(sensor_name: str, data: object) -> str:
+        if isinstance(data, dict):
+            ros_topic = data.get("topic")
+            if isinstance(ros_topic, str) and ros_topic.strip():
+                return ros_topic.strip().lstrip("/")
+        return sensor_name
+
     def _dispatch(self, mqtt_topic: str, message: Message) -> None:
         robot_info = parse_robot_topic(mqtt_topic)
         if robot_info:
@@ -303,7 +338,10 @@ class MqttClient:
             elif robot_type == "cmd_ack":
                 self.signals.cmd_ack_received.emit(robot_id, message.data)
             elif robot_type == "sensor":
-                sensor_name = robot_info.get("name", "")
+                sensor_name = self._sensor_name_from_payload(
+                    robot_info.get("name", ""),
+                    message.data,
+                )
                 self.signals.sensor_data_received.emit(robot_id, sensor_name, message.data)
             return
 

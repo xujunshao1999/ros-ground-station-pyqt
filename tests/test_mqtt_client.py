@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-"""MqttClient 单元测试 — Mock paho.mqtt.client"""
-
 import json
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +7,8 @@ import pytest
 
 from protocol.messages import Message
 from qt_frontend.mqtt_client import MqttClient, MqttSignals
+
+# MqttClient 单元测试 — Mock paho.mqtt.client
 
 
 class _FakeCallbackAPIVersion:
@@ -131,7 +131,11 @@ class TestOnMessageStatus:
         event_signal = MagicMock()
         client.signals.event_received.connect(event_signal)
 
-        msg = Message(src="robot_001", type="event", data={"level": "error", "code": "E1", "message": "err"})
+        msg = Message(
+            src="robot_001",
+            type="event",
+            data={"level": "error", "code": "E1", "message": "err"},
+        )
         mqtt_msg = _make_mqtt_msg("robot/robot_001/event", msg.to_json())
 
         client.connect()
@@ -324,7 +328,15 @@ class TestOnMessageStatus:
 
         mock_loads.assert_not_called()
         mock_from_json.assert_not_called()
-        sensor_signal.assert_not_called()
+        sensor_signal.assert_called_once()
+        assert sensor_signal.call_args[0][0] == "robot_001"
+        assert sensor_signal.call_args[0][1] == "tf"
+        assert sensor_signal.call_args[0][2] == {
+            "_msg_type": "tf2_msgs/TFMessage",
+            "_payload_skipped": True,
+            "_payload_bytes": len(mqtt_msg.payload),
+            "_traffic_only": True,
+        }
 
     def test_tf_static_sensor_payload_is_ignored_without_json_decode(
         self, client, mock_paho
@@ -350,6 +362,33 @@ class TestOnMessageStatus:
 
         mock_loads.assert_not_called()
         mock_from_json.assert_not_called()
+        sensor_signal.assert_called_once()
+        assert sensor_signal.call_args[0][0] == "robot_001"
+        assert sensor_signal.call_args[0][1] == "tf_static"
+        assert sensor_signal.call_args[0][2]["_payload_bytes"] == len(mqtt_msg.payload)
+        assert sensor_signal.call_args[0][2]["_traffic_only"] is True
+
+    def test_retained_sensor_payload_is_ignored_for_live_traffic(
+        self, client, mock_paho
+    ):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        mqtt_msg = _make_mqtt_msg(
+            "robot/turtlebot_001/sensor/tf_static",
+            json.dumps(
+                {
+                    "binary": True,
+                    "msg_type": "tf2_msgs/TFMessage",
+                    "encoding": "ros1_serialized_v1",
+                }
+            ),
+        )
+        mqtt_msg.retain = True
+
+        client.connect()
+        client._on_message(mock_paho, None, mqtt_msg)
+
         sensor_signal.assert_not_called()
 
     def test_serialized_odom_envelope_is_summarized_but_bin_payload_is_ignored(
@@ -382,11 +421,43 @@ class TestOnMessageStatus:
         assert sensor_signal.call_count == 1
         assert sensor_signal.call_args[0][2]["msg_type"] == "nav_msgs/Odometry"
 
+    def test_serialized_nested_envelope_uses_ros_topic_as_sensor_name(
+        self, client, mock_paho
+    ):
+        sensor_signal = MagicMock()
+        client.signals.sensor_data_received.connect(sensor_signal)
+
+        envelope_msg = _make_mqtt_msg(
+            "robot/robot_001/sensor/hdl_graph_slam_odom",
+            json.dumps(
+                {
+                    "binary": True,
+                    "topic": "/hdl_graph_slam/odom",
+                    "msg_type": "nav_msgs/Odometry",
+                    "encoding": "ros1_serialized_v1",
+                    "payload_format": "ros1_serialized",
+                    "payload_size": 128,
+                    "transport": "mqtt_binary",
+                }
+            ),
+        )
+
+        client.connect()
+        client._on_message(mock_paho, None, envelope_msg)
+
+        sensor_signal.assert_called_once()
+        assert sensor_signal.call_args[0][0] == "robot_001"
+        assert sensor_signal.call_args[0][1] == "hdl_graph_slam/odom"
+
     def test_topic_response_received(self, client, mock_paho):
         resp_signal = MagicMock()
         client.signals.topic_response_received.connect(resp_signal)
 
-        msg = Message(src="robot_001", type="topic_resp", data={"action": "subscribe", "topic": "/odom"})
+        msg = Message(
+            src="robot_001",
+            type="topic_resp",
+            data={"action": "subscribe", "topic": "/odom"},
+        )
         mqtt_msg = _make_mqtt_msg("station/topic/response/robot_001", msg.to_json())
 
         client.connect()
@@ -426,7 +497,11 @@ class TestOnMessageStatus:
         cfg_signal = MagicMock()
         client.signals.config_response_received.connect(cfg_signal)
 
-        msg = Message(src="robot_001", type="config_response", data={"robot_id": "robot_001", "subscriptions": []})
+        msg = Message(
+            src="robot_001",
+            type="config_response",
+            data={"robot_id": "robot_001", "subscriptions": []},
+        )
         mqtt_msg = _make_mqtt_msg("station/robot_001/config/response", msg.to_json())
 
         client.connect()

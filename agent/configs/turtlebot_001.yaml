@@ -97,7 +97,7 @@ subscriptions:
 - topic: /joint_states
   msg_type: sensor_msgs/JointState
   freq_limit: 30.0
-  transport: mqtt_json
+  transport: mqtt_binary
   qos: 1
   compression: {}
 - topic: /scan

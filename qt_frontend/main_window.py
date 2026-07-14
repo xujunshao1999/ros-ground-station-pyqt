@@ -705,7 +705,7 @@ class MainWindow(QMainWindow):
         self._pending_sensor_data = {}
         for (robot_id, sensor_name), samples in pending.items():
             for sample_time, data in samples:
-                if isinstance(data, dict):
+                if isinstance(data, dict) and not data.get("_traffic_only"):
                     self._sensor_panel.on_sensor_data_received(
                         robot_id,
                         sensor_name,

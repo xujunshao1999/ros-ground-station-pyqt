@@ -115,6 +115,39 @@ class TestMainWindowSensorBatching:
         assert traffic_calls[0][:3] == ("husky_001", "velodyne_points", meta)
         assert traffic_calls[0][3] is not None
 
+    def test_traffic_only_sensor_data_skips_sensor_summary(self, qt_app, monkeypatch):
+        monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
+        monkeypatch.setattr(MainWindow, "_check_ros", lambda self: None)
+
+        window = MainWindow({})
+        sensor_calls = []
+        traffic_calls = []
+
+        class SensorPanel:
+            def on_sensor_data_received(self, robot_id, sensor_name, data):
+                sensor_calls.append((robot_id, sensor_name, data))
+
+        class TrafficMonitor:
+            def on_sensor_data_received(self, robot_id, sensor_name, data, now=None):
+                traffic_calls.append((robot_id, sensor_name, data, now))
+
+        window._sensor_panel = SensorPanel()
+        window._traffic_monitor = TrafficMonitor()
+
+        data = {
+            "_msg_type": "tf2_msgs/TFMessage",
+            "_payload_skipped": True,
+            "_payload_bytes": 256,
+            "_traffic_only": True,
+        }
+        window._on_sensor_data("husky_001", "tf", data)
+        window._flush_sensor_data()
+
+        assert sensor_calls == []
+        assert len(traffic_calls) == 1
+        assert traffic_calls[0][:3] == ("husky_001", "tf", data)
+        assert traffic_calls[0][3] is not None
+
 
 class TestMainWindowRosMonitor:
     def test_ros_check_runs_in_background(self, qt_app, monkeypatch):

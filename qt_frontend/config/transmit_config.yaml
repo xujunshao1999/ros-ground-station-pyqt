@@ -28,7 +28,7 @@ subscriptions:
   - topic: /joint_states
     msg_type: sensor_msgs/JointState
     freq_limit: 30.0
-    transport: mqtt_json
+    transport: mqtt_binary
     qos: 1
     compression: {}
   - topic: /scan
@@ -43,46 +43,40 @@ subscriptions:
     transport: mqtt_binary
     qos: 1
     compression: {}
-  # - topic: /velodyne_points
-  #   msg_type: sensor_msgs/PointCloud2
-  #   freq_limit: 2.0
-  #   transport: http_stream
-  #   qos: 0
-  #   compression: {}
   turtlebot_002:
   - topic: /odom
     msg_type: nav_msgs/Odometry
     freq_limit: 30.0
-    transport: mqtt_json
-    qos: 1
+    transport: mqtt_binary
+    qos: 0
     compression: {}
   - topic: /imu
     msg_type: sensor_msgs/Imu
     freq_limit: 50.0
-    transport: mqtt_json
-    qos: 1
+    transport: mqtt_binary
+    qos: 0
     compression: {}
   - topic: /tf
     msg_type: tf2_msgs/TFMessage
     freq_limit: 0.0
-    transport: mqtt_json
+    transport: mqtt_binary
     qos: 0
     compression: {}
   - topic: /tf_static
     msg_type: tf2_msgs/TFMessage
     freq_limit: 10.0
-    transport: mqtt_json
+    transport: mqtt_binary
     qos: 1
     compression: {}
   - topic: /joint_states
     msg_type: sensor_msgs/JointState
     freq_limit: 30.0
-    transport: mqtt_json
+    transport: mqtt_binary
     qos: 1
     compression: {}
   - topic: /map
     msg_type: nav_msgs/OccupancyGrid
-    freq_limit: 0.2
+    freq_limit: 1.0
     transport: mqtt_binary
     qos: 0
     compression: {}
@@ -92,22 +86,65 @@ subscriptions:
     transport: mqtt_binary
     qos: 0
     compression: {}
+  husky_001:
+  - topic: /velodyne_points
+    msg_type: sensor_msgs/PointCloud2
+    freq_limit: 1.0
+    transport: http_stream
+    qos: 0
+    compression: {}
+  - topic: /hdl_graph_slam/map_points
+    msg_type: sensor_msgs/PointCloud2
+    freq_limit: 0.5
+    transport: http_stream
+    qos: 0
+    compression: {}
+  - topic: /hdl_graph_slam/odom
+    msg_type: nav_msgs/Odometry
+    freq_limit: 10.0
+    transport: mqtt_binary
+    qos: 0
+    compression: {}
+  - topic: /realsense/color/image_raw/compressed
+    msg_type: sensor_msgs/CompressedImage
+    freq_limit: 10.0
+    transport: mqtt_binary
+    qos: 0
+    compression: {}
+  - topic: /tf
+    msg_type: tf2_msgs/TFMessage
+    freq_limit: 0.0
+    transport: mqtt_binary
+    qos: 0
+    compression: {}
+  - topic: /tf_static
+    msg_type: tf2_msgs/TFMessage
+    freq_limit: 10.0
+    transport: mqtt_binary
+    qos: 1
+    compression: {}
+  - topic: /joint_states
+    msg_type: sensor_msgs/JointState
+    freq_limit: 10.0
+    transport: mqtt_binary
+    qos: 1
+    compression: {}
 fleet_rules:
-- enabled: false
-  src_robot: turtlebot_002
-  src_topic: /move_base_simple/goal
-  msg_type: geometry_msgs/PoseStamped
-  dst_robot: turtlebot_001
-  dst_topic: /fleet/turtlebot_002/move_base_simple/goal
-  freq_limit: 1.0
-  transport: mqtt_json
-  frame_policy: namespace
 - enabled: false
   src_robot: turtlebot_001
   src_topic: /odom
   msg_type: nav_msgs/Odometry
   dst_robot: turtlebot_002
   dst_topic: /fleet/turtlebot_001/odom
+  freq_limit: 1.0
+  transport: mqtt_json
+  frame_policy: namespace
+- enabled: false
+  src_robot: turtlebot_002
+  src_topic: /move_base_simple/goal
+  msg_type: geometry_msgs/PoseStamped
+  dst_robot: turtlebot_001
+  dst_topic: /fleet/turtlebot_002/move_base_simple/goal
   freq_limit: 1.0
   transport: mqtt_json
   frame_policy: namespace

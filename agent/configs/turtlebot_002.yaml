@@ -93,8 +93,14 @@ subscriptions:
 - topic: /joint_states
   msg_type: sensor_msgs/JointState
   freq_limit: 30.0
-  transport: mqtt_json
+  transport: mqtt_binary
   qos: 1
+  compression: {}
+- topic: /map
+  msg_type: nav_msgs/OccupancyGrid
+  freq_limit: 1.0
+  transport: mqtt_binary
+  qos: 0
   compression: {}
 - topic: /scan
   msg_type: sensor_msgs/LaserScan

@@ -71,7 +71,7 @@ subscriptions:
   compression: {}
 - topic: /realsense/color/image_raw/compressed
   msg_type: sensor_msgs/CompressedImage
-  freq_limit: 5.0
+  freq_limit: 10.0
   transport: mqtt_binary
   qos: 0
   compression: {}
