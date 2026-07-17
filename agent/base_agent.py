@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -10,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as mqtt
 
@@ -27,6 +28,7 @@ from protocol.messages import (
     ConfigResponseData,
     DiscoverResponseData,
     EventData,
+    FleetBinaryEnvelopeData,
     FleetData,
     Message,
     MessageFactory,
@@ -48,6 +50,7 @@ from protocol.topics import (
     robot_sensor_meta,
     robot_status,
     robot_to_robot,
+    robot_to_robot_binary,
     robot_to_robot_meta,
     station_config_query,
     station_config_response,
@@ -179,6 +182,11 @@ class BaseAgent(ABC):
         # MQTT 客户端
         self._mqtt_client: Optional[mqtt.Client] = None
         self._factory = MessageFactory(src=self.config.robot_id)
+
+        # 每个 Agent 生命周期使用独立 nonce，计数器由锁保护以支持并发 ROS 回调。
+        self._fleet_transfer_lock = threading.Lock()
+        self._fleet_session_nonce = secrets.randbits(32)
+        self._fleet_transfer_counter = 0
 
         # 限频器和话题处理器
         self._rate_limiter = RateLimiter(default_freq_limit=self.config.default_freq_limit)
@@ -475,17 +483,65 @@ class BaseAgent(ABC):
     # 机器人间通信
     # ============================================================
 
-    def send_to_robot(self, target_id: str, fleet_data: FleetData) -> None:
+    def send_to_robot(
+        self,
+        target_id: str,
+        fleet_data: FleetData,
+        qos: int = 1,
+    ) -> bool:
         """向指定机器人发送轻量数据（MQTT JSON）
 
         Args:
             target_id: 目标机器人 ID
             fleet_data: 机器人间数据（位置/导航目标/自定义）
+            qos: 当前 route 使用的 MQTT QoS
         """
         msg = self._factory.fleet_data(fleet_data, dst=target_id)
         topic = robot_to_robot(self.config.robot_id, target_id)
-        self._mqtt_publish(topic, msg.to_json().encode("utf-8"))
-        logger.info(f"[Agent] Sent fleet data to {target_id}: type={fleet_data.data_type}")
+        published = self._mqtt_publish(
+            topic,
+            msg.to_json().encode("utf-8"),
+            qos=qos,
+        )
+        if published:
+            logger.info(
+                f"[Agent] Sent fleet data to {target_id}: "
+                f"type={fleet_data.data_type}"
+            )
+        return published
+
+    def send_fleet_binary_to_robot(
+        self,
+        target_id: str,
+        envelope: FleetBinaryEnvelopeData,
+        framed_body: bytes,
+        qos: int,
+    ) -> Tuple[bool, bool]:
+        """按同一路由 QoS 发布 binary envelope 与已编码主体。"""
+        message = self._factory.fleet_binary_envelope(envelope, dst=target_id)
+        envelope_ok = self._mqtt_publish(
+            robot_to_robot(self.config.robot_id, target_id),
+            message.to_json().encode("utf-8"),
+            qos=qos,
+        )
+        body_ok = self._mqtt_publish(
+            robot_to_robot_binary(self.config.robot_id, target_id),
+            framed_body,
+            qos=qos,
+        )
+        return envelope_ok, body_ok
+
+    def _next_fleet_transfer_id(self) -> int:
+        """生成 session nonce 与递增计数组成的线程安全 uint64 ID。"""
+        with self._fleet_transfer_lock:
+            if self._fleet_transfer_counter >= 0xFFFFFFFF:
+                self._fleet_session_nonce = secrets.randbits(32)
+                self._fleet_transfer_counter = 0
+            self._fleet_transfer_counter += 1
+            return (
+                (self._fleet_session_nonce << 32)
+                | self._fleet_transfer_counter
+            )
 
     def share_heavy_data(self, target_id: str, topic: str, data: bytes,
                          msg_type: str = "sensor_msgs/PointCloud2") -> None:
@@ -598,6 +654,9 @@ class BaseAgent(ABC):
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
         )
+        # 有界离线队列避免 Broker 断连时高频数据无限积压内存。
+        self._mqtt_client.max_queued_messages_set(1000)
+        self._mqtt_client.max_inflight_messages_set(20)
 
         # 设置 Last Will：异常断开时 Broker 立即通知地面站
         will_topic = robot_event(self.config.robot_id)
@@ -964,12 +1023,15 @@ class BaseAgent(ABC):
                 continue
 
             targets = []
+            seen_targets = set()
             for target in rule.get("targets", []):
                 if not isinstance(target, dict):
                     continue
                 robot_id = target.get("robot_id", "")
                 dst_topic = target.get("dst_topic", "")
-                if robot_id and dst_topic:
+                target_key = (robot_id, dst_topic)
+                if robot_id and dst_topic and target_key not in seen_targets:
+                    seen_targets.add(target_key)
                     targets.append({
                         "robot_id": robot_id,
                         "dst_topic": dst_topic,
@@ -977,13 +1039,22 @@ class BaseAgent(ABC):
             if not targets:
                 continue
 
+            # 旧配置和非法值统一回落 JSON + QoS 1，避免静默启用 binary。
+            transport = rule.get("transport", "mqtt_json")
+            if transport not in ("mqtt_json", "mqtt_binary"):
+                transport = "mqtt_json"
+            qos = rule.get("qos", 1)
+            if isinstance(qos, bool) or qos not in (0, 1):
+                qos = 1
+
             normalized.append({
                 "enabled": bool(rule.get("enabled", True)),
                 "src_topic": src_topic,
                 "msg_type": msg_type,
                 "targets": targets,
                 "freq_limit": float(rule.get("freq_limit", 0.0)),
-                "transport": rule.get("transport", "mqtt_json"),
+                "transport": transport,
+                "qos": qos,
                 "frame_policy": rule.get("frame_policy", "preserve"),
             })
         return normalized
@@ -1256,14 +1327,18 @@ class BaseAgent(ABC):
         payload: bytes,
         qos: int = 1,
         retain: bool = False,
-    ) -> None:
-        """发布 MQTT 消息"""
-        if self._mqtt_client and self.state in (
+    ) -> bool:
+        """提交 MQTT 发布请求，并返回 Paho 是否接受该请求。"""
+        if not self._mqtt_client or self.state not in (
             AgentState.CONNECTED,
             AgentState.RUNNING,
         ):
-            self._mqtt_client.publish(topic, payload, qos=qos, retain=retain)
+            return False
+        info = self._mqtt_client.publish(topic, payload, qos=qos, retain=retain)
+        if info.rc == mqtt.MQTT_ERR_SUCCESS:
             logger.debug(f"[Agent] Published to {topic} ({len(payload)} bytes)")
+            return True
+        return False
 
     def _reconnect_loop(self) -> None:
         """自动重连循环"""

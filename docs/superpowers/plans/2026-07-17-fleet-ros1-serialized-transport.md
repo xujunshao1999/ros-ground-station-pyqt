@@ -376,7 +376,7 @@ git commit -m "feat: 增加编队二进制关联头"
 - 修改：`agent/base_agent.py`
 - 修改：`tests/test_agent_topic_config.py`
 
-- [ ] **步骤 1：更新 RecordingAgent 发布夹具并编写失败测试**
+- [x] **步骤 1：更新 RecordingAgent 发布夹具并编写失败测试**
 
 先将 `RecordingAgent._mqtt_publish()` 返回类型改为 `bool`，末尾 `return True`，避免后续测试因旧 fixture 返回 `None` 把成功发布误判为失败。
 
@@ -441,7 +441,7 @@ def test_send_fleet_binary_publishes_envelope_and_body_with_route_qos():
     assert agent.published[1] == ("robot/r1/to/r2/bin", body, 0, False)
 ```
 
-- [ ] **步骤 2：运行测试验证缺失行为**
+- [x] **步骤 2：运行测试验证缺失行为**
 
 运行：
 
@@ -454,7 +454,7 @@ python3 -m pytest \
 
 预期：因 fleet 规则尚未保留 QoS、transfer ID 和 binary 发送方法尚未实现而失败。
 
-- [ ] **步骤 3：实现规范化和 transfer ID**
+- [x] **步骤 3：实现规范化和 transfer ID**
 
 在 `agent/base_agent.py` 增加 `secrets` import，并将 typing import 扩展为包含 `Tuple`。
 
@@ -483,7 +483,7 @@ def _next_fleet_transfer_id(self) -> int:
 
 修改 `_normalize_fleet_rules()`：transport 只保留 `mqtt_json`/`mqtt_binary`，非法值回落 JSON；QoS 只保留 0/1，非法值回落 1；使用 `seen_targets` 对 `(robot_id, dst_topic)` 去重。
 
-- [ ] **步骤 4：实现 MQTT 返回值和 binary 发送**
+- [x] **步骤 4：实现 MQTT 返回值和 binary 发送**
 
 在 `_init_mqtt()` 创建 client 后、连接前调用：
 
@@ -535,7 +535,7 @@ def send_fleet_binary_to_robot(
     return envelope_ok, body_ok
 ```
 
-- [ ] **步骤 5：增加 Paho client 配置和 rc 测试**
+- [x] **步骤 5：增加 Paho client 配置和 rc 测试**
 
 新增：
 
@@ -569,7 +569,7 @@ def test_mqtt_publish_returns_paho_rc_status(rc, expected):
 
 测试只验证 Paho rc，不断言最终 Broker 投递结果。补充 `pytest`、`MagicMock`、`paho.mqtt.client as mqtt`、`BaseAgent` 和 `AgentState` import。
 
-- [ ] **步骤 6：运行 BaseAgent 发布与既有配置测试**
+- [x] **步骤 6：运行 BaseAgent 发布与既有配置测试**
 
 运行：
 
@@ -579,7 +579,7 @@ python3 -m pytest tests/test_agent_topic_config.py -q
 
 预期：全部通过；现有 sensor JSON/binary/HTTP QoS 测试保持通过。
 
-- [ ] **步骤 7：提交 BaseAgent 发送基础**
+- [x] **步骤 7：提交 BaseAgent 发送基础**
 
 ```bash
 git add agent/base_agent.py tests/test_agent_topic_config.py

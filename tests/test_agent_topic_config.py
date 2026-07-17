@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 from typing import List, Tuple
+from unittest.mock import MagicMock
 
+import paho.mqtt.client as mqtt
+import pytest
 import yaml
 
-from agent.base_agent import AgentConfig
+from agent.base_agent import AgentConfig, AgentState, BaseAgent
 from agent.mock_agent import MockAgent
 from agent.mock_pointcloud2_data import FakePointCloud2Message, build_pointcloud2_dict
-from protocol.messages import Message, MessageType
+from protocol.binary_payloads import encode_fleet_binary_payload
+from protocol.messages import FleetBinaryEnvelopeData, FleetData, Message, MessageType
 
 # Agent 订阅配置与重型 snapshot 发布测试。
 
@@ -44,7 +48,7 @@ class RecordingAgent(MockAgent):
         payload: bytes,
         qos: int = 1,
         retain: bool = False,
-    ) -> None:
+    ) -> bool:
         try:
             decoded = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -55,9 +59,150 @@ class RecordingAgent(MockAgent):
             qos,
             retain,
         ))
+        return True
 
     def _start_stream_server(self) -> None:
         self._stream_server = object()
+
+
+def test_normalize_fleet_rules_preserves_qos_and_deduplicates_targets():
+    """相同目标只保留一次，并保留 binary route 的传输参数。"""
+    rules = MockAgent._normalize_fleet_rules([{
+        "enabled": True,
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [
+            {"robot_id": "r2", "dst_topic": "/fleet/r1/odom"},
+            {"robot_id": "r2", "dst_topic": "/fleet/r1/odom"},
+        ],
+        "freq_limit": 10.0,
+        "transport": "mqtt_binary",
+        "qos": 0,
+        "frame_policy": "namespace",
+    }])
+
+    assert rules[0]["transport"] == "mqtt_binary"
+    assert rules[0]["qos"] == 0
+    assert rules[0]["targets"] == [
+        {"robot_id": "r2", "dst_topic": "/fleet/r1/odom"}
+    ]
+
+
+@pytest.mark.parametrize("transport", ["auto", "unknown", None])
+def test_normalize_fleet_rules_falls_back_invalid_transport(transport):
+    """非法 transport 回落 JSON，但不覆盖合法 route QoS。"""
+    rules = MockAgent._normalize_fleet_rules([{
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [{"robot_id": "r2", "dst_topic": "/fleet/r1/odom"}],
+        "transport": transport,
+        "qos": 0,
+    }])
+
+    assert rules[0]["transport"] == "mqtt_json"
+    assert rules[0]["qos"] == 0
+
+
+@pytest.mark.parametrize("qos", [2, "0", True])
+def test_normalize_fleet_rules_falls_back_invalid_qos(qos):
+    """非法 QoS 回落到 1，但不覆盖合法 binary transport。"""
+    rules = MockAgent._normalize_fleet_rules([{
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [{"robot_id": "r2", "dst_topic": "/fleet/r1/odom"}],
+        "transport": "mqtt_binary",
+        "qos": qos,
+    }])
+
+    assert rules[0]["transport"] == "mqtt_binary"
+    assert rules[0]["qos"] == 1
+
+
+def test_fleet_transfer_ids_are_unique_and_roll_session_nonce(monkeypatch):
+    """计数回绕时更换 session nonce，避免 Agent 生命周期内 ID 重复。"""
+    nonces = iter([0x11111111, 0x22222222])
+    monkeypatch.setattr(
+        "agent.base_agent.secrets.randbits",
+        lambda bits: next(nonces),
+    )
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    first = agent._next_fleet_transfer_id()
+    agent._fleet_transfer_counter = 0xFFFFFFFF
+    wrapped = agent._next_fleet_transfer_id()
+
+    assert first == 0x1111111100000001
+    assert wrapped == 0x2222222200000001
+
+
+def test_send_to_robot_returns_publish_status_and_uses_route_qos():
+    """既有 JSON fleet 发送入口保留兼容默认值并暴露发布状态。"""
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+
+    result = agent.send_to_robot(
+        "r2",
+        FleetData(data_type="custom", payload={"value": 1}),
+        qos=0,
+    )
+
+    assert result is True
+    assert agent.published[0][0] == "robot/r1/to/r2"
+    assert agent.published[0][2] == 0
+
+
+def test_send_fleet_binary_publishes_envelope_and_body_with_route_qos():
+    """同一路由的 envelope 与 body 应使用一致的目标和 QoS。"""
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    envelope = FleetBinaryEnvelopeData(
+        transfer_id=7,
+        payload_size=4,
+        md5sum="md5",
+        src_topic="/odom",
+        dst_topic="/fleet/r1/odom",
+        msg_type="nav_msgs/Odometry",
+        ttl=1.0,
+    )
+    body = encode_fleet_binary_payload(7, b"body")
+
+    result = agent.send_fleet_binary_to_robot("r2", envelope, body, qos=0)
+
+    assert result == (True, True)
+    assert agent.published[0][0] == "robot/r1/to/r2"
+    assert agent.published[0][2] == 0
+    assert agent.published[1] == ("robot/r1/to/r2/bin", body, 0, False)
+
+
+def test_init_mqtt_sets_bounded_client_queues(monkeypatch):
+    """Paho 离线队列和在途消息数必须有界。"""
+    client = MagicMock()
+    monkeypatch.setattr(
+        "agent.base_agent.mqtt.Client",
+        MagicMock(return_value=client),
+    )
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+
+    agent._init_mqtt()
+
+    client.max_queued_messages_set.assert_called_once_with(1000)
+    client.max_inflight_messages_set.assert_called_once_with(20)
+
+
+@pytest.mark.parametrize("rc,expected", [
+    (mqtt.MQTT_ERR_SUCCESS, True),
+    (mqtt.MQTT_ERR_NO_CONN, False),
+    (mqtt.MQTT_ERR_QUEUE_SIZE, False),
+])
+def test_mqtt_publish_returns_paho_rc_status(rc, expected):
+    """返回值仅表示 Paho 是否接受发布请求，不代表 Broker 已投递。"""
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    agent._mqtt_client = MagicMock()
+    agent._mqtt_client.publish.return_value.rc = rc
+    agent.state = AgentState.CONNECTED
+
+    assert BaseAgent._mqtt_publish(
+        agent,
+        "robot/r1/test",
+        b"payload",
+    ) is expected
 
 
 def test_topic_request_subscribe_updates_runtime_and_persistent_config():
@@ -412,6 +557,7 @@ def test_config_sync_converges_added_updated_and_removed_subscriptions():
         ],
         "freq_limit": 10.0,
         "transport": "mqtt_json",
+        "qos": 1,
         "frame_policy": "namespace",
     }
 
@@ -486,6 +632,7 @@ def test_normalize_fleet_rules_filters_invalid_entries():
             ],
             "freq_limit": 10.0,
             "transport": "mqtt_json",
+            "qos": 1,
             "frame_policy": "namespace",
         },
         {"name": "invalid"},
@@ -506,6 +653,7 @@ def test_normalize_fleet_rules_filters_invalid_entries():
             ],
             "freq_limit": 10.0,
             "transport": "mqtt_json",
+            "qos": 1,
             "frame_policy": "namespace",
         }
     ]
@@ -555,6 +703,7 @@ def test_load_subscriptions_from_config_applies_fleet_rules():
         ],
         "freq_limit": 10.0,
         "transport": "mqtt_json",
+        "qos": 1,
         "frame_policy": "namespace",
     }
     agent = RecordingAgent(AgentConfig(
@@ -770,6 +919,7 @@ def test_config_sync_with_only_fleet_rules_keeps_existing_subscriptions():
         ],
         "freq_limit": 10.0,
         "transport": "mqtt_json",
+        "qos": 1,
         "frame_policy": "namespace",
     }
     agent = RecordingAgent(AgentConfig(
