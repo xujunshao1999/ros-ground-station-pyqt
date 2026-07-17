@@ -49,13 +49,14 @@
 - **ROS1 serialized**：通过 ROS1 消息对象 `serialize()` 得到的原生字节序列。目标 Agent 必须安装相同消息类型，且 ROS message 定义和 MD5 兼容。
 - **binary envelope**：通过主 MQTT topic 发送的轻量 JSON 路由信息，不包含 ROS 字段 payload。
 - **binary body**：最小关联头加 ROS1 serialized bytes，通过独立 `/bin` MQTT topic 发送。
-- **`transfer_id`**：只用于配对一次 Agent 间 binary envelope 和 body 的 64 位传输标识，不等同于统一 `Message.seq` 或 ROS `header.seq`。
+- **`transfer_id`**：只用于配对一个逻辑 route 的一次 Agent 间 binary envelope 和 body 的 64 位传输标识，不等同于统一 `Message.seq` 或 ROS `header.seq`。
 - **自动回退**：源 Agent 对当前 ROS 消息序列化失败时，改走已有完整 JSON 路径；规则配置仍保持 `mqtt_binary`，后续消息继续尝试二进制。
 - **`frame_policy: preserve`**：目标 Agent 保留消息中现有 frame 名称。
 - **`frame_policy: namespace`**：目标 Agent 使用源机器人 ID 为现有 helper 支持的 `header.frame_id`、顶层 `child_frame_id` 和 TF `transforms` 添加命名空间。
 - **QoS 0**：最多投递一次，可能丢包但不会因 MQTT 重传积压，适合 `/odom`、IMU、LaserScan 等连续状态。
 - **QoS 1**：至少投递一次，可能重复，适合导航目标、任务触发等关键低频消息。
 - **TTL**：`FleetData.ttl` 表示消息从源 Agent 创建起允许存活的秒数。接收端使用统一 `Message.ts` 计算传输年龄。
+- **ROS MD5**：ROS1 生成的 message class 通过 `_md5sum` 标识消息定义。binary envelope 携带源端 MD5，目标端在反序列化前必须与本地 class 比较。
 
 ## 四、组件职责
 
@@ -114,7 +115,7 @@ robot/+/to/{self_robot_id}/bin
 robot/+/to/{self_robot_id}/meta
 ```
 
-`protocol/topics.py` 为 `/bin` 增加独立构造函数、订阅通配符及 `to_robot_binary` 解析类型。MQTT 的单层 `+` 不会让主 topic 订阅自动覆盖 `/bin`，因此三类 topic 必须显式订阅。
+`protocol/topics.py` 为 `/bin` 增加独立构造函数、订阅通配符及 `to_robot_binary` 解析类型。MQTT 的单层 `+` 不会让主 topic 订阅自动覆盖 `/bin`，因此三类 topic 必须显式订阅。解析器对 Agent 间主、`/bin`、`/meta` topic 使用精确段数匹配，必须拒绝 `/bin/extra`、`/meta/extra` 等尾随层级。
 
 ### 5.2 Binary Envelope
 
@@ -131,6 +132,7 @@ envelope 的 `data` 至少包含：
   "payload_format": "ros1_serialized",
   "transfer_id": 1311768464867721258,
   "payload_size": 736,
+  "md5sum": "cd5e73d190d741a2f92e81eda573aca7",
   "src_topic": "/odom",
   "dst_topic": "/fleet/turtlebot_001/odom",
   "msg_type": "nav_msgs/Odometry",
@@ -140,7 +142,9 @@ envelope 的 `data` 至少包含：
 }
 ```
 
-`Message.src`、`Message.dst`、`Message.seq` 和 `Message.ts` 继续使用统一协议语义。binary 配对只使用 `Message.src + data.transfer_id`；不得用 `Message.seq` 或 ROS `header.seq` 配对。`payload_size` 只表示 ROS1 serialized 主体长度，不包含关联头。
+`Message.src`、`Message.dst`、`Message.seq` 和 `Message.ts` 继续使用统一协议语义。binary 配对只使用 `Message.src + data.transfer_id`；不得用 `Message.seq` 或 ROS `header.seq` 配对。`payload_size` 只表示 ROS1 serialized 主体长度，不包含关联头。`md5sum` 是必填非空字符串；源消息 class 没有 `_md5sum` 时不得发送 binary，应触发当前消息的 JSON 回退。
+
+结构化解析还必须拒绝以下输入：`transfer_id` 不是 `0..2^64-1` 范围内的整数、`payload_size` 不是非负整数、`ttl` 或顶层 `Message.ts` 不是有限数值。Python 的 `bool` 不作为合法整数，`NaN` 和正负无穷不作为合法时间或 TTL。
 
 ### 5.3 `transfer_id`
 
@@ -150,7 +154,7 @@ envelope 的 `data` 至少包含：
 transfer_id = (session_nonce << 32) | counter
 ```
 
-计数在同一源 ROS 消息第一次需要 binary 转发时递增。同一消息发往多个 target 时复用 `transfer_id` 和 serialized body。计数回绕前重新生成 `session_nonce`。生成过程由锁保护，避免多个 ROS subscriber 回调并发产生重复值。
+计数为每个到期的逻辑 route 递增。即使多个 route 来自同一源 ROS 消息或发往同一目标机器人，也分别生成 `transfer_id`，从根本上避免相同 `(src_id, transfer_id)` 下不同 `dst_topic` 或 `frame_policy` 的 envelope 互相覆盖。ROS serialized bytes 仍在同一源回调内复用；每个 route 只重新构造 13 字节关联头。计数回绕前重新生成 `session_nonce`。生成过程由锁保护，避免多个 ROS subscriber 回调并发产生重复值。
 
 顶层 `Message.seq` 仍由 `MessageFactory` 为每个目标消息独立生成，不参与 body 配对。
 
@@ -165,7 +169,7 @@ transfer_id: 8 bytes  big-endian unsigned integer
 body:        N bytes  ROS1 serialized payload
 ```
 
-`protocol/binary_payloads.py` 提供专用 encode/decode helper。业务代码不得手工切片。helper 必须验证 magic、version、最小长度，并返回 `transfer_id` 和原始 ROS body。
+`protocol/binary_payloads.py` 提供专用 encode/decode helper。业务代码不得手工切片。helper 必须验证 magic、version、最小长度和 64 位 transfer ID 范围，并返回 `transfer_id` 和原始 ROS body。
 
 ## 六、编队规则配置
 
@@ -191,6 +195,7 @@ body:        N bytes  ROS1 serialized payload
 - 同一条规则的所有 target 共用 `transport`、`qos`、`freq_limit` 和 `frame_policy`；
 - `freq_limit <= 0` 表示 Agent 不主动限频；
 - 同一 `src_topic` 配置不同 `msg_type` 时整组规则不启用，并记录明确错误，避免用错误类型订阅同一个 ROS topic。
+- 同一规则内重复的 `(robot_id, dst_topic)` target 只保留一个；聚合后所有字段完全一致的重复 route 也只执行一次。
 
 Qt 编队面板增加 transport 和 QoS 控件，并在规则表中显示实际配置。载入、编辑、保存、下发和配置响应回填必须保留字段。由于本次不增加目标 Agent capability 协商，新建规则默认 `mqtt_json + qos: 1`，不能无提示地向旧 Agent 发送 binary，也不能默认以 QoS 0 发送导航目标。高频规则由用户显式选择 `mqtt_binary + qos: 0`。
 
@@ -215,10 +220,11 @@ Qt 编队面板增加 transport 和 QoS 控件，并在规则表中显示实际�
 ### 7.3 Binary Route
 
 1. 使用 `io.BytesIO` 调用 ROS 消息对象 `serialize(buff)`，取得原生 bytes；合法零长度 body 仍可发送。
-2. 为本次源消息生成一个 `transfer_id`，构造一次带关联头的 binary payload。
-3. 为每个 target 构造带各自 `dst_topic` 的 `FleetBinaryEnvelopeData`。
-4. 使用相同 QoS 依次发布 envelope 和 binary body，均设置 `retain=false`。
-5. 不把 ROS body 转为 Base64、dict 或完整 `/fleet/incoming` JSON。
+2. 从 `type(msg)._md5sum` 读取非空 ROS MD5；缺失时按序列化失败策略回退 JSON。
+3. 为每个到期逻辑 route 生成独立 `transfer_id`，使用共享的 ROS bytes 构造各自带关联头的 binary payload。
+4. 为每个 route 构造带各自 `dst_topic`、`frame_policy` 和 `md5sum` 的 `FleetBinaryEnvelopeData`。
+5. 使用该 route 的 QoS 依次发布 envelope 和 binary body，均设置 `retain=false`。
+6. 不把 ROS body 转为 Base64、dict 或完整 `/fleet/incoming` JSON。
 
 现有 `_serialize_ros_message()` 调整为只返回 bytes 或 `None`，不在 helper 内逐条打印 warning。调用方按 `(src_topic, msg_type)` 对序列化失败告警限频，同类错误最多每 10 秒一次，然后把当前到期 binary routes 全部回退到 JSON。JSON 转换也失败时丢弃当前 routes 并记录限频错误。
 
@@ -260,7 +266,7 @@ binary topic 解析出的 `src_id` 来自 MQTT topic。所有 `to_robot` 主 top
 - 每次收到 fleet envelope/body 时清理过期项，状态循环也调用同一清理函数；
 - 过期条目不得再参与配对，实际删除最迟发生在下一次 fleet 消息或状态循环。
 
-配对完成后立即从两个缓存弹出，再验证 envelope `payload_size` 与 body 长度一致。缓存超限、过期、缺少一侧或尺寸不符只影响当前 transfer，不得阻断后续消息。
+配对完成后在锁内立即从两个缓存弹出并更新 body 总字节计数，再验证 envelope `payload_size` 与 body 长度一致。锁内只执行缓存清理、写入、配对、弹出和计数更新；TTL 复检、ROS hook、反序列化和 ROS publish 必须在释放锁后执行，避免慢 ROS 操作阻塞后续 MQTT 接收和状态循环清理。缓存超限、过期、缺少一侧或尺寸不符只影响当前 transfer，不得阻断后续消息。
 
 ### 8.3 TTL
 
@@ -272,7 +278,9 @@ now - Message.ts > ttl -> 丢弃
 Message.ts > now + 5s  -> 视为时钟异常并丢弃
 ```
 
-TTL 依赖机器人系统时钟同步，部署环境必须使用 NTP 或等效机制。缓存的 2 秒超时只解决 envelope/body 缺包，不替代端到端 TTL。
+现有 ROS topic 编队回调固定使用 `ttl=1.0`，本次不新增规则字段或 Qt TTL 控件；JSON route 和 binary route 必须使用同一个固定值。TTL 依赖机器人系统时钟同步，部署环境必须使用 NTP 或等效机制。缓存的 2 秒超时只解决 envelope/body 缺包，不替代端到端 TTL。
+
+binary envelope 写入缓存前检查一次 TTL；envelope/body 配对完成并释放缓存锁后、调用子类 hook 前必须使用原 `Message.ts` 再检查一次，防止 body 接近缓存超时时到达后发布已经过期的数据。完整 JSON fleet 消息在调用现有 `_on_fleet_message()` 前检查一次。
 
 ### 8.4 ROS 反序列化与发布
 
@@ -280,11 +288,12 @@ TTL 依赖机器人系统时钟同步，部署环境必须使用 NTP 或等效�
 
 1. 验证 `data_type=ros_topic`、encoding、payload format、绝对 `dst_topic` 和非空 `msg_type`；
 2. 通过 `msg_type` 加载 ROS message class；
-3. 创建消息对象并调用 `deserialize(body)`；
-4. `frame_policy=namespace` 时调用现有 `namespace_ros_message_frames()`；
-5. 复用 `(dst_topic, msg_type)` 对应的 ROS publisher；
-6. 发布 ROS 消息；
-7. 复用单个 `/fleet/incoming` publisher 发布轻量摘要，只包含来源、目标 topic、类型、transport、`transfer_id`、payload size 和时间戳。
+3. 验证 envelope `md5sum` 与本地 message class `_md5sum` 都是非空字符串且完全相同；缺失或不一致时丢弃当前 transfer；
+4. 创建消息对象并调用 `deserialize(body)`；
+5. `frame_policy=namespace` 时调用现有 `namespace_ros_message_frames()`；
+6. 复用 `(dst_topic, msg_type)` 对应的 ROS publisher；
+7. 发布 ROS 消息；
+8. 复用单个 `/fleet/incoming` publisher 发布轻量摘要，只包含来源、目标 topic、类型、transport、`transfer_id`、payload size 和时间戳。
 
 本次 frame namespace 明确只保证现有 helper 支持的 `header.frame_id`、顶层 `child_frame_id` 和 TF `transforms`。包含更深层嵌套 frame 的自定义消息使用 `preserve`，或另行扩展 helper 并补充 Bridge 回归测试。
 
@@ -292,14 +301,14 @@ TTL 依赖机器人系统时钟同步，部署环境必须使用 NTP 或等效�
 
 `BaseAgent._mqtt_publish()` 调整为返回 publish 是否成功进入 Paho 客户端发送队列，判断依据是 `MQTTMessageInfo.rc == mqtt.MQTT_ERR_SUCCESS`。现有调用方可以忽略返回值，fleet binary 发送必须检查。不得在 ROS 回调中调用阻塞式 `wait_for_publish()`。
 
-Agent 初始化共享 MQTT client 时显式设置：
+Agent 初始化共享 MQTT client 时，在调用 `connect()` 前显式设置：
 
 ```text
 max_queued_messages = 1000
 max_inflight_messages = 20
 ```
 
-队列上限与当前 Broker `max_queued_messages 1000` 对齐，避免断线竞态下 QoS 1 消息无限占用客户端内存。高频 fleet 数据推荐 QoS 0；QoS 1 只用于低频关键数据。Paho 返回队列满或未连接时，当前 fleet publish 失败，不建立应用层重发队列。
+队列上限与当前 Broker `max_queued_messages 1000` 对齐，避免断线竞态下 QoS 1 消息无限占用客户端内存。高频 fleet 数据推荐 QoS 0；QoS 1 只用于低频关键数据。`_mqtt_publish()` 的布尔返回值只反映本次 `publish().rc`，不表示 Broker 已确认，也不保证消息最终不会投递。Paho 2.x 在部分 `MQTT_ERR_NO_CONN` 场景仍可能把 QoS 1 消息留在内部 `_out_messages`，重连后继续发送，因此该返回值只能用于日志和观测，不能作为 JSON 回退或应用层重发依据。
 
 项目当前由一个 MQTT client 同时承载状态、控制、普通 sensor 和 fleet 消息，因此这个队列上限是 Agent 级资源保护，会对共享 client 的所有 QoS 1 publish 生效，但不改变非 fleet 消息的 topic、编码或正常发送行为。队列满时现有非 fleet 调用方仍保持当前“不重试”的行为；实现和运行态验证必须确认 fleet 高负载不会持续占满共享队列。拆分 fleet 专用 MQTT client 属于后续隔离优化，不在本次范围。
 
@@ -366,29 +375,32 @@ QoS 1 允许重复投递。本次保持至少一次语义，不对完成配对�
 
 - fleet binary topic 构造、通配符和解析；
 - `FleetBinaryEnvelopeData` 经 `MessageFactory` 序列化和 `Message.from_json()` 解析；
-- 关联头往返、非法 magic、非法版本、截断和零长度 ROS body；
+- 关联头往返、非法 magic、非法版本、越界 transfer ID、截断和零长度 ROS body；
 - `Message.seq`、ROS `header.seq` 与 `transfer_id` 相互独立；
 - session nonce、递增计数和计数回绕时重新生成 nonce 的组合规则；随机 nonce 碰撞属于可量化的极低概率风险，不表述为绝对不可能。
+- envelope 对缺失 MD5、非法整数、布尔整数、负 payload size、`NaN` 和无穷时间值的拒绝行为；
+- Agent 间 topic 精确段数解析，拒绝 `/bin/extra` 和 `/meta/extra`。
 
 ### 13.2 BaseAgent 测试
 
 - `/bin` payload 在 UTF-8 decode 前分流；
 - JSON fleet 路径保持兼容；
 - envelope 先到、body 先到、任一侧缺失和 QoS 1 重复；
-- TTL 有效、过期、禁用和未来时钟异常；
+- TTL 有效、过期、禁用、未来时钟异常，以及 envelope 初检通过但配对完成时已过期；
 - 单条 8 MiB 边界、缓存 64 MiB 边界、条数上限和过期清理；
 - topic 源/目标与 Message 字段不一致时拒绝；
 - `_mqtt_publish()` 成功、未连接和队列满返回值；
-- envelope/body 任一 publish 失败时不触发 JSON 回退。
+- envelope/body 任一 publish 失败时不触发 JSON 回退；
 - fleet 高负载达到共享 Paho 队列边界后，缓存和客户端内存保持有界，后续状态与控制 publish 的失败行为可观察。
 
 ### 13.3 ROS1Agent 与 Qt 测试
 
 - 同一源 topic 多规则只创建一个 ROS subscriber；
 - route 独立限频，serialize/dict 每次回调最多各执行一次；
-- binary 向多个 target 复用 transfer ID/body，并保留各自 `dst_topic`；
+- binary 向多个 route 复用 ROS serialized bytes，但使用独立 transfer ID 并保留各自 `dst_topic`、`frame_policy`；
+- 完全重复 route 去重，同一目标机器人不同目标 topic 不互相覆盖；
 - serialize 失败自动回退完整 JSON，且告警限频；
-- 未知 ROS 类型、MD5/deserialize 失败不阻断下一条消息；
+- 未知 ROS 类型、缺失或不一致 MD5、deserialize 失败不阻断下一条消息；
 - namespace/preserve、publisher 复用和轻量 `/fleet/incoming` 摘要；
 - 缺失或非法 transport/QoS 的兼容规范化；
 - Qt 保存、下发、拉取和响应回填 transport/QoS；
