@@ -275,7 +275,7 @@ git commit -m "feat: 定义编队二进制消息协议"
 - 修改：`protocol/binary_payloads.py`
 - 测试：`tests/test_binary_payloads.py`
 
-- [ ] **步骤 1：编写关联头失败测试**
+- [x] **步骤 1：编写关联头失败测试**
 
 在 `tests/test_binary_payloads.py` 导入新 helper，新增：
 
@@ -309,7 +309,7 @@ def test_fleet_binary_payload_rejects_invalid_headers(payload):
         decode_fleet_binary_payload(payload)
 ```
 
-- [ ] **步骤 2：运行测试验证 helper 缺失**
+- [x] **步骤 2：运行测试验证 helper 缺失**
 
 运行：
 
@@ -322,7 +322,7 @@ python3 -m pytest \
 
 预期：收集阶段因 `encode_fleet_binary_payload` 和 `decode_fleet_binary_payload` 尚未定义而失败。
 
-- [ ] **步骤 3：实现固定 13 字节关联头**
+- [x] **步骤 3：实现固定 13 字节关联头**
 
 在 `protocol/binary_payloads.py` 增加：
 
@@ -357,13 +357,13 @@ def decode_fleet_binary_payload(payload: bytes) -> Tuple[int, bytes]:
     return transfer_id, payload[_FLEET_BINARY_HEADER.size:]
 ```
 
-- [ ] **步骤 4：运行 binary payload 全量测试**
+- [x] **步骤 4：运行 binary payload 全量测试**
 
 运行：`python3 -m pytest tests/test_binary_payloads.py -q`
 
 预期：全部通过；现有 sensor binary 与 ROS1 serialized helper 不回归。
 
-- [ ] **步骤 5：提交关联头 helper**
+- [x] **步骤 5：提交关联头 helper**
 
 ```bash
 git add protocol/binary_payloads.py tests/test_binary_payloads.py
