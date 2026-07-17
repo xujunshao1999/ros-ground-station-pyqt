@@ -593,7 +593,7 @@ git commit -m "feat: 支持编队二进制发布"
 - 修改：`agent/mock_agent.py`
 - 修改：`tests/test_agent_topic_config.py`
 
-- [ ] **步骤 1：扩展 RecordingAgent binary hook 并编写乱序测试**
+- [x] **步骤 1：扩展 RecordingAgent binary hook 并编写乱序测试**
 
 给 `RecordingAgent` 增加 `fleet_binary_messages`，并覆盖：
 
@@ -700,7 +700,7 @@ def build_recording_agent_and_envelope(
 
 现有 `test_handle_fleet_message_preserves_ros_topic_fields` 继续作为 JSON fleet 回归测试，不删除其字段断言。
 
-- [ ] **步骤 2：编写 TTL、锁外 hook 和资源边界测试**
+- [x] **步骤 2：编写 TTL、锁外 hook 和资源边界测试**
 
 通过 monkeypatch `time.time()` 和 `time.monotonic()` 覆盖：
 
@@ -797,7 +797,7 @@ def test_fleet_binary_evicts_oldest_body_to_keep_budget(monkeypatch):
 
 这些测试的 fixture 必须直接初始化测试所需 cache 常量或正常调用 `RecordingAgent.__init__()`，不能依赖 roscore。
 
-- [ ] **步骤 3：运行测试验证 raw 分流和 cache 尚未实现**
+- [x] **步骤 3：运行测试验证 raw 分流和 cache 尚未实现**
 
 运行：
 
@@ -807,7 +807,7 @@ python3 -m pytest tests/test_agent_topic_config.py -k "fleet_binary or fleet_mes
 
 预期：因 `/bin` 仍被 UTF-8 解码、cache/hook/TTL helper 尚未实现而失败；现有 JSON fleet 测试仍能单独通过。
 
-- [ ] **步骤 4：实现 cache 状态与订阅**
+- [x] **步骤 4：实现 cache 状态与订阅**
 
 在 `BaseAgent.__init__()` 初始化：
 
@@ -839,7 +839,7 @@ FLEET_CLOCK_FUTURE_TOLERANCE_SECONDS = 5.0
 
 在 `_on_connect()` 订阅 `all_robot_to_robot_binary(self.config.robot_id)`。
 
-- [ ] **步骤 5：实现原始 MQTT 分流和主 topic 校验**
+- [x] **步骤 5：实现原始 MQTT 分流和主 topic 校验**
 
 在 `agent/base_agent.py` 导入 `decode_fleet_binary_payload`、`FleetBinaryEnvelopeData`、`parse_robot_topic` 和 binary topic helper。重构 `_on_message()`：先 `parse_robot_topic(msg.topic)`；`to_robot_binary` 直接调用 `_handle_fleet_binary_body(src_id, msg.payload)`；其他消息才 UTF-8 decode。对 `to_robot` 主 topic 校验精确目标、`Message.type`、`Message.src`、`Message.dst`，再根据 `data.binary` 进入 envelope cache 或现有 JSON handler。
 
@@ -857,7 +857,7 @@ def _on_fleet_binary_message(
 
 `MockAgent` 覆盖该 hook，只记录 `src_id`、`msg_type`、`dst_topic` 和 body 长度，不尝试导入 ROS。
 
-- [ ] **步骤 6：实现有限数值 TTL 和有界 cache**
+- [x] **步骤 6：实现有限数值 TTL 和有界 cache**
 
 实现 `_is_fleet_message_fresh(message_ts, ttl, now=None)`，拒绝 bool/非有限值、过期值和超过未来 5 秒的时间。实现 `_cache_fleet_envelope()`、`_cache_fleet_body()`、`_cleanup_fleet_cache_locked()` 与 `_take_fleet_pair_locked()`：
 
@@ -891,7 +891,7 @@ def _handle_fleet_binary_body(self, src_id: str, payload: bytes) -> None:
 
 `_cache_fleet_envelope()` 和 `_cache_fleet_body()` 返回 `Optional[Tuple[Message, FleetBinaryEnvelopeData, bytes]]`。`_dispatch_fleet_binary_pair(None)` 直接返回；有值时在锁外校验 body 长度并二次 TTL，再调用 `_on_fleet_binary_message()`。
 
-- [ ] **步骤 7：运行 BaseAgent 聚焦与回归测试**
+- [x] **步骤 7：运行 BaseAgent 聚焦与回归测试**
 
 运行：
 
@@ -902,7 +902,7 @@ python3 -m pytest tests/test_protocol_topics.py tests/test_protocol_messages.py 
 
 预期：全部通过；JSON fleet、config sync、普通 sensor 发布无回归。
 
-- [ ] **步骤 8：提交 BaseAgent 接收数据面**
+- [x] **步骤 8：提交 BaseAgent 接收数据面**
 
 ```bash
 git add agent/base_agent.py agent/mock_agent.py tests/test_agent_topic_config.py

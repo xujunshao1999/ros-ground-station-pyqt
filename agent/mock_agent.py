@@ -26,6 +26,7 @@ import numpy as np
 from agent.base_agent import BaseAgent, AgentConfig, AgentState
 from agent.rate_limiter import RateLimiter
 from protocol.messages import (
+    FleetBinaryEnvelopeData,
     StatusData,
     Position,
     Velocity,
@@ -564,3 +565,18 @@ class MockAgent(BaseAgent):
         """处理其他机器人发来的 fleet 数据"""
         logger.info(f"[MockAgent] Fleet data from {src_id}: "
                     f"type={data.data_type}, payload={data.payload}")
+
+    def _on_fleet_binary_message(
+        self,
+        src_id: str,
+        envelope: FleetBinaryEnvelopeData,
+        body: bytes,
+    ) -> None:
+        """无 ROS 环境只记录 binary 摘要，不解析 ROS 消息。"""
+        logger.info(
+            "[MockAgent] Fleet binary from %s: type=%s, dst=%s, size=%d",
+            src_id,
+            envelope.msg_type,
+            envelope.dst_topic,
+            len(body),
+        )

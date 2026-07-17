@@ -12,7 +12,13 @@ from agent.base_agent import AgentConfig, AgentState, BaseAgent
 from agent.mock_agent import MockAgent
 from agent.mock_pointcloud2_data import FakePointCloud2Message, build_pointcloud2_dict
 from protocol.binary_payloads import encode_fleet_binary_payload
-from protocol.messages import FleetBinaryEnvelopeData, FleetData, Message, MessageType
+from protocol.messages import (
+    FleetBinaryEnvelopeData,
+    FleetData,
+    Message,
+    MessageFactory,
+    MessageType,
+)
 
 # Agent 订阅配置与重型 snapshot 发布测试。
 
@@ -24,6 +30,7 @@ class RecordingAgent(MockAgent):
         self.unsubscribed: List[str] = []
         self.applied_fleet_rules = []
         self.fleet_messages = []
+        self.fleet_binary_messages = []
         self.saved_count = 0
         self.published = []
 
@@ -38,6 +45,9 @@ class RecordingAgent(MockAgent):
 
     def _on_fleet_message(self, src_id: str, data) -> None:
         self.fleet_messages.append((src_id, data))
+
+    def _on_fleet_binary_message(self, src_id, envelope, body) -> None:
+        self.fleet_binary_messages.append((src_id, envelope, body))
 
     def _save_config(self) -> None:
         self.saved_count += 1
@@ -63,6 +73,414 @@ class RecordingAgent(MockAgent):
 
     def _start_stream_server(self) -> None:
         self._stream_server = object()
+
+
+class FakeMqttMessage:
+    """提供 BaseAgent MQTT 回调所需的最小消息接口。"""
+
+    def __init__(self, topic: str, payload: bytes):
+        self.topic = topic
+        self.payload = payload
+
+
+def build_recording_agent_and_envelope(
+    robot_id: str,
+    src_id: str,
+    transfer_id: int,
+    body_size: int,
+):
+    """构造可直接进入 BaseAgent 配对流程的测试 envelope。"""
+    agent = RecordingAgent(AgentConfig(robot_id=robot_id))
+    message = MessageFactory(src_id).fleet_binary_envelope(
+        FleetBinaryEnvelopeData(
+            transfer_id=transfer_id,
+            payload_size=body_size,
+            md5sum="md5",
+            src_topic="/odom",
+            dst_topic="/fleet/%s/odom" % src_id,
+            msg_type="nav_msgs/Odometry",
+            ttl=0.0,
+        ),
+        dst=robot_id,
+    )
+    return agent, message
+
+
+def test_fleet_binary_pairs_when_body_arrives_before_envelope():
+    """body 先到时应缓存，并在 envelope 到达后完成配对。"""
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    body = encode_fleet_binary_payload(7, b"body")
+    envelope_message = MessageFactory("r1").fleet_binary_envelope(
+        FleetBinaryEnvelopeData(
+            transfer_id=7,
+            payload_size=4,
+            md5sum="md5",
+            src_topic="/odom",
+            dst_topic="/fleet/r1/odom",
+            msg_type="nav_msgs/Odometry",
+            ttl=1.0,
+        ),
+        dst="r2",
+    )
+
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage("robot/r1/to/r2/bin", body),
+    )
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage(
+            "robot/r1/to/r2",
+            envelope_message.to_json().encode("utf-8"),
+        ),
+    )
+
+    assert agent.fleet_binary_messages[0][0] == "r1"
+    assert agent.fleet_binary_messages[0][2] == b"body"
+
+
+def test_fleet_binary_pairs_when_envelope_arrives_before_body():
+    """envelope 先到时应缓存，并在 body 到达后完成配对。"""
+    agent, message = build_recording_agent_and_envelope(
+        robot_id="r2",
+        src_id="r1",
+        transfer_id=12,
+        body_size=4,
+    )
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage(
+            "robot/r1/to/r2",
+            message.to_json().encode("utf-8"),
+        ),
+    )
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage(
+            "robot/r1/to/r2/bin",
+            encode_fleet_binary_payload(12, b"body"),
+        ),
+    )
+
+    assert agent.fleet_binary_messages[0][2] == b"body"
+
+
+def test_fleet_binary_topic_bypasses_utf8_decode():
+    """任意 ROS bytes 不得经过 UTF-8 解码。"""
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    payload = encode_fleet_binary_payload(13, b"\xff\xfe")
+
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage("robot/r1/to/r2/bin", payload),
+    )
+
+    assert agent._fleet_body_cache[("r1", 13)][0] == b"\xff\xfe"
+
+
+def test_fleet_main_topic_rejects_source_mismatch():
+    """主 topic 的源 ID 与 Message.src 不一致时拒绝 envelope。"""
+    agent, message = build_recording_agent_and_envelope(
+        robot_id="r2",
+        src_id="forged",
+        transfer_id=14,
+        body_size=4,
+    )
+
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage(
+            "robot/r1/to/r2",
+            message.to_json().encode("utf-8"),
+        ),
+    )
+
+    assert agent._fleet_envelope_cache == {}
+
+
+def test_fleet_main_topic_rejects_destination_mismatch():
+    """Message.dst 必须同时匹配 topic 目标和本机 ID。"""
+    agent, message = build_recording_agent_and_envelope(
+        robot_id="other",
+        src_id="r1",
+        transfer_id=15,
+        body_size=4,
+    )
+
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage(
+            "robot/r1/to/r2",
+            message.to_json().encode("utf-8"),
+        ),
+    )
+
+    assert agent._fleet_envelope_cache == {}
+
+
+def test_fleet_binary_rechecks_ttl_after_pairing(monkeypatch):
+    """配对完成时已过期的 envelope 不得调用子类 hook。"""
+    clock = {"wall": 100.5, "mono": 10.0}
+    monkeypatch.setattr("agent.base_agent.time.time", lambda: clock["wall"])
+    monkeypatch.setattr("agent.base_agent.time.monotonic", lambda: clock["mono"])
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    message = MessageFactory("r1").fleet_binary_envelope(
+        FleetBinaryEnvelopeData(
+            transfer_id=7,
+            payload_size=4,
+            md5sum="md5",
+            src_topic="/odom",
+            dst_topic="/fleet/r1/odom",
+            msg_type="nav_msgs/Odometry",
+            ttl=1.0,
+        ),
+        dst="r2",
+    )
+    message.ts = 100.0
+
+    agent._handle_fleet_binary_envelope("r1", message)
+    clock.update(wall=101.1, mono=10.6)
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(7, b"body"),
+    )
+
+    assert agent.fleet_binary_messages == []
+    assert agent._fleet_envelope_cache == {}
+    assert agent._fleet_body_cache == {}
+
+
+def test_fleet_message_ttl_rejects_expired_json(monkeypatch):
+    """完整 JSON fleet 消息也必须在子类回调前检查 TTL。"""
+    monkeypatch.setattr("agent.base_agent.time.time", lambda: 101.1)
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    message = Message(
+        ts=100.0,
+        src="r1",
+        dst="r2",
+        type=MessageType.FLEET_DATA,
+        data={"data_type": "custom", "payload": {}, "ttl": 1.0},
+    )
+
+    agent._handle_fleet_message(message)
+
+    assert agent.fleet_messages == []
+
+
+def test_fleet_message_ttl_defaults_ros_topic_to_one_second(monkeypatch):
+    """缺少 TTL 的 ROS topic 使用固定 1 秒，而不是旧 custom 默认值。"""
+    monkeypatch.setattr("agent.base_agent.time.time", lambda: 101.1)
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    message = Message(
+        ts=100.0,
+        src="r1",
+        dst="r2",
+        type=MessageType.FLEET_DATA,
+        data={"data_type": "ros_topic", "payload": {}},
+    )
+
+    agent._handle_fleet_message(message)
+
+    assert agent.fleet_messages == []
+
+
+def test_fleet_message_ttl_passes_resolved_default_to_json_hook(monkeypatch):
+    """TTL 校验值与传给子类的 FleetData.ttl 必须保持一致。"""
+    monkeypatch.setattr("agent.base_agent.time.time", lambda: 100.5)
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    message = Message(
+        ts=100.0,
+        src="r1",
+        dst="r2",
+        type=MessageType.FLEET_DATA,
+        data={"data_type": "ros_topic", "payload": {}},
+    )
+
+    agent._handle_fleet_message(message)
+
+    assert agent.fleet_messages[0][1].ttl == 1.0
+
+
+@pytest.mark.parametrize("message_ts,ttl", [
+    (True, 1.0),
+    (100.0, True),
+    (float("nan"), 1.0),
+    (100.0, float("inf")),
+])
+def test_fleet_message_ttl_rejects_non_finite_or_bool_values(message_ts, ttl):
+    """TTL 判断拒绝 bool、NaN 和无穷值。"""
+    assert BaseAgent._is_fleet_message_fresh(
+        message_ts,
+        ttl,
+        now=100.0,
+    ) is False
+
+
+def test_fleet_message_ttl_rejects_clock_too_far_in_future():
+    """超过容忍范围的未来时间戳视为时钟异常。"""
+    assert BaseAgent._is_fleet_message_fresh(105.1, 0.0, now=100.0) is False
+    assert BaseAgent._is_fleet_message_fresh(105.0, 0.0, now=100.0) is True
+
+
+def test_fleet_binary_hook_runs_without_cache_lock():
+    """子类 hook 必须在缓存锁外执行，避免慢 ROS 操作阻塞接收。"""
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    lock_states = []
+
+    def record_lock_state(src_id, envelope, body):
+        acquired = agent._fleet_cache_lock.acquire(blocking=False)
+        lock_states.append(acquired)
+        if acquired:
+            agent._fleet_cache_lock.release()
+
+    agent._on_fleet_binary_message = record_lock_state
+    message = MessageFactory("r1").fleet_binary_envelope(
+        FleetBinaryEnvelopeData(
+            transfer_id=8,
+            payload_size=4,
+            md5sum="md5",
+            src_topic="/odom",
+            dst_topic="/fleet/r1/odom",
+            msg_type="nav_msgs/Odometry",
+            ttl=0.0,
+        ),
+        dst="r2",
+    )
+
+    agent._handle_fleet_binary_envelope("r1", message)
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(8, b"body"),
+    )
+
+    assert lock_states == [True]
+
+
+def test_fleet_binary_rejects_body_over_limit(monkeypatch):
+    """单个 body 超过上限时不得占用缓存。"""
+    monkeypatch.setattr("agent.base_agent.FLEET_BODY_MAX_BYTES", 8)
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(9, b"123456789"),
+    )
+
+    assert agent._fleet_body_cache == {}
+    assert agent._fleet_body_cache_bytes == 0
+
+
+def test_fleet_binary_rejects_envelope_body_size_over_limit(monkeypatch):
+    """声明 body 超限的 envelope 不得进入缓存。"""
+    monkeypatch.setattr("agent.base_agent.FLEET_BODY_MAX_BYTES", 8)
+    agent, message = build_recording_agent_and_envelope(
+        robot_id="r2",
+        src_id="r1",
+        transfer_id=9,
+        body_size=9,
+    )
+
+    agent._handle_fleet_binary_envelope("r1", message)
+
+    assert agent._fleet_envelope_cache == {}
+
+
+def test_fleet_binary_evicts_oldest_body_to_keep_budget(monkeypatch):
+    """body 总字节数超限时移除最早写入项。"""
+    monkeypatch.setattr("agent.base_agent.FLEET_BODY_MAX_BYTES", 8)
+    monkeypatch.setattr("agent.base_agent.FLEET_BODY_CACHE_MAX_BYTES", 8)
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(10, b"123456"),
+    )
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(11, b"abcdef"),
+    )
+
+    assert ("r1", 10) not in agent._fleet_body_cache
+    assert agent._fleet_body_cache[("r1", 11)][0] == b"abcdef"
+    assert agent._fleet_body_cache_bytes == 6
+
+
+def test_fleet_binary_evicts_oldest_body_to_keep_entry_limit(monkeypatch):
+    """body 条目数超限时移除最早写入项。"""
+    clock = {"mono": 1.0}
+    monkeypatch.setattr("agent.base_agent.FLEET_CACHE_MAX_ENTRIES", 1)
+    monkeypatch.setattr("agent.base_agent.time.monotonic", lambda: clock["mono"])
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(20, b"a"),
+    )
+    clock["mono"] = 1.1
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(21, b"b"),
+    )
+
+    assert ("r1", 20) not in agent._fleet_body_cache
+    assert agent._fleet_body_cache[("r1", 21)][0] == b"b"
+    assert agent._fleet_body_cache_bytes == 1
+
+
+def test_fleet_binary_cleanup_expires_unpaired_entries(monkeypatch):
+    """公开清理入口按 monotonic 时间移除缺少另一侧的条目。"""
+    clock = {"mono": 10.0}
+    monkeypatch.setattr("agent.base_agent.time.monotonic", lambda: clock["mono"])
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(30, b"body"),
+    )
+
+    clock["mono"] = 12.1
+    agent._cleanup_fleet_cache()
+
+    assert agent._fleet_body_cache == {}
+    assert agent._fleet_body_cache_bytes == 0
+
+
+def test_fleet_binary_rejects_payload_size_mismatch():
+    """声明大小与实际 body 不符时弹出配对但不调用 hook。"""
+    agent, message = build_recording_agent_and_envelope(
+        robot_id="r2",
+        src_id="r1",
+        transfer_id=40,
+        body_size=5,
+    )
+
+    agent._handle_fleet_binary_envelope("r1", message)
+    agent._handle_fleet_binary_body(
+        "r1",
+        encode_fleet_binary_payload(40, b"body"),
+    )
+
+    assert agent.fleet_binary_messages == []
+    assert agent._fleet_envelope_cache == {}
+    assert agent._fleet_body_cache == {}
+
+
+def test_on_connect_subscribes_fleet_binary_topic():
+    """MQTT 单层通配符不会覆盖 /bin，因此必须显式订阅。"""
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    agent._load_subscriptions_from_config = MagicMock()
+    agent._start_status_loop = MagicMock()
+    client = MagicMock()
+
+    agent._on_connect(client, None, None, 0, None)
+
+    client.subscribe.assert_any_call("robot/+/to/r2/bin", qos=1)
 
 
 def test_normalize_fleet_rules_preserves_qos_and_deduplicates_targets():
