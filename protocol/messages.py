@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -225,6 +226,76 @@ class FleetData:
 
 
 @dataclass
+class FleetBinaryEnvelopeData:
+    """Agent 间 ROS1 二进制主体的路由与校验信息。"""
+    data_type: str = "ros_topic"
+    binary: bool = True
+    transport: str = TransportType.MQTT_BINARY
+    encoding: str = "ros1_serialized_v1"
+    payload_format: str = "ros1_serialized"
+    transfer_id: int = 0
+    payload_size: int = 0
+    md5sum: str = ""
+    src_topic: str = ""
+    dst_topic: str = ""
+    msg_type: str = ""
+    frame_policy: str = "preserve"
+    stamp: float = 0.0
+    ttl: float = 1.0
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FleetBinaryEnvelopeData":
+        """严格解析 envelope，避免无效标识进入后续配对缓存。"""
+        transfer_id = data.get("transfer_id")
+        payload_size = data.get("payload_size")
+        md5sum = data.get("md5sum")
+        try:
+            ttl = float(data.get("ttl", 1.0))
+            stamp = float(data.get("stamp", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("fleet envelope times must be numeric") from exc
+
+        # bool 是 int 的子类，必须显式拒绝以保持协议类型严格。
+        if isinstance(transfer_id, bool) or not isinstance(transfer_id, int):
+            raise ValueError("transfer_id must be an integer")
+        if not 0 <= transfer_id < (1 << 64):
+            raise ValueError("transfer_id out of uint64 range")
+        if isinstance(payload_size, bool) or not isinstance(payload_size, int):
+            raise ValueError("payload_size must be an integer")
+        if payload_size < 0:
+            raise ValueError("payload_size must be non-negative")
+        if not math.isfinite(ttl) or not math.isfinite(stamp):
+            raise ValueError("fleet envelope times must be finite")
+        if not isinstance(md5sum, str) or not md5sum:
+            raise ValueError("md5sum is required")
+
+        # 固定标记用于区分完整 JSON FleetData 与二进制 envelope。
+        expected_markers = {
+            "data_type": "ros_topic",
+            "transport": "mqtt_binary",
+            "encoding": "ros1_serialized_v1",
+            "payload_format": "ros1_serialized",
+        }
+        for field_name, expected in expected_markers.items():
+            if data.get(field_name) != expected:
+                raise ValueError("invalid fleet binary %s" % field_name)
+        if data.get("binary") is not True:
+            raise ValueError("binary fleet envelope marker is required")
+
+        return cls(
+            transfer_id=transfer_id,
+            payload_size=payload_size,
+            md5sum=md5sum,
+            src_topic=str(data.get("src_topic", "")),
+            dst_topic=str(data.get("dst_topic", "")),
+            msg_type=str(data.get("msg_type", "")),
+            frame_policy=str(data.get("frame_policy", "preserve")),
+            stamp=stamp,
+            ttl=ttl,
+        )
+
+
+@dataclass
 class ConfigSyncData:
     """配置同步数据 - 地面站下发到 Agent"""
     subscriptions: List[Dict[str, Any]] = field(default_factory=list)
@@ -321,7 +392,7 @@ class MessageFactory:
         if isinstance(data, (StatusData, CmdData, CmdAckData, EventData,
                              DiscoverData, DiscoverResponseData,
                              TopicRequestData, TopicResponseData,
-                             SensorMetaData, FleetData,
+                             SensorMetaData, FleetData, FleetBinaryEnvelopeData,
                              ConfigSyncData, ConfigResponseData)):
             data = asdict(data)
         return Message(
@@ -372,6 +443,14 @@ class MessageFactory:
     def fleet_data(self, fleet_data: FleetData, dst: str = "") -> Message:
         """创建机器人间通信消息"""
         return self._make(MessageType.FLEET_DATA, fleet_data, dst=dst)
+
+    def fleet_binary_envelope(
+        self,
+        envelope: FleetBinaryEnvelopeData,
+        dst: str,
+    ) -> Message:
+        """创建 Agent 间 ROS1 二进制传输 envelope。"""
+        return self._make(MessageType.FLEET_DATA, envelope, dst=dst)
 
     def config_sync(self, config_data: ConfigSyncData, dst: str = "") -> Message:
         """创建配置同步消息"""

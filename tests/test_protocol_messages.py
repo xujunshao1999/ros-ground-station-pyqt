@@ -11,6 +11,7 @@ from protocol.messages import (
     CmdData,
     DiscoverResponseData,
     EventData,
+    FleetBinaryEnvelopeData,
     FleetData,
     Message,
     MessageType,
@@ -23,6 +24,67 @@ from protocol.messages import (
 )
 
 # 协议消息层测试 - Message 序列化、反序列化、MessageFactory。
+
+
+def test_fleet_binary_envelope_round_trip(factory):
+    """二进制编队 envelope 应通过统一 Message 完整往返。"""
+    envelope = FleetBinaryEnvelopeData(
+        transfer_id=0x1234567800000001,
+        payload_size=736,
+        md5sum="cd5e73d190d741a2f92e81eda573aca7",
+        src_topic="/odom",
+        dst_topic="/fleet/turtlebot_001/odom",
+        msg_type="nav_msgs/Odometry",
+        frame_policy="namespace",
+        stamp=123.5,
+        ttl=1.0,
+    )
+
+    message = factory.fleet_binary_envelope(envelope, dst="turtlebot_002")
+    parsed = Message.from_json(message.to_json())
+    restored = FleetBinaryEnvelopeData.from_dict(parsed.data)
+
+    assert parsed.type == MessageType.FLEET_DATA
+    assert parsed.dst == "turtlebot_002"
+    assert restored.binary is True
+    assert restored.transport == "mqtt_binary"
+    assert restored.encoding == "ros1_serialized_v1"
+    assert restored.transfer_id == 0x1234567800000001
+    assert restored.md5sum == envelope.md5sum
+
+
+@pytest.mark.parametrize("field,value", [
+    ("transfer_id", True),
+    ("transfer_id", -1),
+    ("transfer_id", 1 << 64),
+    ("payload_size", -1),
+    ("md5sum", ""),
+    ("md5sum", None),
+    ("encoding", "unknown"),
+    ("ttl", float("nan")),
+])
+def test_fleet_binary_envelope_rejects_invalid_fields(field, value):
+    """严格拒绝无法安全配对或校验的 envelope 字段。"""
+    data = {
+        "data_type": "ros_topic",
+        "binary": True,
+        "transport": "mqtt_binary",
+        "encoding": "ros1_serialized_v1",
+        "payload_format": "ros1_serialized",
+        "transfer_id": 1,
+        "payload_size": 4,
+        "md5sum": "md5",
+        "src_topic": "/odom",
+        "dst_topic": "/fleet/r1/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "frame_policy": "namespace",
+        "stamp": 1.0,
+        "ttl": 1.0,
+    }
+    data[field] = value
+
+    with pytest.raises(ValueError):
+        FleetBinaryEnvelopeData.from_dict(data)
 
 
 class TestMessage:

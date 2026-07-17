@@ -61,7 +61,7 @@
 - 测试：`tests/test_protocol_messages.py`
 - 测试：`tests/test_protocol_topics.py`
 
-- [ ] **步骤 1：编写 envelope 和 topic 失败测试**
+- [x] **步骤 1：编写 envelope 和 topic 失败测试**
 
 在 `tests/test_protocol_messages.py` 导入 `FleetBinaryEnvelopeData`，新增：
 
@@ -143,7 +143,7 @@ def test_parse_robot_to_robot_binary_requires_exact_segments():
     assert parse_robot_topic("robot/r1/to/r2/meta/extra") is None
 ```
 
-- [ ] **步骤 2：运行测试验证目标符号缺失**
+- [x] **步骤 2：运行测试验证目标符号缺失**
 
 运行：
 
@@ -157,7 +157,7 @@ python3 -m pytest \
 
 预期：收集阶段因 `FleetBinaryEnvelopeData`、`robot_to_robot_binary` 或 `all_robot_to_robot_binary` 尚未定义而失败；不应因 pytest fixture 或 ROS import 失败。
 
-- [ ] **步骤 3：实现结构化 envelope**
+- [x] **步骤 3：实现结构化 envelope**
 
 在 `protocol/messages.py` 增加 `math` import 和 dataclass：
 
@@ -237,7 +237,7 @@ def fleet_binary_envelope(
     return self._make(MessageType.FLEET_DATA, envelope, dst=dst)
 ```
 
-- [ ] **步骤 4：实现精确 binary topic**
+- [x] **步骤 4：实现精确 binary topic**
 
 在 `protocol/topics.py` 增加：
 
@@ -252,7 +252,7 @@ def all_robot_to_robot_binary(dst_id: str) -> str:
 
 将 `_TO` 解析改为只接受 4 段主 topic 或 5 段且末段为 `bin`/`meta` 的 topic，其他段数返回 `None`。将 `to_robot_binary` 加入 parser 类型测试集合。
 
-- [ ] **步骤 5：运行协议模型和 topic 测试**
+- [x] **步骤 5：运行协议模型和 topic 测试**
 
 运行：
 
@@ -262,7 +262,7 @@ python3 -m pytest tests/test_protocol_messages.py tests/test_protocol_topics.py 
 
 预期：全部通过，现有 JSON fleet 和 `/meta` topic 测试不回归。
 
-- [ ] **步骤 6：提交协议模型与 topic**
+- [x] **步骤 6：提交协议模型与 topic**
 
 ```bash
 git add protocol/messages.py protocol/topics.py tests/test_protocol_messages.py tests/test_protocol_topics.py
