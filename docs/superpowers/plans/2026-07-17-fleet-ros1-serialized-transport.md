@@ -50,7 +50,7 @@
   - 覆盖源 route 聚合、一次转换、回退、目标 deserialize、MD5 和 frame。
 - 修改 `tests/test_panels.py`
   - 覆盖 fleet transport/QoS 的 Qt 逻辑和控件。
-- 创建或修改 `docs/work-log-2026-07-17.md`
+- 创建或修改 `docs/work-log-2026-07-20.md`
   - 仅记录实际执行的测试、ROS/Docker/MQTT 现象和未验证风险。
 
 ### 任务 1：定义 Agent 间 Binary Envelope 与 MQTT Topic
@@ -1682,10 +1682,10 @@ git commit -m "config: 更新编队二进制示例"
 ### 任务 9：全量验证、双机器人验收与工作日志
 
 **文件：**
-- 创建或修改：`docs/work-log-2026-07-17.md`
+- 创建或修改：`docs/work-log-2026-07-20.md`
 - 验证：`protocol/`、`agent/`、`qt_frontend/`、`tests/`
 
-- [ ] **步骤 1：运行聚焦测试**
+- [x] **步骤 1：运行聚焦测试**
 
 ```bash
 python3 -m pytest tests/test_protocol_messages.py tests/test_protocol_topics.py tests/test_binary_payloads.py -v
@@ -1695,7 +1695,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -v
 
 预期：全部通过，0 failed。
 
-- [ ] **步骤 2：运行完整 pytest 和 ruff**
+- [x] **步骤 2：运行完整 pytest 和 ruff**
 
 ```bash
 python3 -m pytest tests/ -v
@@ -1704,7 +1704,7 @@ ruff check protocol agent qt_frontend tests
 
 预期：全部通过，ruff 无错误。若完整套件存在任务前即可复现的环境失败，保存原始命令和错误，不能把它描述为本功能通过。
 
-- [ ] **步骤 3：验证无 ROS 的 Mock Agent 启动边界**
+- [x] **步骤 3：验证无 ROS 的 Mock Agent 启动边界**
 
 启动本地 Broker 后运行：
 
@@ -1714,7 +1714,7 @@ timeout 8 python3 -m agent.main --agent-type mock --robot-id fleet_mock_001 --lo
 
 预期：Agent 能连接、订阅 `robot/+/to/fleet_mock_001/bin`，超时退出前无 abstract method、UTF-8 binary handler 或配置解析异常。若本机 Broker 未启动，记录未验证，不把连接失败归因于实现。
 
-- [ ] **步骤 4：准备可恢复的双 Turtlebot 运行态配置**
+- [x] **步骤 4：准备可恢复的双 Turtlebot 运行态配置**
 
 仅在 Docker、ROS Noetic、显示环境和 Broker 可用时执行：
 
@@ -1727,7 +1727,7 @@ docker compose ps robot-turtlebot-001 robot-turtlebot-002
 
 预期：两个容器 running。通过 Qt 编队面板向 `turtlebot_001` 下发唯一启用规则：`/odom`、`nav_msgs/Odometry`、目标 `turtlebot_002`、`/fleet/turtlebot_001/odom`、10 Hz、`mqtt_binary`、QoS0、namespace。下发前后保留 `/tmp` 备份，测试结束必须恢复。
 
-- [ ] **步骤 5：测量 Agent 间 MQTT 与目标机器人 ROS**
+- [x] **步骤 5：测量 Agent 间 MQTT 与目标机器人 ROS**
 
 分别执行：
 
@@ -1758,7 +1758,7 @@ docker compose exec -T robot-turtlebot-002 bash -lc \
 - 目标 topic 60 秒平均频率至少 9 Hz；
 - 目标 header frame 带 `turtlebot_001/` 前缀。
 
-- [ ] **步骤 6：恢复配置并记录运行环境限制**
+- [x] **步骤 6：恢复配置并记录运行环境限制**
 
 ```bash
 cp /tmp/turtlebot_001.yaml.before-fleet-test agent/configs/turtlebot_001.yaml
@@ -1771,11 +1771,11 @@ git diff -- agent/configs/turtlebot_001.yaml agent/configs/turtlebot_002.yaml
 
 如果 Docker/ROS/MQTT 任一条件不满足，不执行会覆盖配置的步骤 4-6；在工作日志明确写出未验证的频率、延迟、Broker 字节数、系统时钟和真实 ROS MD5 风险。
 
-- [ ] **步骤 7：按实际结果编写工作日志**
+- [x] **步骤 7：按实际结果编写工作日志**
 
-在 `docs/work-log-2026-07-17.md` 使用 `# 工作日志 — 2026年7月17日`，按“今日概览、Agent 间编队二进制链路、性能与可靠性处理、测试与验证、当前状态”组织。首次解释 envelope、binary body、transfer ID、ROS1 serialized、TTL 和自动回退；列出实际执行命令和结果，不写未执行命令为已通过。
+在 `docs/work-log-2026-07-20.md` 使用 `# 工作日志 — 2026年7月20日`，按“今日概览、Agent 间编队二进制链路、性能与可靠性处理、测试与验证、当前状态”组织。首次解释 envelope、binary body、transfer ID、ROS1 serialized、TTL 和自动回退；列出实际执行命令和结果，不写未执行命令为已通过。
 
-- [ ] **步骤 8：最终 diff 和提交检查**
+- [x] **步骤 8：最终 diff 和提交检查**
 
 ```bash
 git status --short
@@ -1786,7 +1786,7 @@ git diff --stat
 确认不包含 `.agents/`、`.codex/`、用户无关配置或运行态临时改动后提交：
 
 ```bash
-git add docs/work-log-2026-07-17.md
+git add docs/work-log-2026-07-20.md
 git commit -m "docs: 记录编队二进制链路验证"
 ```
 
