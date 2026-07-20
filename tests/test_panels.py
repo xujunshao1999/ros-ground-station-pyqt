@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -856,6 +857,22 @@ class TestEventPanel:
 # FleetCommPanel validator
 # ------------------------------------------------------------------
 class TestFleetCommPanel:
+    def test_transmit_config_fleet_examples_use_expected_binary_qos(self):
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "qt_frontend/config/transmit_config.yaml"
+        )
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        rules = config["fleet_rules"]
+
+        assert [
+            (rule["transport"], rule["qos"], rule["enabled"])
+            for rule in rules
+        ] == [
+            ("mqtt_binary", 0, False),
+            ("mqtt_binary", 1, False),
+        ]
+
     def test_fleet_rule_protocol_dict_preserves_transport_and_qos(self):
         rule = {
             "enabled": True,

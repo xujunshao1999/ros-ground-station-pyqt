@@ -137,7 +137,8 @@ fleet_rules:
   dst_robot: turtlebot_002
   dst_topic: /fleet/turtlebot_001/odom
   freq_limit: 1.0
-  transport: mqtt_json
+  transport: mqtt_binary
+  qos: 0
   frame_policy: namespace
 - enabled: false
   src_robot: turtlebot_002
@@ -146,5 +147,6 @@ fleet_rules:
   dst_robot: turtlebot_001
   dst_topic: /fleet/turtlebot_002/move_base_simple/goal
   freq_limit: 1.0
-  transport: mqtt_json
+  transport: mqtt_binary
+  qos: 1
   frame_policy: namespace

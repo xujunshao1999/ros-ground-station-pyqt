@@ -1577,7 +1577,7 @@ git commit -m "feat: 配置编队传输方式和QoS"
 - 测试：`tests/test_agent_topic_config.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：检查并记录配置文件已有差异**
+- [x] **步骤 1：检查并记录配置文件已有差异**
 
 运行：
 
@@ -1588,7 +1588,7 @@ git diff -- agent/configs/default.yaml agent/configs/turtlebot_001.yaml agent/co
 
 预期：允许存在用户改动。后续只修改 `fleet_rules` 示例和紧邻注释；不得格式化、覆盖或还原 subscriptions、Husky 配置及其他运行态值。
 
-- [ ] **步骤 2：编写 YAML 示例断言**
+- [x] **步骤 2：编写 YAML 示例断言**
 
 在 `tests/test_agent_topic_config.py` 增加 `Path` import 和完整 YAML 加载测试：
 
@@ -1626,7 +1626,7 @@ def test_transmit_config_fleet_examples_use_expected_binary_qos(self):
     ]
 ```
 
-- [ ] **步骤 3：运行测试验证示例仍为 JSON**
+- [x] **步骤 3：运行测试验证示例仍为 JSON**
 
 运行：
 
@@ -1637,7 +1637,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -k fleet_exampl
 
 预期：因当前示例仍为 `mqtt_json` 且缺少 fleet QoS 而失败，不应因 YAML 解析或用户已有 subscriptions 改动失败。
 
-- [ ] **步骤 4：最小更新 fleet 示例**
+- [x] **步骤 4：最小更新 fleet 示例**
 
 - `turtlebot_001:/odom` 示例改为 `mqtt_binary + qos: 0`；
 - `turtlebot_002:/move_base_simple/goal` 示例改为 `mqtt_binary + qos: 1`；
@@ -1645,7 +1645,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -k fleet_exampl
 - `transmit_config.yaml` 仅更新对应两条 fleet rule；
 - 所有示例继续 `enabled: false`，避免启动容器即产生跨机器人流量。
 
-- [ ] **步骤 5：运行配置与面板测试**
+- [x] **步骤 5：运行配置与面板测试**
 
 运行：
 
@@ -1656,7 +1656,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 6：复查没有覆盖用户配置**
+- [x] **步骤 6：复查没有覆盖用户配置**
 
 运行：
 
@@ -1666,7 +1666,7 @@ git diff -- agent/configs/default.yaml agent/configs/turtlebot_001.yaml agent/co
 
 预期：diff 只包含目标 fleet 段及注释。若执行前已有同文件改动，逐行确认它们仍保留。
 
-- [ ] **步骤 7：提交示例配置**
+- [x] **步骤 7：提交示例配置**
 
 先根据步骤 1 的记录区分干净文件与执行前已修改文件。干净文件可直接暂存；执行前已修改的文件只有在 `git diff --cached` 能确认不包含用户既有改动时才可暂存。无法可靠拆分时保留在工作区，并在最终回复列为“包含计划内 fleet 示例但未提交的用户配置文件”，不得把整文件加入提交。
 

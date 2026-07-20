@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import List, Tuple
 from unittest.mock import MagicMock
 
@@ -19,6 +20,26 @@ from protocol.messages import (
     MessageFactory,
     MessageType,
 )
+
+
+def test_turtlebot_fleet_examples_use_expected_binary_qos():
+    """从完整 YAML 读取禁用示例，避免只检查字符串而遗漏层级错误。"""
+    root = Path(__file__).resolve().parents[1]
+    turtlebot_001 = yaml.safe_load(
+        (root / "agent/configs/turtlebot_001.yaml").read_text(encoding="utf-8")
+    )
+    turtlebot_002 = yaml.safe_load(
+        (root / "agent/configs/turtlebot_002.yaml").read_text(encoding="utf-8")
+    )
+
+    odom_rule = turtlebot_001["fleet_rules"][0]
+    goal_rule = turtlebot_002["fleet_rules"][0]
+    assert odom_rule["enabled"] is False
+    assert odom_rule["transport"] == "mqtt_binary"
+    assert odom_rule["qos"] == 0
+    assert goal_rule["enabled"] is False
+    assert goal_rule["transport"] == "mqtt_binary"
+    assert goal_rule["qos"] == 1
 
 # Agent 订阅配置与重型 snapshot 发布测试。
 
