@@ -688,7 +688,16 @@ class ROS1Agent(BaseAgent):
                     and now_monotonic - route.last_sent + 1e-12 < min_interval
                 ):
                     continue
-                route.last_sent = now_monotonic
+                if route.last_sent > 0 and min_interval > 0:
+                    # 按理论周期推进基准，避免回调抖动将 10 Hz 量化成 8 Hz。
+                    elapsed = now_monotonic - route.last_sent
+                    elapsed_periods = max(
+                        1,
+                        int((elapsed + 1e-12) / min_interval),
+                    )
+                    route.last_sent += elapsed_periods * min_interval
+                else:
+                    route.last_sent = now_monotonic
                 due_routes.append(route)
             if not due_routes:
                 return

@@ -432,6 +432,56 @@ def test_fleet_routes_use_independent_frequency_limits(monkeypatch):
     assert targets.count("r3") == 3
 
 
+def test_fleet_frequency_limit_does_not_accumulate_callback_phase_drift(
+    monkeypatch,
+):
+    """24 Hz 输入限制到 10 Hz 时，不应量化成每三帧一次的 8 Hz。"""
+    times = iter(100.0 + index / 24.0 for index in range(240))
+    monkeypatch.setattr("agent.ros1_agent.time.monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        MagicMock(return_value={"header": {"frame_id": "odom"}}),
+    )
+    agent = object.__new__(ROS1Agent)
+    agent.send_to_robot = MagicMock(return_value=True)
+    callback = ROS1Agent._make_fleet_forward_callback(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        [_FleetRoute("r2", "/odom", 10.0, "mqtt_json", 1, "preserve")],
+    )
+
+    for _index in range(240):
+        callback(object())
+
+    assert 99 <= agent.send_to_robot.call_count <= 101
+
+
+def test_fleet_frequency_limit_skips_missed_periods_without_catch_up(
+    monkeypatch,
+):
+    """长时间停顿后只发送当前帧，不按源频率追赶已错过的周期。"""
+    times = iter([100.0, 110.0, 110.01, 110.02, 110.1])
+    monkeypatch.setattr("agent.ros1_agent.time.monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        MagicMock(return_value={"header": {"frame_id": "odom"}}),
+    )
+    agent = object.__new__(ROS1Agent)
+    agent.send_to_robot = MagicMock(return_value=True)
+    callback = ROS1Agent._make_fleet_forward_callback(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        [_FleetRoute("r2", "/odom", 10.0, "mqtt_json", 1, "preserve")],
+    )
+
+    for _index in range(5):
+        callback(object())
+
+    assert agent.send_to_robot.call_count == 3
+
+
 def test_fleet_binary_serialize_failure_falls_back_to_json_once(monkeypatch):
     """serialize 失败时只转一次字典，并为 binary route 发送完整 JSON。"""
     ros_msg_to_dict = MagicMock(return_value={"header": {"frame_id": "odom"}})
