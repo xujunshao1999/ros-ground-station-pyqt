@@ -50,7 +50,7 @@
   - 覆盖源 route 聚合、一次转换、回退、目标 deserialize、MD5 和 frame。
 - 修改 `tests/test_panels.py`
   - 覆盖 fleet transport/QoS 的 Qt 逻辑和控件。
-- 创建或修改 `docs/work-log-2026-07-17.md`
+- 创建或修改 `docs/work-log-2026-07-20.md`
   - 仅记录实际执行的测试、ROS/Docker/MQTT 现象和未验证风险。
 
 ### 任务 1：定义 Agent 间 Binary Envelope 与 MQTT Topic
@@ -61,7 +61,7 @@
 - 测试：`tests/test_protocol_messages.py`
 - 测试：`tests/test_protocol_topics.py`
 
-- [ ] **步骤 1：编写 envelope 和 topic 失败测试**
+- [x] **步骤 1：编写 envelope 和 topic 失败测试**
 
 在 `tests/test_protocol_messages.py` 导入 `FleetBinaryEnvelopeData`，新增：
 
@@ -143,7 +143,7 @@ def test_parse_robot_to_robot_binary_requires_exact_segments():
     assert parse_robot_topic("robot/r1/to/r2/meta/extra") is None
 ```
 
-- [ ] **步骤 2：运行测试验证目标符号缺失**
+- [x] **步骤 2：运行测试验证目标符号缺失**
 
 运行：
 
@@ -157,7 +157,7 @@ python3 -m pytest \
 
 预期：收集阶段因 `FleetBinaryEnvelopeData`、`robot_to_robot_binary` 或 `all_robot_to_robot_binary` 尚未定义而失败；不应因 pytest fixture 或 ROS import 失败。
 
-- [ ] **步骤 3：实现结构化 envelope**
+- [x] **步骤 3：实现结构化 envelope**
 
 在 `protocol/messages.py` 增加 `math` import 和 dataclass：
 
@@ -237,7 +237,7 @@ def fleet_binary_envelope(
     return self._make(MessageType.FLEET_DATA, envelope, dst=dst)
 ```
 
-- [ ] **步骤 4：实现精确 binary topic**
+- [x] **步骤 4：实现精确 binary topic**
 
 在 `protocol/topics.py` 增加：
 
@@ -252,7 +252,7 @@ def all_robot_to_robot_binary(dst_id: str) -> str:
 
 将 `_TO` 解析改为只接受 4 段主 topic 或 5 段且末段为 `bin`/`meta` 的 topic，其他段数返回 `None`。将 `to_robot_binary` 加入 parser 类型测试集合。
 
-- [ ] **步骤 5：运行协议模型和 topic 测试**
+- [x] **步骤 5：运行协议模型和 topic 测试**
 
 运行：
 
@@ -262,7 +262,7 @@ python3 -m pytest tests/test_protocol_messages.py tests/test_protocol_topics.py 
 
 预期：全部通过，现有 JSON fleet 和 `/meta` topic 测试不回归。
 
-- [ ] **步骤 6：提交协议模型与 topic**
+- [x] **步骤 6：提交协议模型与 topic**
 
 ```bash
 git add protocol/messages.py protocol/topics.py tests/test_protocol_messages.py tests/test_protocol_topics.py
@@ -275,7 +275,7 @@ git commit -m "feat: 定义编队二进制消息协议"
 - 修改：`protocol/binary_payloads.py`
 - 测试：`tests/test_binary_payloads.py`
 
-- [ ] **步骤 1：编写关联头失败测试**
+- [x] **步骤 1：编写关联头失败测试**
 
 在 `tests/test_binary_payloads.py` 导入新 helper，新增：
 
@@ -309,7 +309,7 @@ def test_fleet_binary_payload_rejects_invalid_headers(payload):
         decode_fleet_binary_payload(payload)
 ```
 
-- [ ] **步骤 2：运行测试验证 helper 缺失**
+- [x] **步骤 2：运行测试验证 helper 缺失**
 
 运行：
 
@@ -322,7 +322,7 @@ python3 -m pytest \
 
 预期：收集阶段因 `encode_fleet_binary_payload` 和 `decode_fleet_binary_payload` 尚未定义而失败。
 
-- [ ] **步骤 3：实现固定 13 字节关联头**
+- [x] **步骤 3：实现固定 13 字节关联头**
 
 在 `protocol/binary_payloads.py` 增加：
 
@@ -357,13 +357,13 @@ def decode_fleet_binary_payload(payload: bytes) -> Tuple[int, bytes]:
     return transfer_id, payload[_FLEET_BINARY_HEADER.size:]
 ```
 
-- [ ] **步骤 4：运行 binary payload 全量测试**
+- [x] **步骤 4：运行 binary payload 全量测试**
 
 运行：`python3 -m pytest tests/test_binary_payloads.py -q`
 
 预期：全部通过；现有 sensor binary 与 ROS1 serialized helper 不回归。
 
-- [ ] **步骤 5：提交关联头 helper**
+- [x] **步骤 5：提交关联头 helper**
 
 ```bash
 git add protocol/binary_payloads.py tests/test_binary_payloads.py
@@ -376,7 +376,7 @@ git commit -m "feat: 增加编队二进制关联头"
 - 修改：`agent/base_agent.py`
 - 修改：`tests/test_agent_topic_config.py`
 
-- [ ] **步骤 1：更新 RecordingAgent 发布夹具并编写失败测试**
+- [x] **步骤 1：更新 RecordingAgent 发布夹具并编写失败测试**
 
 先将 `RecordingAgent._mqtt_publish()` 返回类型改为 `bool`，末尾 `return True`，避免后续测试因旧 fixture 返回 `None` 把成功发布误判为失败。
 
@@ -441,7 +441,7 @@ def test_send_fleet_binary_publishes_envelope_and_body_with_route_qos():
     assert agent.published[1] == ("robot/r1/to/r2/bin", body, 0, False)
 ```
 
-- [ ] **步骤 2：运行测试验证缺失行为**
+- [x] **步骤 2：运行测试验证缺失行为**
 
 运行：
 
@@ -454,7 +454,7 @@ python3 -m pytest \
 
 预期：因 fleet 规则尚未保留 QoS、transfer ID 和 binary 发送方法尚未实现而失败。
 
-- [ ] **步骤 3：实现规范化和 transfer ID**
+- [x] **步骤 3：实现规范化和 transfer ID**
 
 在 `agent/base_agent.py` 增加 `secrets` import，并将 typing import 扩展为包含 `Tuple`。
 
@@ -483,7 +483,7 @@ def _next_fleet_transfer_id(self) -> int:
 
 修改 `_normalize_fleet_rules()`：transport 只保留 `mqtt_json`/`mqtt_binary`，非法值回落 JSON；QoS 只保留 0/1，非法值回落 1；使用 `seen_targets` 对 `(robot_id, dst_topic)` 去重。
 
-- [ ] **步骤 4：实现 MQTT 返回值和 binary 发送**
+- [x] **步骤 4：实现 MQTT 返回值和 binary 发送**
 
 在 `_init_mqtt()` 创建 client 后、连接前调用：
 
@@ -535,7 +535,7 @@ def send_fleet_binary_to_robot(
     return envelope_ok, body_ok
 ```
 
-- [ ] **步骤 5：增加 Paho client 配置和 rc 测试**
+- [x] **步骤 5：增加 Paho client 配置和 rc 测试**
 
 新增：
 
@@ -569,7 +569,7 @@ def test_mqtt_publish_returns_paho_rc_status(rc, expected):
 
 测试只验证 Paho rc，不断言最终 Broker 投递结果。补充 `pytest`、`MagicMock`、`paho.mqtt.client as mqtt`、`BaseAgent` 和 `AgentState` import。
 
-- [ ] **步骤 6：运行 BaseAgent 发布与既有配置测试**
+- [x] **步骤 6：运行 BaseAgent 发布与既有配置测试**
 
 运行：
 
@@ -579,7 +579,7 @@ python3 -m pytest tests/test_agent_topic_config.py -q
 
 预期：全部通过；现有 sensor JSON/binary/HTTP QoS 测试保持通过。
 
-- [ ] **步骤 7：提交 BaseAgent 发送基础**
+- [x] **步骤 7：提交 BaseAgent 发送基础**
 
 ```bash
 git add agent/base_agent.py tests/test_agent_topic_config.py
@@ -593,7 +593,7 @@ git commit -m "feat: 支持编队二进制发布"
 - 修改：`agent/mock_agent.py`
 - 修改：`tests/test_agent_topic_config.py`
 
-- [ ] **步骤 1：扩展 RecordingAgent binary hook 并编写乱序测试**
+- [x] **步骤 1：扩展 RecordingAgent binary hook 并编写乱序测试**
 
 给 `RecordingAgent` 增加 `fleet_binary_messages`，并覆盖：
 
@@ -700,7 +700,7 @@ def build_recording_agent_and_envelope(
 
 现有 `test_handle_fleet_message_preserves_ros_topic_fields` 继续作为 JSON fleet 回归测试，不删除其字段断言。
 
-- [ ] **步骤 2：编写 TTL、锁外 hook 和资源边界测试**
+- [x] **步骤 2：编写 TTL、锁外 hook 和资源边界测试**
 
 通过 monkeypatch `time.time()` 和 `time.monotonic()` 覆盖：
 
@@ -797,7 +797,7 @@ def test_fleet_binary_evicts_oldest_body_to_keep_budget(monkeypatch):
 
 这些测试的 fixture 必须直接初始化测试所需 cache 常量或正常调用 `RecordingAgent.__init__()`，不能依赖 roscore。
 
-- [ ] **步骤 3：运行测试验证 raw 分流和 cache 尚未实现**
+- [x] **步骤 3：运行测试验证 raw 分流和 cache 尚未实现**
 
 运行：
 
@@ -807,7 +807,7 @@ python3 -m pytest tests/test_agent_topic_config.py -k "fleet_binary or fleet_mes
 
 预期：因 `/bin` 仍被 UTF-8 解码、cache/hook/TTL helper 尚未实现而失败；现有 JSON fleet 测试仍能单独通过。
 
-- [ ] **步骤 4：实现 cache 状态与订阅**
+- [x] **步骤 4：实现 cache 状态与订阅**
 
 在 `BaseAgent.__init__()` 初始化：
 
@@ -839,7 +839,7 @@ FLEET_CLOCK_FUTURE_TOLERANCE_SECONDS = 5.0
 
 在 `_on_connect()` 订阅 `all_robot_to_robot_binary(self.config.robot_id)`。
 
-- [ ] **步骤 5：实现原始 MQTT 分流和主 topic 校验**
+- [x] **步骤 5：实现原始 MQTT 分流和主 topic 校验**
 
 在 `agent/base_agent.py` 导入 `decode_fleet_binary_payload`、`FleetBinaryEnvelopeData`、`parse_robot_topic` 和 binary topic helper。重构 `_on_message()`：先 `parse_robot_topic(msg.topic)`；`to_robot_binary` 直接调用 `_handle_fleet_binary_body(src_id, msg.payload)`；其他消息才 UTF-8 decode。对 `to_robot` 主 topic 校验精确目标、`Message.type`、`Message.src`、`Message.dst`，再根据 `data.binary` 进入 envelope cache 或现有 JSON handler。
 
@@ -857,7 +857,7 @@ def _on_fleet_binary_message(
 
 `MockAgent` 覆盖该 hook，只记录 `src_id`、`msg_type`、`dst_topic` 和 body 长度，不尝试导入 ROS。
 
-- [ ] **步骤 6：实现有限数值 TTL 和有界 cache**
+- [x] **步骤 6：实现有限数值 TTL 和有界 cache**
 
 实现 `_is_fleet_message_fresh(message_ts, ttl, now=None)`，拒绝 bool/非有限值、过期值和超过未来 5 秒的时间。实现 `_cache_fleet_envelope()`、`_cache_fleet_body()`、`_cleanup_fleet_cache_locked()` 与 `_take_fleet_pair_locked()`：
 
@@ -891,7 +891,7 @@ def _handle_fleet_binary_body(self, src_id: str, payload: bytes) -> None:
 
 `_cache_fleet_envelope()` 和 `_cache_fleet_body()` 返回 `Optional[Tuple[Message, FleetBinaryEnvelopeData, bytes]]`。`_dispatch_fleet_binary_pair(None)` 直接返回；有值时在锁外校验 body 长度并二次 TTL，再调用 `_on_fleet_binary_message()`。
 
-- [ ] **步骤 7：运行 BaseAgent 聚焦与回归测试**
+- [x] **步骤 7：运行 BaseAgent 聚焦与回归测试**
 
 运行：
 
@@ -902,7 +902,7 @@ python3 -m pytest tests/test_protocol_topics.py tests/test_protocol_messages.py 
 
 预期：全部通过；JSON fleet、config sync、普通 sensor 发布无回归。
 
-- [ ] **步骤 8：提交 BaseAgent 接收数据面**
+- [x] **步骤 8：提交 BaseAgent 接收数据面**
 
 ```bash
 git add agent/base_agent.py agent/mock_agent.py tests/test_agent_topic_config.py
@@ -915,7 +915,7 @@ git commit -m "feat: 支持编队二进制接收配对"
 - 修改：`agent/ros1_agent.py`
 - 测试：`tests/test_ros1_agent.py`
 
-- [ ] **步骤 1：定义测试消息 MD5 并编写 route 聚合测试**
+- [x] **步骤 1：定义测试消息 MD5 并编写 route 聚合测试**
 
 给测试消息增加 class 属性：
 
@@ -1039,7 +1039,7 @@ def build_fleet_rule(
     }
 ```
 
-- [ ] **步骤 2：编写 serialize/MD5 失败回退测试**
+- [x] **步骤 2：编写 serialize/MD5 失败回退测试**
 
 ```python
 def test_fleet_binary_serialize_failure_falls_back_to_json_once(monkeypatch):
@@ -1108,7 +1108,7 @@ def test_fleet_binary_publish_failure_does_not_fallback_to_json():
     agent.send_to_robot.assert_not_called()
 ```
 
-- [ ] **步骤 3：运行测试验证旧的一规则一 subscriber 实现失败**
+- [x] **步骤 3：运行测试验证旧的一规则一 subscriber 实现失败**
 
 运行：
 
@@ -1118,7 +1118,7 @@ python3 -m pytest tests/test_ros1_agent.py -k "fleet and (groups or serializes_o
 
 预期：因当前 `_apply_fleet_rules()` 为每条规则创建 subscriber、回调始终先转 dict 且不读 transport 而失败。
 
-- [ ] **步骤 4：实现 `_FleetRoute` 和规则展开**
+- [x] **步骤 4：实现 `_FleetRoute` 和规则展开**
 
 在 `agent/ros1_agent.py` 导入 `dataclass`，并将 typing import 扩展为包含 `Tuple`。定义私有 dataclass，全部类型兼容 Python 3.8：
 
@@ -1138,7 +1138,7 @@ class _FleetRoute:
 
 将 `_fleet_subscribers` 改为 `Dict[Tuple[str, str], object]`，每组只创建一个 subscriber。
 
-- [ ] **步骤 5：实现一次转换和独立 route 限频**
+- [x] **步骤 5：实现一次转换和独立 route 限频**
 
 导入 `FleetBinaryEnvelopeData`、`encode_fleet_binary_payload` 和 BaseAgent 中的固定 TTL 常量。
 
@@ -1157,7 +1157,7 @@ class _FleetRoute:
 
 同步改写现有 `test_fleet_rule_callback_sends_fleet_data` 和 `test_fleet_rule_callback_respects_freq_limit`：使用 `_FleetRoute` 列表调用新 callback；限频测试 monkeypatch `agent.ros1_agent.time.monotonic`，不能继续 patch `time.time`。JSON route 的原有 `FleetData` 字段断言全部保留，并新增 `qos=1` 调用断言。
 
-- [ ] **步骤 6：运行 ROS1 源端和既有 sensor 测试**
+- [x] **步骤 6：运行 ROS1 源端和既有 sensor 测试**
 
 运行：
 
@@ -1168,7 +1168,7 @@ python3 -m pytest tests/test_agent_topic_config.py -q
 
 预期：全部通过；普通 Agent 到地面站 sensor serialized 路径测试保持通过。
 
-- [ ] **步骤 7：提交 ROS1 源端 route**
+- [x] **步骤 7：提交 ROS1 源端 route**
 
 ```bash
 git add agent/ros1_agent.py tests/test_ros1_agent.py
@@ -1183,7 +1183,7 @@ git commit -m "feat: 按传输方式转发编队数据"
 - 测试：`tests/test_ros1_agent.py`
 - 测试：`tests/test_agent_topic_config.py`
 
-- [ ] **步骤 1：编写目标反序列化和 MD5 测试**
+- [x] **步骤 1：编写目标反序列化和 MD5 测试**
 
 新增 fake ROS class：
 
@@ -1310,13 +1310,13 @@ def test_on_fleet_binary_message_rejects_unknown_type():
     agent._get_fleet_publisher.assert_not_called()
 ```
 
-- [ ] **步骤 2：编写 publisher 和轻量摘要复用测试**
+- [x] **步骤 2：编写 publisher 和轻量摘要复用测试**
 
 连续处理两条相同 `(dst_topic, msg_type)` binary 消息，断言类型化 publisher 和 `/fleet/incoming` publisher 各只创建一次，摘要 JSON 不包含 body 或完整 payload，只包含 `src_id`、`dst_topic`、`msg_type`、`transport`、`transfer_id`、`payload_size`、`timestamp`。
 
 同时更新现有 JSON fleet 测试，断言 JSON 和 binary 共用 `_publish_fleet_summary()`，而不是每条消息创建 debug publisher。
 
-- [ ] **步骤 3：运行测试验证 binary hook 尚未实现**
+- [x] **步骤 3：运行测试验证 binary hook 尚未实现**
 
 运行：
 
@@ -1326,7 +1326,7 @@ python3 -m pytest tests/test_ros1_agent.py -k "on_fleet_binary or fleet_summary"
 
 预期：因 `ROS1Agent._on_fleet_binary_message()` 仍使用 BaseAgent 默认 no-op、`_fleet_incoming_pub` 尚未缓存而失败。
 
-- [ ] **步骤 4：实现目标 binary hook**
+- [x] **步骤 4：实现目标 binary hook**
 
 在 `ROS1Agent.__init__()` 初始化 `_fleet_incoming_pub = None`。导入 `namespace_ros_message_frames` 和 `FleetBinaryEnvelopeData`。实现：
 
@@ -1365,7 +1365,7 @@ def _on_fleet_binary_message(
 
 验证 `dst_topic.startswith("/")`、encoding 和 payload format。捕获单条异常并限频记录，不能清空 publisher 或影响下一条消息。
 
-- [ ] **步骤 5：抽取 publisher/摘要复用并更新 MockAgent**
+- [x] **步骤 5：抽取 publisher/摘要复用并更新 MockAgent**
 
 抽取 `_get_fleet_publisher()` 和以下摘要入口，让现有 JSON `_publish_fleet_ros_topic()` 复用：
 
@@ -1399,7 +1399,7 @@ def _publish_fleet_summary(
 
 `MockAgent._on_fleet_binary_message()` 仅记录或日志输出 envelope 摘要和 `len(body)`；对应 BaseAgent 测试断言不导入 rospy。
 
-- [ ] **步骤 6：运行 ROS1、Mock 与全量无 ROS 测试**
+- [x] **步骤 6：运行 ROS1、Mock 与全量无 ROS 测试**
 
 运行：
 
@@ -1410,7 +1410,7 @@ python3 -m pytest tests/ -q
 
 预期：全部通过；ROS1 测试使用 monkeypatch/fake message，无需 roscore。
 
-- [ ] **步骤 7：提交目标 Agent 发布**
+- [x] **步骤 7：提交目标 Agent 发布**
 
 ```bash
 git add agent/ros1_agent.py agent/mock_agent.py tests/test_ros1_agent.py tests/test_agent_topic_config.py
@@ -1423,7 +1423,7 @@ git commit -m "feat: 发布编队二进制ROS消息"
 - 修改：`qt_frontend/panels/fleet_comm_panel.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：编写纯逻辑保存和兼容测试**
+- [x] **步骤 1：编写纯逻辑保存和兼容测试**
 
 在 `TestFleetCommPanel` 增加：
 
@@ -1483,7 +1483,7 @@ def test_fleet_config_sync_and_response_preserve_qos_zero(self):
     assert restored[0]["qos"] == 0
 ```
 
-- [ ] **步骤 2：编写 Qt 表单和表格失败测试**
+- [x] **步骤 2：编写 Qt 表单和表格失败测试**
 
 新增完整控件测试：
 
@@ -1524,7 +1524,7 @@ def test_fleet_form_defaults_and_preserves_binary_qos_zero(
 
 部署 signal 的现有测试增加 `emitted[0][1]["fleet_rules"][0]["qos"] == 0` 断言。
 
-- [ ] **步骤 3：运行测试验证 fleet 面板尚无控件**
+- [x] **步骤 3：运行测试验证 fleet 面板尚无控件**
 
 运行：
 
@@ -1534,7 +1534,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -k "FleetCommPa
 
 预期：因 `_combo_transport`、`_combo_qos` 和新表格列尚不存在，或 protocol dict 丢失 QoS 而失败。
 
-- [ ] **步骤 4：实现 transport/QoS 控件和数据闭环**
+- [x] **步骤 4：实现 transport/QoS 控件和数据闭环**
 
 在 fleet 表单新增：
 
@@ -1549,7 +1549,7 @@ for label, value in TopicConfigPanel.qos_options()[:2]:
 
 表格固定为 11 列，表头顺序为“启用、源机器人、源话题、消息类型、目标机器人、目标话题、频率、传输方式、QoS、Frame 策略、操作”，并为新增列设置稳定最小宽度。`_show_add_form()` 默认 JSON/QoS1；编辑时按 item data 回显；`_rule_from_form()`、`normalize_transmit_rules()`、`rule_to_protocol_dict()`、`rules_from_config_response()` 全部显式保留 `transport` 和 `qos`，使用 `is None` 判断，不能用 `or 1` 吞掉 QoS 0。
 
-- [ ] **步骤 5：运行 Qt 聚焦和全量面板测试**
+- [x] **步骤 5：运行 Qt 聚焦和全量面板测试**
 
 运行：
 
@@ -1560,7 +1560,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -q
 
 预期：全部通过，表格文本不截断，现有 topic 配置面板测试无回归。
 
-- [ ] **步骤 6：提交 Qt 配置闭环**
+- [x] **步骤 6：提交 Qt 配置闭环**
 
 ```bash
 git add qt_frontend/panels/fleet_comm_panel.py tests/test_panels.py
@@ -1577,7 +1577,7 @@ git commit -m "feat: 配置编队传输方式和QoS"
 - 测试：`tests/test_agent_topic_config.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：检查并记录配置文件已有差异**
+- [x] **步骤 1：检查并记录配置文件已有差异**
 
 运行：
 
@@ -1588,7 +1588,7 @@ git diff -- agent/configs/default.yaml agent/configs/turtlebot_001.yaml agent/co
 
 预期：允许存在用户改动。后续只修改 `fleet_rules` 示例和紧邻注释；不得格式化、覆盖或还原 subscriptions、Husky 配置及其他运行态值。
 
-- [ ] **步骤 2：编写 YAML 示例断言**
+- [x] **步骤 2：编写 YAML 示例断言**
 
 在 `tests/test_agent_topic_config.py` 增加 `Path` import 和完整 YAML 加载测试：
 
@@ -1626,7 +1626,7 @@ def test_transmit_config_fleet_examples_use_expected_binary_qos(self):
     ]
 ```
 
-- [ ] **步骤 3：运行测试验证示例仍为 JSON**
+- [x] **步骤 3：运行测试验证示例仍为 JSON**
 
 运行：
 
@@ -1637,7 +1637,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -k fleet_exampl
 
 预期：因当前示例仍为 `mqtt_json` 且缺少 fleet QoS 而失败，不应因 YAML 解析或用户已有 subscriptions 改动失败。
 
-- [ ] **步骤 4：最小更新 fleet 示例**
+- [x] **步骤 4：最小更新 fleet 示例**
 
 - `turtlebot_001:/odom` 示例改为 `mqtt_binary + qos: 0`；
 - `turtlebot_002:/move_base_simple/goal` 示例改为 `mqtt_binary + qos: 1`；
@@ -1645,7 +1645,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -k fleet_exampl
 - `transmit_config.yaml` 仅更新对应两条 fleet rule；
 - 所有示例继续 `enabled: false`，避免启动容器即产生跨机器人流量。
 
-- [ ] **步骤 5：运行配置与面板测试**
+- [x] **步骤 5：运行配置与面板测试**
 
 运行：
 
@@ -1656,7 +1656,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 6：复查没有覆盖用户配置**
+- [x] **步骤 6：复查没有覆盖用户配置**
 
 运行：
 
@@ -1666,7 +1666,7 @@ git diff -- agent/configs/default.yaml agent/configs/turtlebot_001.yaml agent/co
 
 预期：diff 只包含目标 fleet 段及注释。若执行前已有同文件改动，逐行确认它们仍保留。
 
-- [ ] **步骤 7：提交示例配置**
+- [x] **步骤 7：提交示例配置**
 
 先根据步骤 1 的记录区分干净文件与执行前已修改文件。干净文件可直接暂存；执行前已修改的文件只有在 `git diff --cached` 能确认不包含用户既有改动时才可暂存。无法可靠拆分时保留在工作区，并在最终回复列为“包含计划内 fleet 示例但未提交的用户配置文件”，不得把整文件加入提交。
 
@@ -1682,10 +1682,10 @@ git commit -m "config: 更新编队二进制示例"
 ### 任务 9：全量验证、双机器人验收与工作日志
 
 **文件：**
-- 创建或修改：`docs/work-log-2026-07-17.md`
+- 创建或修改：`docs/work-log-2026-07-20.md`
 - 验证：`protocol/`、`agent/`、`qt_frontend/`、`tests/`
 
-- [ ] **步骤 1：运行聚焦测试**
+- [x] **步骤 1：运行聚焦测试**
 
 ```bash
 python3 -m pytest tests/test_protocol_messages.py tests/test_protocol_topics.py tests/test_binary_payloads.py -v
@@ -1695,7 +1695,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -v
 
 预期：全部通过，0 failed。
 
-- [ ] **步骤 2：运行完整 pytest 和 ruff**
+- [x] **步骤 2：运行完整 pytest 和 ruff**
 
 ```bash
 python3 -m pytest tests/ -v
@@ -1704,7 +1704,7 @@ ruff check protocol agent qt_frontend tests
 
 预期：全部通过，ruff 无错误。若完整套件存在任务前即可复现的环境失败，保存原始命令和错误，不能把它描述为本功能通过。
 
-- [ ] **步骤 3：验证无 ROS 的 Mock Agent 启动边界**
+- [x] **步骤 3：验证无 ROS 的 Mock Agent 启动边界**
 
 启动本地 Broker 后运行：
 
@@ -1714,7 +1714,7 @@ timeout 8 python3 -m agent.main --agent-type mock --robot-id fleet_mock_001 --lo
 
 预期：Agent 能连接、订阅 `robot/+/to/fleet_mock_001/bin`，超时退出前无 abstract method、UTF-8 binary handler 或配置解析异常。若本机 Broker 未启动，记录未验证，不把连接失败归因于实现。
 
-- [ ] **步骤 4：准备可恢复的双 Turtlebot 运行态配置**
+- [x] **步骤 4：准备可恢复的双 Turtlebot 运行态配置**
 
 仅在 Docker、ROS Noetic、显示环境和 Broker 可用时执行：
 
@@ -1727,7 +1727,7 @@ docker compose ps robot-turtlebot-001 robot-turtlebot-002
 
 预期：两个容器 running。通过 Qt 编队面板向 `turtlebot_001` 下发唯一启用规则：`/odom`、`nav_msgs/Odometry`、目标 `turtlebot_002`、`/fleet/turtlebot_001/odom`、10 Hz、`mqtt_binary`、QoS0、namespace。下发前后保留 `/tmp` 备份，测试结束必须恢复。
 
-- [ ] **步骤 5：测量 Agent 间 MQTT 与目标机器人 ROS**
+- [x] **步骤 5：测量 Agent 间 MQTT 与目标机器人 ROS**
 
 分别执行：
 
@@ -1758,7 +1758,7 @@ docker compose exec -T robot-turtlebot-002 bash -lc \
 - 目标 topic 60 秒平均频率至少 9 Hz；
 - 目标 header frame 带 `turtlebot_001/` 前缀。
 
-- [ ] **步骤 6：恢复配置并记录运行环境限制**
+- [x] **步骤 6：恢复配置并记录运行环境限制**
 
 ```bash
 cp /tmp/turtlebot_001.yaml.before-fleet-test agent/configs/turtlebot_001.yaml
@@ -1771,11 +1771,11 @@ git diff -- agent/configs/turtlebot_001.yaml agent/configs/turtlebot_002.yaml
 
 如果 Docker/ROS/MQTT 任一条件不满足，不执行会覆盖配置的步骤 4-6；在工作日志明确写出未验证的频率、延迟、Broker 字节数、系统时钟和真实 ROS MD5 风险。
 
-- [ ] **步骤 7：按实际结果编写工作日志**
+- [x] **步骤 7：按实际结果编写工作日志**
 
-在 `docs/work-log-2026-07-17.md` 使用 `# 工作日志 — 2026年7月17日`，按“今日概览、Agent 间编队二进制链路、性能与可靠性处理、测试与验证、当前状态”组织。首次解释 envelope、binary body、transfer ID、ROS1 serialized、TTL 和自动回退；列出实际执行命令和结果，不写未执行命令为已通过。
+在 `docs/work-log-2026-07-20.md` 使用 `# 工作日志 — 2026年7月20日`，按“今日概览、Agent 间编队二进制链路、性能与可靠性处理、测试与验证、当前状态”组织。首次解释 envelope、binary body、transfer ID、ROS1 serialized、TTL 和自动回退；列出实际执行命令和结果，不写未执行命令为已通过。
 
-- [ ] **步骤 8：最终 diff 和提交检查**
+- [x] **步骤 8：最终 diff 和提交检查**
 
 ```bash
 git status --short
@@ -1786,7 +1786,7 @@ git diff --stat
 确认不包含 `.agents/`、`.codex/`、用户无关配置或运行态临时改动后提交：
 
 ```bash
-git add docs/work-log-2026-07-17.md
+git add docs/work-log-2026-07-20.md
 git commit -m "docs: 记录编队二进制链路验证"
 ```
 

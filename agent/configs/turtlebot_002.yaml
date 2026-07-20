@@ -112,11 +112,16 @@ subscriptions:
 # 编队通信规则（地面站下发，启动时自动恢复）
 # 格式示例：
 # fleet_rules:
-#   - topic: "/odom"
-#     msg_type: "nav_msgs/Odometry"
-#     target: "robot_002"
-#     freq_limit: 2.0
-#     transport: "mqtt_json"
+# - enabled: false
+#   src_topic: /move_base_simple/goal
+#   msg_type: geometry_msgs/PoseStamped
+#   targets:
+#   - robot_id: turtlebot_001
+#     dst_topic: /fleet/turtlebot_002/move_base_simple/goal
+#   freq_limit: 1.0
+#   transport: mqtt_binary
+#   qos: 1
+#   frame_policy: namespace
 fleet_rules:
 - enabled: false
   src_topic: /move_base_simple/goal
@@ -125,5 +130,6 @@ fleet_rules:
   - robot_id: turtlebot_001
     dst_topic: /fleet/turtlebot_002/move_base_simple/goal
   freq_limit: 1.0
-  transport: mqtt_json
+  transport: mqtt_binary
+  qos: 1
   frame_policy: namespace

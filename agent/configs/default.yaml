@@ -113,10 +113,25 @@ subscriptions:
 
 # 编队通信规则（地面站下发，启动时自动恢复）
 fleet_rules: []
-# 格式示例：
+# 高频连续状态使用 QoS 0，低频关键指令使用 QoS 1；示例默认禁用。
 # fleet_rules:
-#   - topic: "/odom"
-#     msg_type: "nav_msgs/Odometry"
-#     target: "robot_002"
-#     freq_limit: 2.0
-#     transport: "mqtt_json"
+# - enabled: false
+#   src_topic: /odom
+#   msg_type: nav_msgs/Odometry
+#   targets:
+#   - robot_id: robot_002
+#     dst_topic: /fleet/robot_001/odom
+#   freq_limit: 10.0
+#   transport: mqtt_binary
+#   qos: 0
+#   frame_policy: namespace
+# - enabled: false
+#   src_topic: /move_base_simple/goal
+#   msg_type: geometry_msgs/PoseStamped
+#   targets:
+#   - robot_id: robot_001
+#     dst_topic: /fleet/robot_002/move_base_simple/goal
+#   freq_limit: 1.0
+#   transport: mqtt_binary
+#   qos: 1
+#   frame_policy: namespace

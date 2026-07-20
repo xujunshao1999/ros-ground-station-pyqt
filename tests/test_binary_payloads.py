@@ -4,13 +4,60 @@ import pytest
 
 from protocol.binary_payloads import (
     ENCODING_TF_MESSAGE,
+    decode_fleet_binary_payload,
     decode_sensor_binary,
+    encode_fleet_binary_payload,
     encode_ros_message_binary,
     encode_sensor_binary,
     is_binary_supported,
     is_ros_message_binary_encoding,
     is_ros_message_binary_supported,
 )
+
+
+def test_fleet_binary_payload_round_trip():
+    """关联头应保留 64 位 transfer ID 和原始 ROS body。"""
+    framed = encode_fleet_binary_payload(0x1234567800000001, b"ros-body")
+    transfer_id, body = decode_fleet_binary_payload(framed)
+
+    assert framed[:4] == b"FRB1"
+    assert len(framed) == 13 + len(body)
+    assert transfer_id == 0x1234567800000001
+    assert body == b"ros-body"
+
+
+def test_fleet_binary_payload_accepts_empty_ros_body():
+    """空 ROS body 仍是结构合法的编队二进制 payload。"""
+    transfer_id, body = decode_fleet_binary_payload(
+        encode_fleet_binary_payload(1, b"")
+    )
+    assert transfer_id == 1
+    assert body == b""
+
+
+@pytest.mark.parametrize("payload", [
+    b"",
+    b"FRB1",
+    b"BAD!\x01" + b"\x00" * 8,
+    b"FRB1\x02" + b"\x00" * 8,
+])
+def test_fleet_binary_payload_rejects_invalid_headers(payload):
+    """截断或协议标记不匹配的 payload 不得进入配对流程。"""
+    with pytest.raises(ValueError):
+        decode_fleet_binary_payload(payload)
+
+
+@pytest.mark.parametrize("transfer_id", [True, -1, 1 << 64])
+def test_fleet_binary_payload_rejects_invalid_transfer_id(transfer_id):
+    """编码端仅接受 uint64，且不能把 bool 当作整数。"""
+    with pytest.raises(ValueError):
+        encode_fleet_binary_payload(transfer_id, b"ros-body")
+
+
+def test_fleet_binary_payload_requires_bytes_body():
+    """ROS body 必须保持不可变 bytes，避免发布前被修改。"""
+    with pytest.raises(TypeError):
+        encode_fleet_binary_payload(1, bytearray(b"ros-body"))
 
 
 def test_laser_scan_binary_roundtrip():

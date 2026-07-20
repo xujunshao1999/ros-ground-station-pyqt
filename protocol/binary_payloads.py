@@ -24,6 +24,39 @@ _ROS1_SERIALIZED_MESSAGE_TYPES = {
 }
 _ROS_MESSAGE_BINARY_ENCODINGS = frozenset({ENCODING_ROS1_SERIALIZED})
 
+# Agent 间二进制主体使用固定 13 字节头，跨平台按网络字节序解析。
+_FLEET_BINARY_MAGIC = b"FRB1"
+_FLEET_BINARY_VERSION = 1
+_FLEET_BINARY_HEADER = struct.Struct(">4sBQ")
+
+
+def encode_fleet_binary_payload(transfer_id: int, body: bytes) -> bytes:
+    """为 ROS1 serialized body 添加可乱序配对的固定关联头。"""
+    # bool 是 int 的子类，但不允许作为协议中的 uint64 标识。
+    if isinstance(transfer_id, bool) or not isinstance(transfer_id, int):
+        raise ValueError("transfer_id must be an integer")
+    if not 0 <= transfer_id < (1 << 64):
+        raise ValueError("transfer_id out of uint64 range")
+    if not isinstance(body, bytes):
+        raise TypeError("fleet binary body must be bytes")
+    return _FLEET_BINARY_HEADER.pack(
+        _FLEET_BINARY_MAGIC,
+        _FLEET_BINARY_VERSION,
+        transfer_id,
+    ) + body
+
+
+def decode_fleet_binary_payload(payload: bytes) -> Tuple[int, bytes]:
+    """校验关联头并返回 transfer ID 与未改动的 ROS1 body。"""
+    if len(payload) < _FLEET_BINARY_HEADER.size:
+        raise ValueError("fleet binary payload is truncated")
+    magic, version, transfer_id = _FLEET_BINARY_HEADER.unpack_from(payload)
+    if magic != _FLEET_BINARY_MAGIC:
+        raise ValueError("invalid fleet binary magic")
+    if version != _FLEET_BINARY_VERSION:
+        raise ValueError("unsupported fleet binary version")
+    return transfer_id, payload[_FLEET_BINARY_HEADER.size:]
+
 
 def is_binary_supported(msg_type: str) -> bool:
     return msg_type in {_LASER_SCAN_TYPE, _OCCUPANCY_GRID_TYPE}

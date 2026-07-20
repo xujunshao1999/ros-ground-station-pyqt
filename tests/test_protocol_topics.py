@@ -1,32 +1,50 @@
-from __future__ import annotations
-
 """MQTT Topic 规范测试 - 生成函数与解析器"""
 
-import pytest
+from __future__ import annotations
 
 from protocol.topics import (
-    robot_status,
-    robot_sensor,
-    robot_sensor_meta,
-    robot_cmd,
-    robot_cmd_ack,
-    robot_event,
-    robot_to_robot,
-    robot_to_robot_meta,
-    all_robot_to_robot,
-    all_robot_to_robot_meta,
-    station_discover,
-    station_topic_request,
-    station_topic_response,
-    all_robot_status,
+    TOPIC_QOS,
+    QoS,
     all_robot_cmd_ack,
     all_robot_event,
     all_robot_sensor_meta,
+    all_robot_status,
+    all_robot_to_robot,
+    all_robot_to_robot_binary,
+    all_robot_to_robot_meta,
     parse_robot_topic,
     parse_station_topic,
-    QoS,
-    TOPIC_QOS,
+    robot_cmd,
+    robot_cmd_ack,
+    robot_event,
+    robot_sensor,
+    robot_sensor_meta,
+    robot_status,
+    robot_to_robot,
+    robot_to_robot_binary,
+    robot_to_robot_meta,
+    station_discover,
+    station_topic_request,
+    station_topic_response,
 )
+
+
+def test_robot_to_robot_binary_topics():
+    """二进制主体使用独立的 Agent 间 MQTT topic。"""
+    assert robot_to_robot_binary("r1", "r2") == "robot/r1/to/r2/bin"
+    assert all_robot_to_robot_binary("r2") == "robot/+/to/r2/bin"
+
+
+def test_parse_robot_to_robot_binary_requires_exact_segments():
+    """Agent 间后缀 topic 必须精确匹配，拒绝多余层级。"""
+    parsed = parse_robot_topic("robot/r1/to/r2/bin")
+    assert parsed == {
+        "robot_id": "r1",
+        "type": "to_robot_binary",
+        "dst_id": "r2",
+    }
+    assert parse_robot_topic("robot/r1/to/r2/bin/extra") is None
+    assert parse_robot_topic("robot/r1/to/r2/meta/extra") is None
 
 
 class TestTopicGeneration:

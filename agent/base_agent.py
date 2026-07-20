@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import secrets
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -10,13 +12,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as mqtt
 
 from agent.rate_limiter import RateLimiter
 from agent.topic_handler import TopicHandler
 from protocol.binary_payloads import (
+    decode_fleet_binary_payload,
     encode_ros_message_binary,
     encode_sensor_binary,
     is_binary_supported,
@@ -27,6 +30,7 @@ from protocol.messages import (
     ConfigResponseData,
     DiscoverResponseData,
     EventData,
+    FleetBinaryEnvelopeData,
     FleetData,
     Message,
     MessageFactory,
@@ -39,7 +43,9 @@ from protocol.messages import (
 from protocol.topic_registry import TopicTier, default_registry
 from protocol.topics import (
     all_robot_to_robot,
+    all_robot_to_robot_binary,
     all_robot_to_robot_meta,
+    parse_robot_topic,
     robot_cmd,
     robot_cmd_ack,
     robot_event,
@@ -48,6 +54,7 @@ from protocol.topics import (
     robot_sensor_meta,
     robot_status,
     robot_to_robot,
+    robot_to_robot_binary,
     robot_to_robot_meta,
     station_config_query,
     station_config_response,
@@ -61,6 +68,16 @@ from protocol.topics import (
 # 核心职责：连接 MQTT、上报状态、接收指令、转发分层话题数据、响应发现和订阅请求。
 
 logger = logging.getLogger(__name__)
+
+# Agent 间 binary 配对缓存使用固定边界，避免缺包或断连导致内存无限增长。
+FLEET_CACHE_TTL_SECONDS = 2.0
+FLEET_CACHE_MAX_ENTRIES = 256
+FLEET_BODY_MAX_BYTES = 8 * 1024 * 1024
+FLEET_BODY_CACHE_MAX_BYTES = 64 * 1024 * 1024
+FLEET_ROBOT_JSON_MAX_BYTES = 8 * 1024 * 1024
+FLEET_ENVELOPE_MAX_BYTES = 16 * 1024
+FLEET_MESSAGE_TTL_SECONDS = 1.0
+FLEET_CLOCK_FUTURE_TOLERANCE_SECONDS = 5.0
 
 
 class AgentState(Enum):
@@ -179,6 +196,23 @@ class BaseAgent(ABC):
         # MQTT 客户端
         self._mqtt_client: Optional[mqtt.Client] = None
         self._factory = MessageFactory(src=self.config.robot_id)
+
+        # 每个 Agent 生命周期使用独立 nonce，计数器由锁保护以支持并发 ROS 回调。
+        self._fleet_transfer_lock = threading.Lock()
+        self._fleet_session_nonce = secrets.randbits(32)
+        self._fleet_transfer_counter = 0
+
+        # Envelope 与 body 可乱序到达，固定 tuple 顺序供后续 ROS hook 使用。
+        self._fleet_envelope_cache: Dict[
+            Tuple[str, int],
+            Tuple[float, FleetBinaryEnvelopeData, float],
+        ] = {}
+        self._fleet_body_cache: Dict[
+            Tuple[str, int],
+            Tuple[bytes, float],
+        ] = {}
+        self._fleet_cache_lock = threading.Lock()
+        self._fleet_body_cache_bytes = 0
 
         # 限频器和话题处理器
         self._rate_limiter = RateLimiter(default_freq_limit=self.config.default_freq_limit)
@@ -475,17 +509,65 @@ class BaseAgent(ABC):
     # 机器人间通信
     # ============================================================
 
-    def send_to_robot(self, target_id: str, fleet_data: FleetData) -> None:
+    def send_to_robot(
+        self,
+        target_id: str,
+        fleet_data: FleetData,
+        qos: int = 1,
+    ) -> bool:
         """向指定机器人发送轻量数据（MQTT JSON）
 
         Args:
             target_id: 目标机器人 ID
             fleet_data: 机器人间数据（位置/导航目标/自定义）
+            qos: 当前 route 使用的 MQTT QoS
         """
         msg = self._factory.fleet_data(fleet_data, dst=target_id)
         topic = robot_to_robot(self.config.robot_id, target_id)
-        self._mqtt_publish(topic, msg.to_json().encode("utf-8"))
-        logger.info(f"[Agent] Sent fleet data to {target_id}: type={fleet_data.data_type}")
+        published = self._mqtt_publish(
+            topic,
+            msg.to_json().encode("utf-8"),
+            qos=qos,
+        )
+        if published:
+            logger.info(
+                f"[Agent] Sent fleet data to {target_id}: "
+                f"type={fleet_data.data_type}"
+            )
+        return published
+
+    def send_fleet_binary_to_robot(
+        self,
+        target_id: str,
+        envelope: FleetBinaryEnvelopeData,
+        framed_body: bytes,
+        qos: int,
+    ) -> Tuple[bool, bool]:
+        """按同一路由 QoS 发布 binary envelope 与已编码主体。"""
+        message = self._factory.fleet_binary_envelope(envelope, dst=target_id)
+        envelope_ok = self._mqtt_publish(
+            robot_to_robot(self.config.robot_id, target_id),
+            message.to_json().encode("utf-8"),
+            qos=qos,
+        )
+        body_ok = self._mqtt_publish(
+            robot_to_robot_binary(self.config.robot_id, target_id),
+            framed_body,
+            qos=qos,
+        )
+        return envelope_ok, body_ok
+
+    def _next_fleet_transfer_id(self) -> int:
+        """生成 session nonce 与递增计数组成的线程安全 uint64 ID。"""
+        with self._fleet_transfer_lock:
+            if self._fleet_transfer_counter >= 0xFFFFFFFF:
+                self._fleet_session_nonce = secrets.randbits(32)
+                self._fleet_transfer_counter = 0
+            self._fleet_transfer_counter += 1
+            return (
+                (self._fleet_session_nonce << 32)
+                | self._fleet_transfer_counter
+            )
 
     def share_heavy_data(self, target_id: str, topic: str, data: bytes,
                          msg_type: str = "sensor_msgs/PointCloud2") -> None:
@@ -587,6 +669,15 @@ class BaseAgent(ABC):
         """
         ...
 
+    def _on_fleet_binary_message(
+        self,
+        src_id: str,
+        envelope: FleetBinaryEnvelopeData,
+        body: bytes,
+    ) -> None:
+        """收到已配对 binary 数据的回调，ROS 子类可覆盖。"""
+        return
+
     # ============================================================
     # MQTT 回调
     # ============================================================
@@ -598,6 +689,9 @@ class BaseAgent(ABC):
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
         )
+        # 有界离线队列避免 Broker 断连时高频数据无限积压内存。
+        self._mqtt_client.max_queued_messages_set(1000)
+        self._mqtt_client.max_inflight_messages_set(20)
 
         # 设置 Last Will：异常断开时 Broker 立即通知地面站
         will_topic = robot_event(self.config.robot_id)
@@ -634,6 +728,10 @@ class BaseAgent(ABC):
 
             # 订阅其他机器人发来的 fleet 数据
             client.subscribe(all_robot_to_robot(self.config.robot_id), qos=1)
+            client.subscribe(
+                all_robot_to_robot_binary(self.config.robot_id),
+                qos=1,
+            )
             client.subscribe(all_robot_to_robot_meta(self.config.robot_id), qos=1)
 
             # 恢复持久化订阅
@@ -661,8 +759,46 @@ class BaseAgent(ABC):
     def _on_message(self, client, userdata, msg) -> None:
         """MQTT 消息回调"""
         try:
+            topic_info = parse_robot_topic(msg.topic)
+            if topic_info and topic_info.get("type") == "to_robot_binary":
+                # Binary 主体必须在任何 UTF-8 解码之前分流。
+                if topic_info.get("dst_id") != self.config.robot_id:
+                    return
+                self._handle_fleet_binary_body(
+                    topic_info["robot_id"],
+                    msg.payload,
+                )
+                return
+
+            # 机器人间 JSON 在解码前限长，避免构造多份超大字符串和对象。
+            if (
+                topic_info
+                and topic_info.get("type") == "to_robot"
+                and len(msg.payload) > FLEET_ROBOT_JSON_MAX_BYTES
+            ):
+                return
+
             payload = msg.payload.decode("utf-8")
             message = Message.from_json(payload)
+
+            if topic_info and topic_info.get("type") == "to_robot":
+                src_id = topic_info.get("robot_id", "")
+                dst_id = topic_info.get("dst_id", "")
+                if (
+                    message.type != MessageType.FLEET_DATA
+                    or message.src != src_id
+                    or dst_id != self.config.robot_id
+                    or message.dst != dst_id
+                ):
+                    return
+                if message.data.get("binary") is True:
+                    if len(msg.payload) > FLEET_ENVELOPE_MAX_BYTES:
+                        return
+                    self._handle_fleet_binary_envelope(src_id, message)
+                else:
+                    self._handle_fleet_message(message)
+                return
+
             self._handle_message(message)
         except Exception as e:
             logger.error(f"[Agent] Failed to handle message on {msg.topic}: {e}")
@@ -818,6 +954,14 @@ class BaseAgent(ABC):
         src_id = message.src
         fleet_data = message.data  # dict
         data_type = fleet_data.get("data_type", "custom")
+        default_ttl = (
+            FLEET_MESSAGE_TTL_SECONDS
+            if data_type == "ros_topic"
+            else 30.0
+        )
+        ttl = fleet_data.get("ttl", default_ttl)
+        if not self._is_fleet_message_fresh(message.ts, ttl):
+            return
 
         logger.info(f"[Agent] Fleet data from {src_id}: type={data_type}")
 
@@ -831,7 +975,7 @@ class BaseAgent(ABC):
                 self._on_fleet_message(src_id, FleetData(
                     data_type=data_type,
                     payload=payload,
-                    ttl=fleet_data.get("ttl", 30.0),
+                    ttl=ttl,
                     src_topic=fleet_data.get("src_topic", ""),
                     dst_topic=fleet_data.get("dst_topic", ""),
                     msg_type=fleet_data.get("msg_type", ""),
@@ -844,13 +988,171 @@ class BaseAgent(ABC):
         self._on_fleet_message(src_id, FleetData(
             data_type=data_type,
             payload=fleet_data.get("payload", {}),
-            ttl=fleet_data.get("ttl", 30.0),
+            ttl=ttl,
             src_topic=fleet_data.get("src_topic", ""),
             dst_topic=fleet_data.get("dst_topic", ""),
             msg_type=fleet_data.get("msg_type", ""),
             frame_policy=fleet_data.get("frame_policy", "preserve"),
             stamp=float(fleet_data.get("stamp", 0.0)),
         ))
+
+    def _handle_fleet_binary_envelope(
+        self,
+        src_id: str,
+        message: Message,
+    ) -> None:
+        """校验并缓存 binary envelope，支持 body 先到。"""
+        envelope = FleetBinaryEnvelopeData.from_dict(message.data)
+        if envelope.payload_size > FLEET_BODY_MAX_BYTES:
+            return
+        if not self._is_fleet_message_fresh(message.ts, envelope.ttl):
+            return
+        pair = self._cache_fleet_envelope(src_id, message, envelope)
+        self._dispatch_fleet_binary_pair(pair)
+
+    def _handle_fleet_binary_body(self, src_id: str, payload: bytes) -> None:
+        """解析关联头并缓存 ROS1 serialized body。"""
+        transfer_id, body = decode_fleet_binary_payload(payload)
+        pair = self._cache_fleet_body(src_id, transfer_id, body)
+        self._dispatch_fleet_binary_pair(pair)
+
+    @staticmethod
+    def _is_fleet_message_fresh(
+        message_ts,
+        ttl,
+        now=None,
+    ) -> bool:
+        """按 wall clock 检查有限 TTL，并拒绝明显超前的系统时钟。"""
+        if isinstance(message_ts, bool) or isinstance(ttl, bool):
+            return False
+        try:
+            message_ts_value = float(message_ts)
+            ttl_value = float(ttl)
+            now_value = time.time() if now is None else float(now)
+        except (TypeError, ValueError):
+            return False
+        if not all(math.isfinite(value) for value in (
+            message_ts_value,
+            ttl_value,
+            now_value,
+        )):
+            return False
+        if message_ts_value > (
+            now_value + FLEET_CLOCK_FUTURE_TOLERANCE_SECONDS
+        ):
+            return False
+        if ttl_value <= 0:
+            return True
+        return now_value - message_ts_value <= ttl_value
+
+    def _cache_fleet_envelope(
+        self,
+        src_id: str,
+        message: Message,
+        envelope: FleetBinaryEnvelopeData,
+    ) -> Optional[Tuple[str, float, FleetBinaryEnvelopeData, bytes]]:
+        """在同一锁内清理、缓存 envelope 并尝试取出完整配对。"""
+        if envelope.payload_size > FLEET_BODY_MAX_BYTES:
+            return None
+        key = (src_id, envelope.transfer_id)
+        with self._fleet_cache_lock:
+            inserted_at = time.monotonic()
+            self._cleanup_fleet_cache_locked(inserted_at)
+            self._fleet_envelope_cache[key] = (
+                float(message.ts),
+                envelope,
+                inserted_at,
+            )
+            while len(self._fleet_envelope_cache) > FLEET_CACHE_MAX_ENTRIES:
+                oldest_key = min(
+                    self._fleet_envelope_cache,
+                    key=lambda item: self._fleet_envelope_cache[item][2],
+                )
+                self._fleet_envelope_cache.pop(oldest_key, None)
+            return self._take_fleet_pair_locked(key)
+
+    def _cache_fleet_body(
+        self,
+        src_id: str,
+        transfer_id: int,
+        body: bytes,
+    ) -> Optional[Tuple[str, float, FleetBinaryEnvelopeData, bytes]]:
+        """在同一锁内缓存 body，并按条数和总字节数驱逐旧项。"""
+        if len(body) > FLEET_BODY_MAX_BYTES:
+            return None
+        key = (src_id, transfer_id)
+        with self._fleet_cache_lock:
+            inserted_at = time.monotonic()
+            self._cleanup_fleet_cache_locked(inserted_at)
+            previous = self._fleet_body_cache.pop(key, None)
+            if previous is not None:
+                self._fleet_body_cache_bytes -= len(previous[0])
+            self._fleet_body_cache[key] = (body, inserted_at)
+            self._fleet_body_cache_bytes += len(body)
+            while (
+                len(self._fleet_body_cache) > FLEET_CACHE_MAX_ENTRIES
+                or self._fleet_body_cache_bytes > FLEET_BODY_CACHE_MAX_BYTES
+            ):
+                oldest_key = min(
+                    self._fleet_body_cache,
+                    key=lambda item: self._fleet_body_cache[item][1],
+                )
+                removed_body, _ = self._fleet_body_cache.pop(oldest_key)
+                self._fleet_body_cache_bytes -= len(removed_body)
+            return self._take_fleet_pair_locked(key)
+
+    def _take_fleet_pair_locked(
+        self,
+        key: Tuple[str, int],
+    ) -> Optional[Tuple[str, float, FleetBinaryEnvelopeData, bytes]]:
+        """锁内弹出完整配对，并同步维护 body 字节计数。"""
+        if (
+            key not in self._fleet_envelope_cache
+            or key not in self._fleet_body_cache
+        ):
+            return None
+        message_ts, envelope, _ = self._fleet_envelope_cache.pop(key)
+        body, _ = self._fleet_body_cache.pop(key)
+        self._fleet_body_cache_bytes -= len(body)
+        return key[0], message_ts, envelope, body
+
+    def _cleanup_fleet_cache_locked(self, now_monotonic: float) -> None:
+        """锁内移除两侧过期条目，不调用任何业务 hook。"""
+        expired_envelopes = [
+            key
+            for key, (_, _, inserted_at) in self._fleet_envelope_cache.items()
+            if now_monotonic - inserted_at > FLEET_CACHE_TTL_SECONDS
+        ]
+        for key in expired_envelopes:
+            self._fleet_envelope_cache.pop(key, None)
+
+        expired_bodies = [
+            key
+            for key, (_, inserted_at) in self._fleet_body_cache.items()
+            if now_monotonic - inserted_at > FLEET_CACHE_TTL_SECONDS
+        ]
+        for key in expired_bodies:
+            body, _ = self._fleet_body_cache.pop(key)
+            self._fleet_body_cache_bytes -= len(body)
+
+    def _cleanup_fleet_cache(self) -> None:
+        """公开缓存清理入口，供状态循环和测试复用。"""
+        with self._fleet_cache_lock:
+            self._cleanup_fleet_cache_locked(time.monotonic())
+
+    def _dispatch_fleet_binary_pair(
+        self,
+        pair: Optional[Tuple[str, float, FleetBinaryEnvelopeData, bytes]],
+    ) -> None:
+        """锁外复检尺寸和 TTL，再调用子类 binary hook。"""
+        if pair is None:
+            return
+        src_id, message_ts, envelope, body = pair
+        if envelope.payload_size != len(body):
+            return
+        if not self._is_fleet_message_fresh(message_ts, envelope.ttl):
+            return
+        self._on_fleet_binary_message(src_id, envelope, body)
 
     # ============================================================
     # 配置同步
@@ -960,16 +1262,45 @@ class BaseAgent(ABC):
                 continue
             src_topic = rule.get("src_topic", "")
             msg_type = rule.get("msg_type", "")
-            if not src_topic or not msg_type:
+            if (
+                not isinstance(src_topic, str)
+                or not src_topic.startswith("/")
+                or not isinstance(msg_type, str)
+                or not msg_type
+            ):
+                continue
+
+            raw_targets = rule.get("targets", [])
+            if not isinstance(raw_targets, list):
+                continue
+
+            raw_freq_limit = rule.get("freq_limit", 0.0)
+            if isinstance(raw_freq_limit, bool):
+                continue
+            try:
+                freq_limit = float(raw_freq_limit)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(freq_limit):
                 continue
 
             targets = []
-            for target in rule.get("targets", []):
+            seen_targets = set()
+            for target in raw_targets:
                 if not isinstance(target, dict):
                     continue
                 robot_id = target.get("robot_id", "")
                 dst_topic = target.get("dst_topic", "")
-                if robot_id and dst_topic:
+                if (
+                    not isinstance(robot_id, str)
+                    or not robot_id
+                    or not isinstance(dst_topic, str)
+                    or not dst_topic.startswith("/")
+                ):
+                    continue
+                target_key = (robot_id, dst_topic)
+                if target_key not in seen_targets:
+                    seen_targets.add(target_key)
                     targets.append({
                         "robot_id": robot_id,
                         "dst_topic": dst_topic,
@@ -977,13 +1308,22 @@ class BaseAgent(ABC):
             if not targets:
                 continue
 
+            # 旧配置和非法值统一回落 JSON + QoS 1，避免静默启用 binary。
+            transport = rule.get("transport", "mqtt_json")
+            if transport not in ("mqtt_json", "mqtt_binary"):
+                transport = "mqtt_json"
+            qos = rule.get("qos", 1)
+            if isinstance(qos, bool) or qos not in (0, 1):
+                qos = 1
+
             normalized.append({
                 "enabled": bool(rule.get("enabled", True)),
                 "src_topic": src_topic,
                 "msg_type": msg_type,
                 "targets": targets,
-                "freq_limit": float(rule.get("freq_limit", 0.0)),
-                "transport": rule.get("transport", "mqtt_json"),
+                "freq_limit": freq_limit,
+                "transport": transport,
+                "qos": qos,
                 "frame_policy": rule.get("frame_policy", "preserve"),
             })
         return normalized
@@ -1231,6 +1571,7 @@ class BaseAgent(ABC):
 
     def _check_and_publish_status(self) -> None:
         """检查并发布状态（由定时器或主循环调用）"""
+        self._cleanup_fleet_cache()
         now = time.monotonic()
         if now - self._last_status_time < self.config.status_interval:
             return
@@ -1256,14 +1597,18 @@ class BaseAgent(ABC):
         payload: bytes,
         qos: int = 1,
         retain: bool = False,
-    ) -> None:
-        """发布 MQTT 消息"""
-        if self._mqtt_client and self.state in (
+    ) -> bool:
+        """提交 MQTT 发布请求，并返回 Paho 是否接受该请求。"""
+        if not self._mqtt_client or self.state not in (
             AgentState.CONNECTED,
             AgentState.RUNNING,
         ):
-            self._mqtt_client.publish(topic, payload, qos=qos, retain=retain)
+            return False
+        info = self._mqtt_client.publish(topic, payload, qos=qos, retain=retain)
+        if info.rc == mqtt.MQTT_ERR_SUCCESS:
             logger.debug(f"[Agent] Published to {topic} ({len(payload)} bytes)")
+            return True
+        return False
 
     def _reconnect_loop(self) -> None:
         """自动重连循环"""

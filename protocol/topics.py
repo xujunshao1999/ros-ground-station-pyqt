@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 MQTT Topic 规范 - 定义所有 MQTT topic 的命名规则和生成函数
 
@@ -15,8 +13,9 @@ Topic 层级结构:
   station/topic/response         - 订阅请求确认
 """
 
-from typing import Dict, Optional
+from __future__ import annotations
 
+from typing import Dict, Optional
 
 # ---------------------------------------------------------------------------
 # Topic 前缀常量
@@ -145,6 +144,11 @@ def robot_to_robot(src_id: str, dst_id: str) -> str:
     return f"{ROBOT_PREFIX}/{src_id}/{_TO}/{dst_id}"
 
 
+def robot_to_robot_binary(src_id: str, dst_id: str) -> str:
+    """robot/{src}/to/{dst}/bin — Agent 间二进制主体"""
+    return f"{ROBOT_PREFIX}/{src_id}/{_TO}/{dst_id}/{_BIN}"
+
+
 def robot_to_robot_meta(src_id: str, dst_id: str) -> str:
     """robot/{src}/to/{dst}/meta — 机器人间重量话题元信息"""
     return f"{ROBOT_PREFIX}/{src_id}/{_TO}/{dst_id}/{_META}"
@@ -183,6 +187,11 @@ def all_robot_to_robot(dst_id: str) -> str:
     return f"{ROBOT_PREFIX}/+/{_TO}/{dst_id}"
 
 
+def all_robot_to_robot_binary(dst_id: str) -> str:
+    """robot/+/to/{dst_id}/bin - 订阅所有发往本机的二进制主体"""
+    return f"{ROBOT_PREFIX}/+/{_TO}/{dst_id}/{_BIN}"
+
+
 def all_robot_to_robot_meta(dst_id: str) -> str:
     """robot/+/to/{dst_id}/meta - 订阅所有发往本机的元信息"""
     return f"{ROBOT_PREFIX}/+/{_TO}/{dst_id}/{_META}"
@@ -197,7 +206,8 @@ def parse_robot_topic(topic: str) -> Optional[Dict[str, str]]:
 
     示例:
       "robot/robot_001/status" → {"robot_id": "robot_001", "type": "status"}
-      "robot/robot_001/sensor/camera" → {"robot_id": "robot_001", "type": "sensor", "name": "camera"}
+      "robot/robot_001/sensor/camera"
+        → {"robot_id": "robot_001", "type": "sensor", "name": "camera"}
       "robot/robot_001/cmd/ack" → {"robot_id": "robot_001", "type": "cmd_ack"}
 
     Returns:
@@ -232,12 +242,18 @@ def parse_robot_topic(topic: str) -> Optional[Dict[str, str]]:
         else:
             return None
     elif parts[2] == _TO:
-        # robot/{src}/to/{dst} 或 robot/{src}/to/{dst}/meta
-        if len(parts) > 3:
+        # Agent 间 topic 必须精确匹配，避免把未知尾随层级误当主消息处理。
+        if len(parts) == 4:
             result["type"] = "to_robot"
             result["dst_id"] = parts[3]
-            if len(parts) > 4 and parts[4] == _META:
+        elif len(parts) == 5:
+            result["dst_id"] = parts[3]
+            if parts[4] == _BIN:
+                result["type"] = "to_robot_binary"
+            elif parts[4] == _META:
                 result["type"] = "to_robot_meta"
+            else:
+                return None
         else:
             return None
     else:
