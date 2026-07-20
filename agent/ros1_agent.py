@@ -12,7 +12,8 @@ import logging
 import math
 import threading
 import time
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 try:
     import rospy
@@ -21,14 +22,18 @@ try:
 except ImportError:
     rospy = None  # 延迟到运行时报错
 
-from agent.base_agent import AgentConfig, BaseAgent
+from agent.base_agent import FLEET_MESSAGE_TTL_SECONDS, AgentConfig, BaseAgent
 from agent.dict_to_ros_msg import dict_to_ros_msg
 from agent.frame_utils import namespace_message_frames
 from agent.ros_msg_converter import ros_msg_to_dict
-from protocol.binary_payloads import is_ros_message_binary_supported
+from protocol.binary_payloads import (
+    encode_fleet_binary_payload,
+    is_ros_message_binary_supported,
+)
 from protocol.messages import (
     CmdAction,
     CmdData,
+    FleetBinaryEnvelopeData,
     FleetData,
     Position,
     RobotMode,
@@ -39,6 +44,19 @@ from protocol.messages import (
 logger = logging.getLogger(__name__)
 
 __all__ = ["ROS1Agent"]
+
+
+@dataclass
+class _FleetRoute:
+    """单个目标对应的实际编队发送 route。"""
+
+    target_id: str
+    dst_topic: str
+    freq_limit: float
+    transport: str
+    qos: int
+    frame_policy: str
+    last_sent: float = 0.0
 
 
 class ROS1Agent(BaseAgent):
@@ -61,7 +79,7 @@ class ROS1Agent(BaseAgent):
 
         # ROS 订阅句柄
         self._ros_subscribers: Dict[str, object] = {}  # {topic: rospy.Subscriber}
-        self._fleet_subscribers: Dict[str, object] = {}
+        self._fleet_subscribers: Dict[Tuple[str, str], object] = {}
 
         # ROS 发布器
         self._cmd_vel_pub: Optional[rospy.Publisher] = None
@@ -296,8 +314,7 @@ class ROS1Agent(BaseAgent):
             buff = io.BytesIO()
             msg.serialize(buff)
             return buff.getvalue()
-        except Exception as e:
-            logger.warning("[ROS1Agent] Failed to serialize ROS message: %s", e)
+        except Exception:
             return None
 
     @staticmethod
@@ -435,24 +452,20 @@ class ROS1Agent(BaseAgent):
 
     def _apply_fleet_rules(self, fleet_rules: List[dict]) -> None:
         """根据 fleet_rules 订阅本机 ROS topic，并转发给目标机器人。"""
-        for topic, sub in list(self._fleet_subscribers.items()):
+        for route_key, sub in list(self._fleet_subscribers.items()):
             try:
                 sub.unregister()
             except Exception:
                 pass
-            logger.info(f"[ROS1Agent] Fleet rule unsubscribed from: {topic}")
+            logger.info(
+                "[ROS1Agent] Fleet rule unsubscribed from: %s (%s)",
+                route_key[0],
+                route_key[1],
+            )
         self._fleet_subscribers.clear()
 
-        for rule in fleet_rules:
-            if not rule.get("enabled", True):
-                continue
-
-            src_topic = rule.get("src_topic", "")
-            msg_type = rule.get("msg_type", "")
-            targets = list(rule.get("targets", []))
-            if not src_topic or not msg_type or not targets:
-                continue
-
+        for route_key, routes in self._group_fleet_routes(fleet_rules).items():
+            src_topic, msg_type = route_key
             msg_class = self._get_ros_msg_class(msg_type)
             if msg_class is None:
                 logger.error(f"[ROS1Agent] Unknown fleet message type: {msg_type}")
@@ -461,12 +474,10 @@ class ROS1Agent(BaseAgent):
             callback = self._make_fleet_forward_callback(
                 src_topic=src_topic,
                 msg_type=msg_type,
-                targets=targets,
-                frame_policy=rule.get("frame_policy", "preserve"),
-                freq_limit=float(rule.get("freq_limit", 0.0)),
+                routes=routes,
             )
             try:
-                self._fleet_subscribers[src_topic] = rospy.Subscriber(
+                self._fleet_subscribers[route_key] = rospy.Subscriber(
                     src_topic,
                     msg_class,
                     callback,
@@ -483,41 +494,186 @@ class ROS1Agent(BaseAgent):
                     e,
                 )
 
-    def _make_fleet_forward_callback(
-        self,
-        src_topic: str,
-        msg_type: str,
-        targets: List[dict],
-        frame_policy: str,
-        freq_limit: float = 0.0,
-    ):
-        last_pub_time = {"t": 0.0}
-        min_interval = 1.0 / freq_limit if freq_limit > 0 else 0.0
+    @staticmethod
+    def _group_fleet_routes(
+        fleet_rules: List[dict],
+    ) -> Dict[Tuple[str, str], List[_FleetRoute]]:
+        """展开并分组 route，拒绝同一源 topic 的类型冲突。"""
+        groups: Dict[Tuple[str, str], List[_FleetRoute]] = {}
+        topic_types: Dict[str, set] = {}
+        seen_routes: Dict[Tuple[str, str], set] = {}
 
-        def callback(msg):
-            now = time.time()
-            if min_interval > 0 and (now - last_pub_time["t"]) < min_interval:
-                return
-            last_pub_time["t"] = now
+        for rule in fleet_rules:
+            if not isinstance(rule, dict) or not rule.get("enabled", True):
+                continue
+            src_topic = rule.get("src_topic", "")
+            msg_type = rule.get("msg_type", "")
+            targets = rule.get("targets", [])
+            if not src_topic or not msg_type or not isinstance(targets, list):
+                continue
 
-            payload = ros_msg_to_dict(msg)
+            topic_types.setdefault(src_topic, set()).add(msg_type)
+            route_key = (src_topic, msg_type)
+            group = groups.setdefault(route_key, [])
+            seen = seen_routes.setdefault(route_key, set())
             for target in targets:
+                if not isinstance(target, dict):
+                    continue
                 target_id = target.get("robot_id", "")
                 dst_topic = target.get("dst_topic", "")
                 if not target_id or not dst_topic:
                     continue
-                self.send_to_robot(
+                route_values = (
                     target_id,
+                    dst_topic,
+                    float(rule.get("freq_limit", 0.0)),
+                    rule.get("transport", "mqtt_json"),
+                    int(rule.get("qos", 1)),
+                    rule.get("frame_policy", "preserve"),
+                )
+                if route_values in seen:
+                    continue
+                seen.add(route_values)
+                group.append(_FleetRoute(*route_values))
+
+        conflicting_topics = {
+            topic for topic, msg_types in topic_types.items()
+            if len(msg_types) > 1
+        }
+        for src_topic in conflicting_topics:
+            logger.error(
+                "[ROS1Agent] Conflicting fleet message types for topic %s: %s",
+                src_topic,
+                sorted(topic_types[src_topic]),
+            )
+        return {
+            route_key: routes
+            for route_key, routes in groups.items()
+            if route_key[0] not in conflicting_topics and routes
+        }
+
+    def _make_fleet_forward_callback(
+        self,
+        src_topic: str,
+        msg_type: str,
+        routes: List[_FleetRoute],
+    ):
+        last_warnings: Dict[str, float] = {}
+
+        def callback(msg):
+            now_monotonic = time.monotonic()
+            due_routes = []
+            for route in routes:
+                min_interval = (
+                    1.0 / route.freq_limit
+                    if route.freq_limit > 0
+                    else 0.0
+                )
+                if (
+                    route.last_sent > 0
+                    and min_interval > 0
+                    and now_monotonic - route.last_sent + 1e-12 < min_interval
+                ):
+                    continue
+                route.last_sent = now_monotonic
+                due_routes.append(route)
+            if not due_routes:
+                return
+
+            def warn_limited(kind: str, text: str, *args) -> None:
+                last_warning = last_warnings.get(kind)
+                if (
+                    last_warning is None
+                    or now_monotonic - last_warning >= 10.0
+                ):
+                    last_warnings[kind] = now_monotonic
+                    logger.warning(text, *args)
+
+            binary_routes = [
+                route for route in due_routes
+                if route.transport == "mqtt_binary"
+            ]
+            json_routes = [
+                route for route in due_routes
+                if route.transport != "mqtt_binary"
+            ]
+
+            serialized_body = None
+            md5sum = getattr(type(msg), "_md5sum", "")
+            if binary_routes and isinstance(md5sum, str) and md5sum:
+                serialized_body = self._serialize_ros_message(msg)
+            binary_ready = serialized_body is not None and bool(md5sum)
+            if binary_routes and not binary_ready:
+                warn_limited(
+                    "binary_conversion",
+                    "[ROS1Agent] Fleet binary conversion failed for %s (%s); "
+                    "falling back to JSON",
+                    src_topic,
+                    msg_type,
+                )
+
+            payload = None
+            if json_routes or (binary_routes and not binary_ready):
+                try:
+                    payload = ros_msg_to_dict(msg)
+                except Exception as exc:
+                    warn_limited(
+                        "json_conversion",
+                        "[ROS1Agent] Fleet JSON conversion failed for %s (%s): %s",
+                        src_topic,
+                        msg_type,
+                        exc,
+                    )
+
+            wall_stamp = time.time()
+            for route in due_routes:
+                if route.transport == "mqtt_binary" and binary_ready:
+                    transfer_id = self._next_fleet_transfer_id()
+                    envelope = FleetBinaryEnvelopeData(
+                        transfer_id=transfer_id,
+                        payload_size=len(serialized_body),
+                        md5sum=md5sum,
+                        src_topic=src_topic,
+                        dst_topic=route.dst_topic,
+                        msg_type=msg_type,
+                        frame_policy=route.frame_policy,
+                        stamp=wall_stamp,
+                        ttl=FLEET_MESSAGE_TTL_SECONDS,
+                    )
+                    framed_body = encode_fleet_binary_payload(
+                        transfer_id,
+                        serialized_body,
+                    )
+                    envelope_ok, body_ok = self.send_fleet_binary_to_robot(
+                        route.target_id,
+                        envelope,
+                        framed_body,
+                        qos=route.qos,
+                    )
+                    if not envelope_ok or not body_ok:
+                        warn_limited(
+                            "mqtt_publish",
+                            "[ROS1Agent] Fleet binary publish rejected for %s -> %s",
+                            src_topic,
+                            route.target_id,
+                        )
+                    continue
+
+                if payload is None:
+                    continue
+                self.send_to_robot(
+                    route.target_id,
                     FleetData(
                         data_type="ros_topic",
                         src_topic=src_topic,
-                        dst_topic=dst_topic,
+                        dst_topic=route.dst_topic,
                         msg_type=msg_type,
-                        frame_policy=frame_policy,
+                        frame_policy=route.frame_policy,
                         payload=payload,
-                        stamp=now,
-                        ttl=1.0,
+                        stamp=wall_stamp,
+                        ttl=FLEET_MESSAGE_TTL_SECONDS,
                     ),
+                    qos=route.qos,
                 )
 
         return callback

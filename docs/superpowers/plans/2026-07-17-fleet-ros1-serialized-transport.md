@@ -915,7 +915,7 @@ git commit -m "feat: 支持编队二进制接收配对"
 - 修改：`agent/ros1_agent.py`
 - 测试：`tests/test_ros1_agent.py`
 
-- [ ] **步骤 1：定义测试消息 MD5 并编写 route 聚合测试**
+- [x] **步骤 1：定义测试消息 MD5 并编写 route 聚合测试**
 
 给测试消息增加 class 属性：
 
@@ -1039,7 +1039,7 @@ def build_fleet_rule(
     }
 ```
 
-- [ ] **步骤 2：编写 serialize/MD5 失败回退测试**
+- [x] **步骤 2：编写 serialize/MD5 失败回退测试**
 
 ```python
 def test_fleet_binary_serialize_failure_falls_back_to_json_once(monkeypatch):
@@ -1108,7 +1108,7 @@ def test_fleet_binary_publish_failure_does_not_fallback_to_json():
     agent.send_to_robot.assert_not_called()
 ```
 
-- [ ] **步骤 3：运行测试验证旧的一规则一 subscriber 实现失败**
+- [x] **步骤 3：运行测试验证旧的一规则一 subscriber 实现失败**
 
 运行：
 
@@ -1118,7 +1118,7 @@ python3 -m pytest tests/test_ros1_agent.py -k "fleet and (groups or serializes_o
 
 预期：因当前 `_apply_fleet_rules()` 为每条规则创建 subscriber、回调始终先转 dict 且不读 transport 而失败。
 
-- [ ] **步骤 4：实现 `_FleetRoute` 和规则展开**
+- [x] **步骤 4：实现 `_FleetRoute` 和规则展开**
 
 在 `agent/ros1_agent.py` 导入 `dataclass`，并将 typing import 扩展为包含 `Tuple`。定义私有 dataclass，全部类型兼容 Python 3.8：
 
@@ -1138,7 +1138,7 @@ class _FleetRoute:
 
 将 `_fleet_subscribers` 改为 `Dict[Tuple[str, str], object]`，每组只创建一个 subscriber。
 
-- [ ] **步骤 5：实现一次转换和独立 route 限频**
+- [x] **步骤 5：实现一次转换和独立 route 限频**
 
 导入 `FleetBinaryEnvelopeData`、`encode_fleet_binary_payload` 和 BaseAgent 中的固定 TTL 常量。
 
@@ -1157,7 +1157,7 @@ class _FleetRoute:
 
 同步改写现有 `test_fleet_rule_callback_sends_fleet_data` 和 `test_fleet_rule_callback_respects_freq_limit`：使用 `_FleetRoute` 列表调用新 callback；限频测试 monkeypatch `agent.ros1_agent.time.monotonic`，不能继续 patch `time.time`。JSON route 的原有 `FleetData` 字段断言全部保留，并新增 `qos=1` 调用断言。
 
-- [ ] **步骤 6：运行 ROS1 源端和既有 sensor 测试**
+- [x] **步骤 6：运行 ROS1 源端和既有 sensor 测试**
 
 运行：
 
@@ -1168,7 +1168,7 @@ python3 -m pytest tests/test_agent_topic_config.py -q
 
 预期：全部通过；普通 Agent 到地面站 sensor serialized 路径测试保持通过。
 
-- [ ] **步骤 7：提交 ROS1 源端 route**
+- [x] **步骤 7：提交 ROS1 源端 route**
 
 ```bash
 git add agent/ros1_agent.py tests/test_ros1_agent.py

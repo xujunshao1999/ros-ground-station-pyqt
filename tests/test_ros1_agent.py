@@ -2,21 +2,48 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from agent.ros1_agent import ROS1Agent
+from agent.ros1_agent import ROS1Agent, _FleetRoute
 from protocol.messages import FleetData
 
 
 class _SerializableRosMsg:
+    _md5sum = "test-md5"
+
     def __init__(self, payload: bytes):
         self.payload = payload
+        self.serialize_count = 0
 
     def serialize(self, buff):
+        self.serialize_count += 1
         buff.write(self.payload)
 
 
 class _UnserializableRosMsg:
+    _md5sum = "test-md5"
+
     def serialize(self, buff):
         raise RuntimeError("serialize failed")
+
+
+def build_fleet_rule(
+    src_topic,
+    msg_type,
+    target_id,
+    dst_topic,
+    transport="mqtt_json",
+    qos=1,
+):
+    """构造源端 route 聚合测试使用的最小规范化规则。"""
+    return {
+        "enabled": True,
+        "src_topic": src_topic,
+        "msg_type": msg_type,
+        "targets": [{"robot_id": target_id, "dst_topic": dst_topic}],
+        "freq_limit": 0.0,
+        "transport": transport,
+        "qos": qos,
+        "frame_policy": "namespace",
+    }
 
 
 def test_ros1_agent_uses_agent_local_dict_to_ros_msg():
@@ -88,7 +115,242 @@ def test_apply_fleet_rules_subscribes_enabled_ros_topics(monkeypatch):
     mock_rospy.Subscriber.assert_called_once()
     assert mock_rospy.Subscriber.call_args[0][0] == "/odom"
     assert mock_rospy.Subscriber.call_args[0][1] is object
-    assert agent._fleet_subscribers["/odom"] is mock_sub
+    assert agent._fleet_subscribers[("/odom", "nav_msgs/Odometry")] is mock_sub
+
+
+def test_apply_fleet_rules_groups_same_source_topic_into_one_subscriber(
+    monkeypatch,
+):
+    """同一 source topic/type 的多个 route 只创建一个 ROS subscriber。"""
+    mock_rospy = MagicMock()
+    mock_rospy.Subscriber.return_value = MagicMock()
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    agent = object.__new__(ROS1Agent)
+    agent._fleet_subscribers = {}
+    agent._get_ros_msg_class = MagicMock(return_value=object)
+    rules = [
+        build_fleet_rule(
+            "/odom",
+            "nav_msgs/Odometry",
+            "r2",
+            "/fleet/r1/odom",
+        ),
+        build_fleet_rule(
+            "/odom",
+            "nav_msgs/Odometry",
+            "r3",
+            "/fleet/r1/odom",
+            transport="mqtt_binary",
+            qos=0,
+        ),
+    ]
+
+    ROS1Agent._apply_fleet_rules(agent, rules)
+
+    assert mock_rospy.Subscriber.call_count == 1
+    assert len(agent._fleet_subscribers) == 1
+
+
+def test_group_fleet_routes_rejects_conflicting_types_for_same_topic():
+    """同一源 topic 配置不同消息类型时整组拒绝。"""
+    rules = [
+        build_fleet_rule(
+            "/odom",
+            "nav_msgs/Odometry",
+            "r2",
+            "/fleet/r1/odom",
+        ),
+        build_fleet_rule(
+            "/odom",
+            "geometry_msgs/PoseStamped",
+            "r3",
+            "/debug/odom",
+        ),
+    ]
+
+    assert ROS1Agent._group_fleet_routes(rules) == {}
+
+
+def test_group_fleet_routes_deduplicates_identical_routes():
+    """重复配置不能造成同一消息重复发送。"""
+    rule = build_fleet_rule(
+        "/odom",
+        "nav_msgs/Odometry",
+        "r2",
+        "/fleet/r1/odom",
+        transport="mqtt_binary",
+        qos=0,
+    )
+
+    groups = ROS1Agent._group_fleet_routes([rule, dict(rule)])
+
+    assert len(groups[("/odom", "nav_msgs/Odometry")]) == 1
+
+
+def test_fleet_callback_serializes_once_and_uses_unique_transfer_per_route():
+    """同一 ROS 回调只 serialize 一次，但每条 binary route 使用独立 ID。"""
+    agent = object.__new__(ROS1Agent)
+    binary_send = MagicMock(return_value=(True, True))
+    agent.send_fleet_binary_to_robot = binary_send
+    agent.send_to_robot = MagicMock(return_value=True)
+    agent._next_fleet_transfer_id = MagicMock(side_effect=[101, 102])
+    routes = [
+        _FleetRoute(
+            "r2",
+            "/fleet/r1/odom",
+            0.0,
+            "mqtt_binary",
+            0,
+            "namespace",
+        ),
+        _FleetRoute(
+            "r2",
+            "/debug/r1/odom",
+            0.0,
+            "mqtt_binary",
+            0,
+            "preserve",
+        ),
+    ]
+    callback = ROS1Agent._make_fleet_forward_callback(
+        agent,
+        src_topic="/odom",
+        msg_type="nav_msgs/Odometry",
+        routes=routes,
+    )
+    msg = _SerializableRosMsg(b"serialized-odom")
+
+    callback(msg)
+
+    assert msg.serialize_count == 1
+    assert binary_send.call_count == 2
+    ids = [item.args[1].transfer_id for item in binary_send.call_args_list]
+    assert len(set(ids)) == 2
+
+
+def test_fleet_routes_use_independent_frequency_limits(monkeypatch):
+    """同一 subscriber 中每条 route 独立判断是否到期。"""
+    times = iter([100.0, 100.05, 100.11])
+    monkeypatch.setattr("agent.ros1_agent.time.monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        MagicMock(return_value={"header": {"frame_id": "odom"}}),
+    )
+    agent = object.__new__(ROS1Agent)
+    agent.send_to_robot = MagicMock(return_value=True)
+    routes = [
+        _FleetRoute("r2", "/slow", 10.0, "mqtt_json", 1, "preserve"),
+        _FleetRoute("r3", "/fast", 20.0, "mqtt_json", 1, "preserve"),
+    ]
+    callback = ROS1Agent._make_fleet_forward_callback(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        routes,
+    )
+
+    callback(object())
+    callback(object())
+    callback(object())
+
+    targets = [item.args[0] for item in agent.send_to_robot.call_args_list]
+    assert targets.count("r2") == 2
+    assert targets.count("r3") == 3
+
+
+def test_fleet_binary_serialize_failure_falls_back_to_json_once(monkeypatch):
+    """serialize 失败时只转一次字典，并为 binary route 发送完整 JSON。"""
+    ros_msg_to_dict = MagicMock(return_value={"header": {"frame_id": "odom"}})
+    monkeypatch.setattr("agent.ros1_agent.ros_msg_to_dict", ros_msg_to_dict)
+    agent = object.__new__(ROS1Agent)
+    json_send = MagicMock(return_value=True)
+    binary_send = MagicMock(return_value=(True, True))
+    agent.send_to_robot = json_send
+    agent.send_fleet_binary_to_robot = binary_send
+    routes = [
+        _FleetRoute(
+            "r2",
+            "/fleet/r1/odom",
+            0.0,
+            "mqtt_binary",
+            0,
+            "namespace",
+        )
+    ]
+    callback = ROS1Agent._make_fleet_forward_callback(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        routes,
+    )
+
+    callback(_UnserializableRosMsg())
+
+    ros_msg_to_dict.assert_called_once()
+    json_send.assert_called_once()
+    binary_send.assert_not_called()
+
+
+def test_fleet_binary_missing_md5_falls_back_to_json(monkeypatch):
+    """源消息 MD5 缺失时不得发送无法安全反序列化的 binary。"""
+
+    class NoMd5Message(_SerializableRosMsg):
+        _md5sum = ""
+
+    ros_msg_to_dict = MagicMock(return_value={"header": {"frame_id": "odom"}})
+    monkeypatch.setattr("agent.ros1_agent.ros_msg_to_dict", ros_msg_to_dict)
+    agent = object.__new__(ROS1Agent)
+    agent.send_to_robot = MagicMock(return_value=True)
+    agent.send_fleet_binary_to_robot = MagicMock(return_value=(True, True))
+    routes = [
+        _FleetRoute(
+            "r2",
+            "/fleet/r1/odom",
+            0.0,
+            "mqtt_binary",
+            0,
+            "namespace",
+        )
+    ]
+    callback = ROS1Agent._make_fleet_forward_callback(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        routes,
+    )
+
+    callback(NoMd5Message(b"serialized-odom"))
+
+    ros_msg_to_dict.assert_called_once()
+    agent.send_to_robot.assert_called_once()
+    agent.send_fleet_binary_to_robot.assert_not_called()
+
+
+def test_fleet_binary_publish_failure_does_not_fallback_to_json():
+    """Paho rc 失败只记录结果，不能产生重复 JSON 逻辑消息。"""
+    agent = object.__new__(ROS1Agent)
+    agent.send_to_robot = MagicMock(return_value=True)
+    agent.send_fleet_binary_to_robot = MagicMock(return_value=(False, True))
+    agent._next_fleet_transfer_id = MagicMock(return_value=31)
+    route = _FleetRoute(
+        "r2",
+        "/fleet/r1/odom",
+        0.0,
+        "mqtt_binary",
+        1,
+        "namespace",
+    )
+    callback = ROS1Agent._make_fleet_forward_callback(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        [route],
+    )
+
+    callback(_SerializableRosMsg(b"serialized-odom"))
+
+    agent.send_fleet_binary_to_robot.assert_called_once()
+    agent.send_to_robot.assert_not_called()
 
 
 def test_on_topic_subscribed_replays_tf_static_latched_message(monkeypatch):
@@ -507,33 +769,37 @@ def test_fleet_rule_callback_sends_fleet_data(monkeypatch):
     agent = object.__new__(ROS1Agent)
     agent.config = MagicMock()
     agent.config.robot_id = "turtlebot_001"
-    sent = []
-    agent.send_to_robot = lambda target_id, data: sent.append((target_id, data))
+    agent.send_to_robot = MagicMock(return_value=True)
 
     callback = ROS1Agent._make_fleet_forward_callback(
         agent,
         src_topic="/odom",
         msg_type="nav_msgs/Odometry",
-        targets=[
-            {
-                "robot_id": "turtlebot_002",
-                "dst_topic": "/fleet/turtlebot_001/odom",
-            }
+        routes=[
+            _FleetRoute(
+                "turtlebot_002",
+                "/fleet/turtlebot_001/odom",
+                0.0,
+                "mqtt_json",
+                1,
+                "namespace",
+            )
         ],
-        frame_policy="namespace",
-        freq_limit=0.0,
     )
 
     callback(object())
 
-    assert sent[0][0] == "turtlebot_002"
-    assert isinstance(sent[0][1], FleetData)
-    assert sent[0][1].data_type == "ros_topic"
-    assert sent[0][1].src_topic == "/odom"
-    assert sent[0][1].dst_topic == "/fleet/turtlebot_001/odom"
-    assert sent[0][1].msg_type == "nav_msgs/Odometry"
-    assert sent[0][1].frame_policy == "namespace"
-    assert sent[0][1].payload == {"header": {"frame_id": "odom"}}
+    sent_data = agent.send_to_robot.call_args.args[1]
+    assert agent.send_to_robot.call_args.args[0] == "turtlebot_002"
+    assert agent.send_to_robot.call_args.kwargs == {"qos": 1}
+    assert isinstance(sent_data, FleetData)
+    assert sent_data.data_type == "ros_topic"
+    assert sent_data.src_topic == "/odom"
+    assert sent_data.dst_topic == "/fleet/turtlebot_001/odom"
+    assert sent_data.msg_type == "nav_msgs/Odometry"
+    assert sent_data.frame_policy == "namespace"
+    assert sent_data.payload == {"header": {"frame_id": "odom"}}
+    assert sent_data.ttl == 1.0
 
 
 def test_fleet_rule_callback_respects_freq_limit(monkeypatch):
@@ -542,31 +808,32 @@ def test_fleet_rule_callback_respects_freq_limit(monkeypatch):
         lambda msg: {"header": {"frame_id": "odom"}},
     )
     times = iter([100.0, 100.05, 100.11])
-    monkeypatch.setattr("agent.ros1_agent.time.time", lambda: next(times))
+    monkeypatch.setattr("agent.ros1_agent.time.monotonic", lambda: next(times))
 
     agent = object.__new__(ROS1Agent)
-    sent = []
-    agent.send_to_robot = lambda target_id, data: sent.append((target_id, data))
+    agent.send_to_robot = MagicMock(return_value=True)
 
     callback = ROS1Agent._make_fleet_forward_callback(
         agent,
         src_topic="/odom",
         msg_type="nav_msgs/Odometry",
-        targets=[
-            {
-                "robot_id": "turtlebot_002",
-                "dst_topic": "/fleet/turtlebot_001/odom",
-            }
+        routes=[
+            _FleetRoute(
+                "turtlebot_002",
+                "/fleet/turtlebot_001/odom",
+                10.0,
+                "mqtt_json",
+                1,
+                "preserve",
+            )
         ],
-        frame_policy="preserve",
-        freq_limit=10.0,
     )
 
     callback(object())
     callback(object())
     callback(object())
 
-    assert len(sent) == 2
+    assert agent.send_to_robot.call_count == 2
 
 
 def test_on_fleet_message_ros_topic_publishes_typed_dst_topic(monkeypatch):
