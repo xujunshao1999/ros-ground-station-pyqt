@@ -1183,7 +1183,7 @@ git commit -m "feat: 按传输方式转发编队数据"
 - 测试：`tests/test_ros1_agent.py`
 - 测试：`tests/test_agent_topic_config.py`
 
-- [ ] **步骤 1：编写目标反序列化和 MD5 测试**
+- [x] **步骤 1：编写目标反序列化和 MD5 测试**
 
 新增 fake ROS class：
 
@@ -1310,13 +1310,13 @@ def test_on_fleet_binary_message_rejects_unknown_type():
     agent._get_fleet_publisher.assert_not_called()
 ```
 
-- [ ] **步骤 2：编写 publisher 和轻量摘要复用测试**
+- [x] **步骤 2：编写 publisher 和轻量摘要复用测试**
 
 连续处理两条相同 `(dst_topic, msg_type)` binary 消息，断言类型化 publisher 和 `/fleet/incoming` publisher 各只创建一次，摘要 JSON 不包含 body 或完整 payload，只包含 `src_id`、`dst_topic`、`msg_type`、`transport`、`transfer_id`、`payload_size`、`timestamp`。
 
 同时更新现有 JSON fleet 测试，断言 JSON 和 binary 共用 `_publish_fleet_summary()`，而不是每条消息创建 debug publisher。
 
-- [ ] **步骤 3：运行测试验证 binary hook 尚未实现**
+- [x] **步骤 3：运行测试验证 binary hook 尚未实现**
 
 运行：
 
@@ -1326,7 +1326,7 @@ python3 -m pytest tests/test_ros1_agent.py -k "on_fleet_binary or fleet_summary"
 
 预期：因 `ROS1Agent._on_fleet_binary_message()` 仍使用 BaseAgent 默认 no-op、`_fleet_incoming_pub` 尚未缓存而失败。
 
-- [ ] **步骤 4：实现目标 binary hook**
+- [x] **步骤 4：实现目标 binary hook**
 
 在 `ROS1Agent.__init__()` 初始化 `_fleet_incoming_pub = None`。导入 `namespace_ros_message_frames` 和 `FleetBinaryEnvelopeData`。实现：
 
@@ -1365,7 +1365,7 @@ def _on_fleet_binary_message(
 
 验证 `dst_topic.startswith("/")`、encoding 和 payload format。捕获单条异常并限频记录，不能清空 publisher 或影响下一条消息。
 
-- [ ] **步骤 5：抽取 publisher/摘要复用并更新 MockAgent**
+- [x] **步骤 5：抽取 publisher/摘要复用并更新 MockAgent**
 
 抽取 `_get_fleet_publisher()` 和以下摘要入口，让现有 JSON `_publish_fleet_ros_topic()` 复用：
 
@@ -1399,7 +1399,7 @@ def _publish_fleet_summary(
 
 `MockAgent._on_fleet_binary_message()` 仅记录或日志输出 envelope 摘要和 `len(body)`；对应 BaseAgent 测试断言不导入 rospy。
 
-- [ ] **步骤 6：运行 ROS1、Mock 与全量无 ROS 测试**
+- [x] **步骤 6：运行 ROS1、Mock 与全量无 ROS 测试**
 
 运行：
 
@@ -1410,7 +1410,7 @@ python3 -m pytest tests/ -q
 
 预期：全部通过；ROS1 测试使用 monkeypatch/fake message，无需 roscore。
 
-- [ ] **步骤 7：提交目标 Agent 发布**
+- [x] **步骤 7：提交目标 Agent 发布**
 
 ```bash
 git add agent/ros1_agent.py agent/mock_agent.py tests/test_ros1_agent.py tests/test_agent_topic_config.py

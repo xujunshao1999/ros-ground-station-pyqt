@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from agent.ros1_agent import ROS1Agent, _FleetRoute
-from protocol.messages import FleetData
+from protocol.messages import FleetBinaryEnvelopeData, FleetData
 
 
 class _SerializableRosMsg:
@@ -25,6 +28,18 @@ class _UnserializableRosMsg:
         raise RuntimeError("serialize failed")
 
 
+class _DeserializableRosMsg:
+    _md5sum = "test-md5"
+
+    def __init__(self):
+        self.payload = b""
+        self.header = type("Header", (), {"frame_id": "odom"})()
+        self.child_frame_id = "base_link"
+
+    def deserialize(self, payload):
+        self.payload = payload
+
+
 def build_fleet_rule(
     src_topic,
     msg_type,
@@ -44,6 +59,165 @@ def build_fleet_rule(
         "qos": qos,
         "frame_policy": "namespace",
     }
+
+
+def build_binary_target_agent(msg_class):
+    """构造不依赖 roscore 的目标 ROS1Agent 测试对象。"""
+    agent = object.__new__(ROS1Agent)
+    agent._get_ros_msg_class = MagicMock(return_value=msg_class)
+    agent._get_fleet_publisher = MagicMock(return_value=MagicMock())
+    agent._publish_fleet_summary = MagicMock()
+    return agent
+
+
+def build_binary_envelope(md5sum, transfer_id):
+    """构造通过 BaseAgent 配对后交给 ROS1 hook 的 envelope。"""
+    return FleetBinaryEnvelopeData(
+        transfer_id=transfer_id,
+        payload_size=8,
+        md5sum=md5sum,
+        src_topic="/odom",
+        dst_topic="/fleet/r1/odom",
+        msg_type="nav_msgs/Odometry",
+        frame_policy="preserve",
+        ttl=1.0,
+    )
+
+
+def test_on_fleet_binary_message_deserializes_and_publishes_typed_topic():
+    """合法 binary 应恢复原 ROS 类型并应用对象级 frame namespace。"""
+    typed_pub = MagicMock()
+    agent = object.__new__(ROS1Agent)
+    agent._get_ros_msg_class = MagicMock(return_value=_DeserializableRosMsg)
+    agent._get_fleet_publisher = MagicMock(return_value=typed_pub)
+    agent._publish_fleet_summary = MagicMock()
+    envelope = build_binary_envelope(md5sum="test-md5", transfer_id=21)
+    envelope.frame_policy = "namespace"
+
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"ros-body")
+
+    typed_pub.publish.assert_called_once()
+    published = typed_pub.publish.call_args.args[0]
+    assert published.payload == b"ros-body"
+    assert published.header.frame_id == "r1/odom"
+    assert published.child_frame_id == "r1/base_link"
+    agent._publish_fleet_summary.assert_called_once_with(
+        src_id="r1",
+        dst_topic="/fleet/r1/odom",
+        msg_type="nav_msgs/Odometry",
+        transport="mqtt_binary",
+        transfer_id=21,
+        payload_size=8,
+    )
+
+
+def test_on_fleet_binary_message_rejects_md5_mismatch():
+    """源端和本地 ROS 消息定义 MD5 不一致时拒绝发布。"""
+    agent = build_binary_target_agent(_DeserializableRosMsg)
+    envelope = build_binary_envelope(md5sum="other-md5", transfer_id=22)
+
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"ros-body")
+
+    agent._get_fleet_publisher.assert_not_called()
+    agent._publish_fleet_summary.assert_not_called()
+
+
+def test_on_fleet_binary_message_rejects_missing_local_md5():
+    """本地消息类缺少 MD5 时不能尝试反序列化。"""
+
+    class MissingMd5Message(_DeserializableRosMsg):
+        _md5sum = ""
+
+    agent = build_binary_target_agent(MissingMd5Message)
+    envelope = build_binary_envelope(md5sum="test-md5", transfer_id=23)
+
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"ros-body")
+
+    agent._get_fleet_publisher.assert_not_called()
+
+
+def test_on_fleet_binary_deserialize_error_does_not_block_next_message():
+    """单条坏 body 只丢弃当前 transfer，下一条仍可发布。"""
+
+    class FailingMessage(_DeserializableRosMsg):
+        def deserialize(self, payload):
+            raise ValueError("bad payload")
+
+    agent = build_binary_target_agent(FailingMessage)
+    envelope = build_binary_envelope(md5sum="test-md5", transfer_id=24)
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"bad")
+    agent._get_ros_msg_class = MagicMock(return_value=_DeserializableRosMsg)
+    envelope.transfer_id = 25
+
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"good")
+
+    assert agent._get_fleet_publisher.return_value.publish.call_count == 1
+
+
+def test_on_fleet_binary_message_rejects_unknown_type():
+    """目标端无法加载 ROS 消息类时丢弃当前 transfer。"""
+    agent = build_binary_target_agent(None)
+    envelope = build_binary_envelope(md5sum="test-md5", transfer_id=26)
+
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"ros-body")
+
+    agent._get_fleet_publisher.assert_not_called()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("data_type", "custom"),
+    ("encoding", "unknown"),
+    ("payload_format", "unknown"),
+    ("dst_topic", "relative/topic"),
+    ("msg_type", ""),
+])
+def test_on_fleet_binary_message_rejects_invalid_route_markers(field, value):
+    """目标 hook 再次验证关键协议标记和 ROS 目标路径。"""
+    agent = build_binary_target_agent(_DeserializableRosMsg)
+    envelope = build_binary_envelope(md5sum="test-md5", transfer_id=27)
+    setattr(envelope, field, value)
+
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"ros-body")
+
+    agent._get_fleet_publisher.assert_not_called()
+
+
+def test_on_fleet_binary_reuses_publishers_and_emits_lightweight_summary(
+    monkeypatch,
+):
+    """连续 binary 消息复用两个 publisher，摘要不得携带 ROS body。"""
+    typed_pub = MagicMock()
+    summary_pub = MagicMock()
+    mock_rospy = MagicMock()
+    mock_rospy.Publisher.side_effect = [typed_pub, summary_pub]
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    agent = object.__new__(ROS1Agent)
+    agent._get_ros_msg_class = MagicMock(return_value=_DeserializableRosMsg)
+    agent._fleet_publishers = {}
+    agent._fleet_incoming_pub = None
+    envelope = build_binary_envelope(md5sum="test-md5", transfer_id=31)
+
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"ros-body")
+    envelope.transfer_id = 32
+    ROS1Agent._on_fleet_binary_message(agent, "r1", envelope, b"ros-next")
+
+    assert mock_rospy.Publisher.call_count == 2
+    assert typed_pub.publish.call_count == 2
+    assert summary_pub.publish.call_count == 2
+    summary = json.loads(summary_pub.publish.call_args.args[0])
+    assert set(summary) == {
+        "src_id",
+        "dst_topic",
+        "msg_type",
+        "transport",
+        "transfer_id",
+        "payload_size",
+        "timestamp",
+    }
+    assert summary["transport"] == "mqtt_binary"
+    assert summary["transfer_id"] == 32
+    assert "body" not in summary
+    assert "payload" not in summary
 
 
 def test_ros1_agent_uses_agent_local_dict_to_ros_msg():
@@ -836,11 +1010,11 @@ def test_fleet_rule_callback_respects_freq_limit(monkeypatch):
     assert agent.send_to_robot.call_count == 2
 
 
-def test_on_fleet_message_ros_topic_publishes_typed_dst_topic(monkeypatch):
+def test_fleet_summary_json_ros_topic_publishes_typed_dst_topic(monkeypatch):
     mock_rospy = MagicMock()
     typed_pub = MagicMock()
-    debug_pub = MagicMock()
-    mock_rospy.Publisher.side_effect = [typed_pub, debug_pub]
+    summary_pub = MagicMock()
+    mock_rospy.Publisher.side_effect = [typed_pub, summary_pub]
     monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
     monkeypatch.setattr(
         "agent.ros1_agent.dict_to_ros_msg",
@@ -849,6 +1023,7 @@ def test_on_fleet_message_ros_topic_publishes_typed_dst_topic(monkeypatch):
 
     agent = object.__new__(ROS1Agent)
     agent._fleet_publishers = {}
+    agent._fleet_incoming_pub = None
 
     ROS1Agent._on_fleet_message(agent, "turtlebot_001", FleetData(
         data_type="ros_topic",
@@ -864,7 +1039,19 @@ def test_on_fleet_message_ros_topic_publishes_typed_dst_topic(monkeypatch):
         "msg_type": "nav_msgs/Odometry",
         "payload": {"header": {"frame_id": "odom"}},
     })
-    debug_pub.publish.assert_called_once()
+    summary_pub.publish.assert_called_once()
+    summary = json.loads(summary_pub.publish.call_args.args[0])
+    assert set(summary) == {
+        "src_id",
+        "dst_topic",
+        "msg_type",
+        "transport",
+        "transfer_id",
+        "payload_size",
+        "timestamp",
+    }
+    assert summary["transport"] == "mqtt_json"
+    assert "payload" not in summary
 
 
 def test_on_fleet_message_namespaces_payload_when_requested(monkeypatch):
@@ -884,6 +1071,7 @@ def test_on_fleet_message_namespaces_payload_when_requested(monkeypatch):
 
     agent = object.__new__(ROS1Agent)
     agent._fleet_publishers = {}
+    agent._fleet_incoming_pub = None
 
     ROS1Agent._on_fleet_message(agent, "turtlebot_001", FleetData(
         data_type="ros_topic",
@@ -903,14 +1091,14 @@ def test_on_fleet_message_namespaces_payload_when_requested(monkeypatch):
 def test_on_fleet_message_reuses_typed_publisher(monkeypatch):
     mock_rospy = MagicMock()
     typed_pub = MagicMock()
-    debug_pub_1 = MagicMock()
-    debug_pub_2 = MagicMock()
-    mock_rospy.Publisher.side_effect = [typed_pub, debug_pub_1, debug_pub_2]
+    summary_pub = MagicMock()
+    mock_rospy.Publisher.side_effect = [typed_pub, summary_pub]
     monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
     monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", lambda payload, msg_type: object())
 
     agent = object.__new__(ROS1Agent)
     agent._fleet_publishers = {}
+    agent._fleet_incoming_pub = None
     data = FleetData(
         data_type="ros_topic",
         dst_topic="/fleet/turtlebot_001/odom",
@@ -927,3 +1115,9 @@ def test_on_fleet_message_reuses_typed_publisher(monkeypatch):
     ]
     assert len(typed_topic_calls) == 1
     assert typed_pub.publish.call_count == 2
+    summary_topic_calls = [
+        call for call in mock_rospy.Publisher.call_args_list
+        if call[0][0] == "/fleet/incoming"
+    ]
+    assert len(summary_topic_calls) == 1
+    assert summary_pub.publish.call_count == 2

@@ -24,7 +24,7 @@ except ImportError:
 
 from agent.base_agent import FLEET_MESSAGE_TTL_SECONDS, AgentConfig, BaseAgent
 from agent.dict_to_ros_msg import dict_to_ros_msg
-from agent.frame_utils import namespace_message_frames
+from agent.frame_utils import namespace_message_frames, namespace_ros_message_frames
 from agent.ros_msg_converter import ros_msg_to_dict
 from protocol.binary_payloads import (
     encode_fleet_binary_payload,
@@ -84,6 +84,8 @@ class ROS1Agent(BaseAgent):
         # ROS 发布器
         self._cmd_vel_pub: Optional[rospy.Publisher] = None
         self._fleet_publishers: Dict[tuple, object] = {}
+        self._fleet_incoming_pub = None
+        self._fleet_receive_warning_times: Dict[str, float] = {}
 
         # 状态数据
         self._position = Position(x=0.0, y=0.0, theta=0.0)
@@ -408,19 +410,83 @@ class ROS1Agent(BaseAgent):
         try:
             if data.data_type == "ros_topic":
                 self._publish_fleet_ros_topic(src_id, data)
-
-            payload = {
-                "src_id": src_id,
-                "data_type": data.data_type,
-                "payload": data.payload,
-                "ttl": data.ttl,
-                "timestamp": time.time(),
-            }
-            pub = rospy.Publisher("/fleet/incoming", String, queue_size=10)
-            pub.publish(json.dumps(payload))
-            logger.info(f"[ROS1Agent] Published fleet data from {src_id} to /fleet/incoming")
+                return
+            self._publish_fleet_summary(
+                src_id=src_id,
+                dst_topic=data.dst_topic,
+                msg_type=data.msg_type,
+                transport="mqtt_json",
+            )
         except Exception as e:
             logger.error(f"[ROS1Agent] Failed to publish fleet data to ROS: {e}")
+
+    def _on_fleet_binary_message(
+        self,
+        src_id: str,
+        envelope: FleetBinaryEnvelopeData,
+        body: bytes,
+    ) -> None:
+        """校验并反序列化 Agent 间 ROS1 binary 消息。"""
+        if (
+            envelope.data_type != "ros_topic"
+            or envelope.binary is not True
+            or envelope.transport != "mqtt_binary"
+            or envelope.encoding != "ros1_serialized_v1"
+            or envelope.payload_format != "ros1_serialized"
+            or not envelope.dst_topic.startswith("/")
+            or not envelope.msg_type
+        ):
+            return
+
+        try:
+            msg_class = self._get_ros_msg_class(envelope.msg_type)
+            if msg_class is None:
+                return
+            local_md5 = getattr(msg_class, "_md5sum", "")
+            if (
+                not isinstance(local_md5, str)
+                or not local_md5
+                or local_md5 != envelope.md5sum
+            ):
+                return
+
+            ros_msg = msg_class()
+            ros_msg.deserialize(body)
+            if envelope.frame_policy == "namespace":
+                namespace_ros_message_frames(ros_msg, src_id)
+            publisher = self._get_fleet_publisher(
+                envelope.dst_topic,
+                envelope.msg_type,
+                type(ros_msg),
+            )
+            publisher.publish(ros_msg)
+            self._publish_fleet_summary(
+                src_id=src_id,
+                dst_topic=envelope.dst_topic,
+                msg_type=envelope.msg_type,
+                transport="mqtt_binary",
+                transfer_id=envelope.transfer_id,
+                payload_size=envelope.payload_size,
+            )
+        except Exception as exc:
+            self._warn_fleet_receive_limited(envelope.msg_type, exc)
+
+    def _warn_fleet_receive_limited(self, msg_type: str, exc: Exception) -> None:
+        """按消息类型限频记录单条 binary 接收异常。"""
+        now = time.monotonic()
+        warning_times = getattr(self, "_fleet_receive_warning_times", None)
+        if warning_times is None:
+            warning_times = {}
+            self._fleet_receive_warning_times = warning_times
+        last_warning = warning_times.get(msg_type)
+        if last_warning is not None and now - last_warning < 10.0:
+            return
+        warning_times[msg_type] = now
+        logger.warning(
+            "[ROS1Agent] Failed to publish fleet binary message %s: %s",
+            msg_type,
+            exc,
+        )
 
     def _publish_fleet_ros_topic(self, src_id: str, data: FleetData) -> None:
         if not data.dst_topic or not data.msg_type or not isinstance(data.payload, dict):
@@ -437,18 +503,65 @@ class ROS1Agent(BaseAgent):
             namespace_message_frames(payload, src_id)
 
         ros_msg = dict_to_ros_msg(payload, data.msg_type)
-        key = (data.dst_topic, data.msg_type)
-        pub = self._fleet_publishers.get(key)
-        if pub is None:
-            pub = rospy.Publisher(data.dst_topic, type(ros_msg), queue_size=10)
-            self._fleet_publishers[key] = pub
+        pub = self._get_fleet_publisher(
+            data.dst_topic,
+            data.msg_type,
+            type(ros_msg),
+        )
         pub.publish(ros_msg)
+        self._publish_fleet_summary(
+            src_id=src_id,
+            dst_topic=data.dst_topic,
+            msg_type=data.msg_type,
+            transport="mqtt_json",
+        )
         logger.info(
             "[ROS1Agent] Published fleet ROS topic from %s to %s (%s)",
             src_id,
             data.dst_topic,
             data.msg_type,
         )
+
+    def _get_fleet_publisher(
+        self,
+        dst_topic: str,
+        msg_type: str,
+        msg_class: type,
+    ):
+        """按目标 topic/type 复用 ROS publisher。"""
+        key = (dst_topic, msg_type)
+        pub = self._fleet_publishers.get(key)
+        if pub is None:
+            pub = rospy.Publisher(dst_topic, msg_class, queue_size=10)
+            self._fleet_publishers[key] = pub
+        return pub
+
+    def _publish_fleet_summary(
+        self,
+        src_id: str,
+        dst_topic: str,
+        msg_type: str,
+        transport: str,
+        transfer_id: int = 0,
+        payload_size: int = 0,
+    ) -> None:
+        """复用 `/fleet/incoming` publisher 发布不含消息主体的摘要。"""
+        if getattr(self, "_fleet_incoming_pub", None) is None:
+            self._fleet_incoming_pub = rospy.Publisher(
+                "/fleet/incoming",
+                String,
+                queue_size=10,
+            )
+        summary = {
+            "src_id": src_id,
+            "dst_topic": dst_topic,
+            "msg_type": msg_type,
+            "transport": transport,
+            "transfer_id": transfer_id,
+            "payload_size": payload_size,
+            "timestamp": time.time(),
+        }
+        self._fleet_incoming_pub.publish(json.dumps(summary))
 
     def _apply_fleet_rules(self, fleet_rules: List[dict]) -> None:
         """根据 fleet_rules 订阅本机 ROS topic，并转发给目标机器人。"""
@@ -736,6 +849,7 @@ class ROS1Agent(BaseAgent):
                 pass
         self._fleet_subscribers.clear()
         self._fleet_publishers.clear()
+        self._fleet_incoming_pub = None
 
         # 停止 HTTP 流服务端
         self._stop_stream_server()

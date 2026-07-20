@@ -589,6 +589,27 @@ def test_send_fleet_binary_publishes_envelope_and_body_with_route_qos():
     assert agent.published[1] == ("robot/r1/to/r2/bin", body, 0, False)
 
 
+def test_mock_agent_binary_hook_logs_summary_without_ros(caplog):
+    """MockAgent 的目标 hook 只记录摘要，不依赖 rospy 或 ROS 消息类。"""
+    agent = MockAgent(AgentConfig(robot_id="r2"))
+    envelope = FleetBinaryEnvelopeData(
+        transfer_id=8,
+        payload_size=4,
+        md5sum="md5",
+        src_topic="/odom",
+        dst_topic="/fleet/r1/odom",
+        msg_type="nav_msgs/Odometry",
+    )
+    caplog.set_level("INFO", logger="agent.mock_agent")
+
+    agent._on_fleet_binary_message("r1", envelope, b"body")
+
+    assert "Fleet binary from r1" in caplog.text
+    assert "type=nav_msgs/Odometry" in caplog.text
+    assert "dst=/fleet/r1/odom" in caplog.text
+    assert "size=4" in caplog.text
+
+
 def test_init_mqtt_sets_bounded_client_queues(monkeypatch):
     """Paho 离线队列和在途消息数必须有界。"""
     client = MagicMock()
