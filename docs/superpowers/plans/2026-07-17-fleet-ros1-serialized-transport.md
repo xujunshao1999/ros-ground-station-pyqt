@@ -1423,7 +1423,7 @@ git commit -m "feat: 发布编队二进制ROS消息"
 - 修改：`qt_frontend/panels/fleet_comm_panel.py`
 - 测试：`tests/test_panels.py`
 
-- [ ] **步骤 1：编写纯逻辑保存和兼容测试**
+- [x] **步骤 1：编写纯逻辑保存和兼容测试**
 
 在 `TestFleetCommPanel` 增加：
 
@@ -1483,7 +1483,7 @@ def test_fleet_config_sync_and_response_preserve_qos_zero(self):
     assert restored[0]["qos"] == 0
 ```
 
-- [ ] **步骤 2：编写 Qt 表单和表格失败测试**
+- [x] **步骤 2：编写 Qt 表单和表格失败测试**
 
 新增完整控件测试：
 
@@ -1524,7 +1524,7 @@ def test_fleet_form_defaults_and_preserves_binary_qos_zero(
 
 部署 signal 的现有测试增加 `emitted[0][1]["fleet_rules"][0]["qos"] == 0` 断言。
 
-- [ ] **步骤 3：运行测试验证 fleet 面板尚无控件**
+- [x] **步骤 3：运行测试验证 fleet 面板尚无控件**
 
 运行：
 
@@ -1534,7 +1534,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -k "FleetCommPa
 
 预期：因 `_combo_transport`、`_combo_qos` 和新表格列尚不存在，或 protocol dict 丢失 QoS 而失败。
 
-- [ ] **步骤 4：实现 transport/QoS 控件和数据闭环**
+- [x] **步骤 4：实现 transport/QoS 控件和数据闭环**
 
 在 fleet 表单新增：
 
@@ -1549,7 +1549,7 @@ for label, value in TopicConfigPanel.qos_options()[:2]:
 
 表格固定为 11 列，表头顺序为“启用、源机器人、源话题、消息类型、目标机器人、目标话题、频率、传输方式、QoS、Frame 策略、操作”，并为新增列设置稳定最小宽度。`_show_add_form()` 默认 JSON/QoS1；编辑时按 item data 回显；`_rule_from_form()`、`normalize_transmit_rules()`、`rule_to_protocol_dict()`、`rules_from_config_response()` 全部显式保留 `transport` 和 `qos`，使用 `is None` 判断，不能用 `or 1` 吞掉 QoS 0。
 
-- [ ] **步骤 5：运行 Qt 聚焦和全量面板测试**
+- [x] **步骤 5：运行 Qt 聚焦和全量面板测试**
 
 运行：
 
@@ -1560,7 +1560,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_panels.py -q
 
 预期：全部通过，表格文本不截断，现有 topic 配置面板测试无回归。
 
-- [ ] **步骤 6：提交 Qt 配置闭环**
+- [x] **步骤 6：提交 Qt 配置闭环**
 
 ```bash
 git add qt_frontend/panels/fleet_comm_panel.py tests/test_panels.py

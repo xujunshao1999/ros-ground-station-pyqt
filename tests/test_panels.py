@@ -856,6 +856,63 @@ class TestEventPanel:
 # FleetCommPanel validator
 # ------------------------------------------------------------------
 class TestFleetCommPanel:
+    def test_fleet_rule_protocol_dict_preserves_transport_and_qos(self):
+        rule = {
+            "enabled": True,
+            "src_robot": "r1",
+            "src_topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "dst_robot": "r2",
+            "dst_topic": "/fleet/r1/odom",
+            "freq_limit": 10.0,
+            "transport": "mqtt_binary",
+            "qos": 0,
+            "frame_policy": "namespace",
+        }
+
+        protocol_rule = FleetCommPanel.rule_to_protocol_dict(rule)
+
+        assert protocol_rule["transport"] == "mqtt_binary"
+        assert protocol_rule["qos"] == 0
+
+    def test_old_fleet_rule_defaults_to_json_qos_one(self):
+        legacy_rule = {
+            "enabled": True,
+            "src_robot": "r1",
+            "src_topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "dst_robot": "r2",
+            "dst_topic": "/fleet/r1/odom",
+            "freq_limit": 10.0,
+            "frame_policy": "namespace",
+        }
+
+        rules = FleetCommPanel.normalize_transmit_rules([legacy_rule])
+
+        assert rules[0]["transport"] == "mqtt_json"
+        assert rules[0]["qos"] == 1
+
+    def test_fleet_config_sync_and_response_preserve_qos_zero(self):
+        rule = {
+            "enabled": True,
+            "src_robot": "r1",
+            "src_topic": "/odom",
+            "msg_type": "nav_msgs/Odometry",
+            "dst_robot": "r2",
+            "dst_topic": "/fleet/r1/odom",
+            "freq_limit": 10.0,
+            "transport": "mqtt_binary",
+            "qos": 0,
+            "frame_policy": "namespace",
+        }
+
+        payload = FleetCommPanel.build_config_sync_payload([rule])
+        restored = FleetCommPanel.rules_from_config_response("r1", payload)
+
+        assert payload["fleet_rules"][0]["qos"] == 0
+        assert restored[0]["transport"] == "mqtt_binary"
+        assert restored[0]["qos"] == 0
+
     def test_validate_rule_src_neq_dst(self):
         assert FleetCommPanel.validate_fleet_rule(
             "r1", "/odom", "nav_msgs/Odometry", "r2", "/fleet/r1/odom", 10.0
@@ -907,6 +964,8 @@ class TestFleetCommPanel:
             "目标机器人",
             "目标话题",
             "频率",
+            "传输方式",
+            "QoS",
             "Frame 策略",
             "操作",
         ]
@@ -915,6 +974,7 @@ class TestFleetCommPanel:
             assert panel._table.horizontalHeader().sectionResizeMode(index) == (
                 QHeaderView.ResizeToContents
             )
+        assert panel._table.horizontalHeader().minimumSectionSize() >= 56
 
     def test_discover_response_populates_source_topic_options(self, qt_app):
         panel = FleetCommPanel()
@@ -979,6 +1039,142 @@ class TestFleetCommPanel:
 
         assert panel._form_group.isChecked() is True
 
+    def test_fleet_form_defaults_and_preserves_binary_qos_zero(
+        self,
+        qt_app,
+        tmp_path,
+    ):
+        panel = FleetCommPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        panel._rules = []
+        panel._refresh_table()
+        panel.on_robot_list_changed(["r1", "r2"])
+        emitted = []
+        panel.config_sync_requested.connect(
+            lambda robot_id, payload: emitted.append((robot_id, payload))
+        )
+
+        panel._btn_add.click()
+
+        assert panel._combo_transport.currentData() == "mqtt_json"
+        assert panel._combo_qos.currentData() == 1
+
+        panel._combo_src.setCurrentText("r1")
+        panel._combo_dst.setCurrentText("r2")
+        panel._combo_src_topic.setCurrentText("/odom")
+        panel._edit_dst_topic.setText("/fleet/r1/odom")
+        panel._combo_msg_type.setCurrentText("nav_msgs/Odometry")
+        panel._spin_freq.setValue(10.0)
+        panel._combo_frame_policy.setCurrentText("namespace")
+        panel._combo_transport.setCurrentIndex(
+            panel._combo_transport.findData("mqtt_binary")
+        )
+        panel._combo_qos.setCurrentIndex(panel._combo_qos.findData(0))
+        panel._btn_confirm.click()
+
+        assert panel._rules[0]["transport"] == "mqtt_binary"
+        assert panel._rules[0]["qos"] == 0
+        assert panel._table.item(0, 7).text() == "mqtt_binary"
+        assert panel._table.item(0, 8).text() == "0"
+
+        panel._table.selectRow(0)
+        assert panel._combo_transport.currentData() == "mqtt_binary"
+        assert panel._combo_qos.currentData() == 0
+
+        panel._btn_deploy.click()
+        assert emitted[0][1]["fleet_rules"][0]["qos"] == 0
+
+    def test_editing_fleet_rule_preserves_enabled_state(self, qt_app, tmp_path):
+        panel = FleetCommPanel()
+        panel._transmit_config_path = tmp_path / "transmit_config.yaml"
+        panel.on_robot_list_changed(["r1", "r2"])
+        panel._rules = [
+            {
+                "enabled": False,
+                "src_robot": "r1",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "r2",
+                "dst_topic": "/fleet/r1/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_binary",
+                "qos": 0,
+                "frame_policy": "namespace",
+            }
+        ]
+        panel._refresh_table()
+
+        panel._table.selectRow(0)
+        panel._btn_confirm.click()
+
+        assert panel._rules[0]["enabled"] is False
+
+    def test_cancel_edit_clears_selection_for_reselect(self, qt_app):
+        panel = FleetCommPanel()
+        panel.on_robot_list_changed(["r1", "r2"])
+        panel._rules = [
+            {
+                "enabled": True,
+                "src_robot": "r1",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "r2",
+                "dst_topic": "/fleet/r1/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_binary",
+                "qos": 0,
+                "frame_policy": "namespace",
+            }
+        ]
+        panel._refresh_table()
+        panel._table.selectRow(0)
+
+        panel._btn_cancel.click()
+
+        assert panel._table.currentRow() == -1
+        panel._table.selectRow(0)
+        assert panel._editing_row == 0
+        assert panel._form_group.isChecked() is True
+
+    def test_delete_selected_rule_clears_edit_state(self, qt_app):
+        panel = FleetCommPanel()
+        panel.on_robot_list_changed(["r1", "r2"])
+        panel._rules = [
+            {
+                "enabled": True,
+                "src_robot": "r1",
+                "src_topic": "/odom",
+                "msg_type": "nav_msgs/Odometry",
+                "dst_robot": "r2",
+                "dst_topic": "/fleet/r1/odom",
+                "freq_limit": 10.0,
+                "transport": "mqtt_binary",
+                "qos": 0,
+                "frame_policy": "namespace",
+            },
+            {
+                "enabled": True,
+                "src_robot": "r1",
+                "src_topic": "/scan",
+                "msg_type": "sensor_msgs/LaserScan",
+                "dst_robot": "r2",
+                "dst_topic": "/fleet/r1/scan",
+                "freq_limit": 5.0,
+                "transport": "mqtt_binary",
+                "qos": 0,
+                "frame_policy": "namespace",
+            },
+        ]
+        panel._refresh_table()
+        panel._table.selectRow(0)
+
+        panel._btn_delete.click()
+
+        assert [rule["src_topic"] for rule in panel._rules] == ["/scan"]
+        assert panel._editing_row is None
+        assert panel._table.currentRow() == -1
+        assert panel._form_group.isChecked() is False
+
     def test_confirm_adds_rule_from_form(self, qt_app, tmp_path):
         panel = FleetCommPanel()
         panel._transmit_config_path = tmp_path / "transmit_config.yaml"
@@ -1006,6 +1202,7 @@ class TestFleetCommPanel:
             "dst_topic": "/fleet/turtlebot_001/odom",
             "freq_limit": 10.0,
             "transport": "mqtt_json",
+            "qos": 1,
             "frame_policy": "namespace",
         }
         assert panel._table.rowCount() == 1
@@ -1032,6 +1229,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             }
         ]
@@ -1055,6 +1253,7 @@ class TestFleetCommPanel:
                             ],
                             "freq_limit": 10.0,
                             "transport": "mqtt_json",
+                            "qos": 1,
                             "frame_policy": "namespace",
                         }
                     ]
@@ -1080,6 +1279,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             },
             {
@@ -1137,6 +1337,7 @@ class TestFleetCommPanel:
                         ],
                         "freq_limit": 10.0,
                         "transport": "mqtt_json",
+                        "qos": 1,
                         "frame_policy": "namespace",
                     }
                 ]
@@ -1153,6 +1354,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             }
         ]
@@ -1233,6 +1435,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             }
         ]
@@ -1249,6 +1452,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             }
         ]
@@ -1264,6 +1468,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             }
         ]
@@ -1306,6 +1511,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             }
         ]
@@ -1329,6 +1535,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             }
         ]
@@ -1359,6 +1566,7 @@ class TestFleetCommPanel:
                 "dst_topic": "/fleet/turtlebot_001/odom",
                 "freq_limit": 10.0,
                 "transport": "mqtt_json",
+                "qos": 1,
                 "frame_policy": "namespace",
             }
         ]
@@ -1396,6 +1604,7 @@ class TestFleetCommPanel:
                     ],
                     "freq_limit": 10.0,
                     "transport": "mqtt_json",
+                    "qos": 1,
                     "frame_policy": "namespace",
                 }
             ]

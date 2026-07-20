@@ -44,7 +44,7 @@ class FleetCommPanel(QWidget):
 
         # 规则表
         self._table = QTableWidget()
-        self._table.setColumnCount(9)
+        self._table.setColumnCount(11)
         self._table.setHorizontalHeaderLabels([
             "启用",
             "源机器人",
@@ -53,11 +53,17 @@ class FleetCommPanel(QWidget):
             "目标机器人",
             "目标话题",
             "频率",
+            "传输方式",
+            "QoS",
             "Frame 策略",
             "操作",
         ])
-        self._table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeToContents
+        header = self._table.horizontalHeader()
+        # 保留稳定的最小列宽，避免 QoS 等短表头被压缩到难以点选。
+        header.setMinimumSectionSize(56)
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        self._table.itemSelectionChanged.connect(
+            self._load_selected_rule_into_form
         )
         layout.addWidget(self._table)
 
@@ -143,6 +149,21 @@ class FleetCommPanel(QWidget):
         self._frequency_policy_row.addWidget(self._combo_frame_policy)
         form.addLayout(self._frequency_policy_row)
 
+        self._transport_qos_row = QHBoxLayout()
+        self._transport_qos_row.setObjectName("transportQosRow")
+        self._transport_qos_row.addWidget(QLabel("传输方式:"))
+        self._combo_transport = QComboBox()
+        self._combo_transport.addItem("MQTT JSON", "mqtt_json")
+        self._combo_transport.addItem("MQTT Binary", "mqtt_binary")
+        self._transport_qos_row.addWidget(self._combo_transport)
+        self._transport_qos_row.addWidget(QLabel("QoS:"))
+        self._combo_qos = QComboBox()
+        # 编队链路仅支持 QoS 0/1，不向用户暴露不必要的 QoS 2。
+        for label, value in TopicConfigPanel.qos_options()[:2]:
+            self._combo_qos.addItem(label, value)
+        self._transport_qos_row.addWidget(self._combo_qos)
+        form.addLayout(self._transport_qos_row)
+
         confirm_row = QHBoxLayout()
         self._btn_confirm = QPushButton("确认")
         self._btn_cancel = QPushButton("取消")
@@ -180,6 +201,8 @@ class FleetCommPanel(QWidget):
 
     @staticmethod
     def rule_to_protocol_dict(rule: Dict[str, Any]) -> Dict[str, Any]:
+        transport = rule.get("transport")
+        qos_data = rule.get("qos")
         return {
             "enabled": bool(rule.get("enabled", True)),
             "src_topic": rule.get("src_topic", ""),
@@ -191,7 +214,9 @@ class FleetCommPanel(QWidget):
                 }
             ],
             "freq_limit": float(rule.get("freq_limit") or 0.0),
-            "transport": rule.get("transport", "mqtt_json"),
+            "transport": "mqtt_json" if transport is None else transport,
+            # QoS 0 是有效值，必须只对缺失值使用 QoS 1 兼容默认。
+            "qos": 1 if qos_data is None else int(qos_data),
             "frame_policy": rule.get("frame_policy", "namespace"),
         }
 
@@ -216,6 +241,8 @@ class FleetCommPanel(QWidget):
             targets = rule.get("targets", [])
             if not isinstance(targets, list):
                 continue
+            transport = rule.get("transport")
+            qos_data = rule.get("qos")
             for target in targets:
                 if not isinstance(target, dict):
                     continue
@@ -231,7 +258,10 @@ class FleetCommPanel(QWidget):
                     "dst_robot": dst_robot,
                     "dst_topic": dst_topic,
                     "freq_limit": float(rule.get("freq_limit") or 0.0),
-                    "transport": rule.get("transport", "mqtt_json"),
+                    "transport": (
+                        "mqtt_json" if transport is None else transport
+                    ),
+                    "qos": 1 if qos_data is None else int(qos_data),
                     "frame_policy": rule.get("frame_policy", "namespace"),
                 })
         return [
@@ -255,6 +285,8 @@ class FleetCommPanel(QWidget):
         for item in raw:
             if not isinstance(item, dict):
                 continue
+            transport = item.get("transport")
+            qos_data = item.get("qos")
             rule = {
                 "enabled": bool(item.get("enabled", True)),
                 "src_robot": item.get("src_robot", ""),
@@ -263,7 +295,8 @@ class FleetCommPanel(QWidget):
                 "dst_robot": item.get("dst_robot", ""),
                 "dst_topic": item.get("dst_topic", ""),
                 "freq_limit": float(item.get("freq_limit") or 0.0),
-                "transport": item.get("transport", "mqtt_json"),
+                "transport": "mqtt_json" if transport is None else transport,
+                "qos": 1 if qos_data is None else int(qos_data),
                 "frame_policy": item.get("frame_policy", "namespace"),
             }
             if FleetCommPanel.validate_fleet_rule(
@@ -354,6 +387,9 @@ class FleetCommPanel(QWidget):
         self.config_changed.emit()
 
     def _refresh_table(self) -> None:
+        # 规则列表变化后原行号可能已失效，统一结束当前编辑。
+        self._hide_form()
+        self._table.blockSignals(True)
         self._table.setRowCount(len(self._rules))
         for row, rule in enumerate(self._rules):
             values = [
@@ -364,23 +400,36 @@ class FleetCommPanel(QWidget):
                 rule.get("dst_robot", ""),
                 rule.get("dst_topic", ""),
                 f"{float(rule.get('freq_limit') or 0.0):g}",
+                rule.get("transport", "mqtt_json"),
+                str(1 if rule.get("qos") is None else int(rule["qos"])),
                 rule.get("frame_policy", "namespace"),
                 "",
             ]
             for col, value in enumerate(values):
                 self._table.setItem(row, col, QTableWidgetItem(value))
         self._table.resizeColumnsToContents()
+        self._table.blockSignals(False)
 
     def _show_add_form(self) -> None:
         self._editing_row = None
         self._form_group.setTitle("添加/编辑通信规则")
         self._btn_confirm.setText("确认")
+        self._table.blockSignals(True)
+        self._table.clearSelection()
+        self._table.setCurrentCell(-1, -1)
+        self._table.blockSignals(False)
         self._clear_form()
         self._form_group.setChecked(True)
         self._request_source_topics_if_missing()
 
     def _hide_form(self) -> None:
         self._editing_row = None
+        self._form_group.setTitle("添加/编辑通信规则")
+        self._btn_confirm.setText("确认")
+        self._table.blockSignals(True)
+        self._table.clearSelection()
+        self._table.setCurrentCell(-1, -1)
+        self._table.blockSignals(False)
         self._form_group.setChecked(False)
 
     def _clear_form(self) -> None:
@@ -395,6 +444,10 @@ class FleetCommPanel(QWidget):
         self._edit_dst_topic.clear()
         self._combo_msg_type.setCurrentText("nav_msgs/Odometry")
         self._spin_freq.setValue(1.0)
+        self._combo_transport.setCurrentIndex(
+            self._combo_transport.findData("mqtt_json")
+        )
+        self._combo_qos.setCurrentIndex(self._combo_qos.findData(1))
         self._combo_frame_policy.setCurrentText("namespace")
 
     def _refresh_source_topics(self) -> None:
@@ -448,6 +501,8 @@ class FleetCommPanel(QWidget):
         dst_topic = self._edit_dst_topic.text().strip()
         msg_type = self._combo_msg_type.currentText().strip()
         freq_limit = float(self._spin_freq.value())
+        transport = self._combo_transport.currentData()
+        qos_data = self._combo_qos.currentData()
 
         if not self.validate_fleet_rule(
             src_robot,
@@ -459,17 +514,60 @@ class FleetCommPanel(QWidget):
         ):
             return None
 
+        enabled = True
+        if self._editing_row is not None and 0 <= self._editing_row < len(self._rules):
+            # 表单不编辑启用状态，更新时保留暂停/恢复按钮管理的值。
+            enabled = bool(self._rules[self._editing_row].get("enabled", True))
+
         return {
-            "enabled": True,
+            "enabled": enabled,
             "src_robot": src_robot,
             "src_topic": src_topic,
             "msg_type": msg_type,
             "dst_robot": dst_robot,
             "dst_topic": dst_topic,
             "freq_limit": freq_limit,
-            "transport": "mqtt_json",
+            "transport": (
+                "mqtt_json" if transport is None else str(transport)
+            ),
+            "qos": 1 if qos_data is None else int(qos_data),
             "frame_policy": self._combo_frame_policy.currentText(),
         }
+
+    def _load_selected_rule_into_form(self) -> None:
+        row = self._table.currentRow()
+        if row < 0 or row >= len(self._rules):
+            return
+
+        rule = self._rules[row]
+        self._editing_row = row
+        self._form_group.setTitle("编辑通信规则")
+        self._btn_confirm.setText("更新")
+        self._combo_src.setCurrentText(str(rule.get("src_robot", "")))
+        self._combo_dst.setCurrentText(str(rule.get("dst_robot", "")))
+        self._combo_src_topic.setCurrentText(str(rule.get("src_topic", "")))
+        self._edit_dst_topic.setText(str(rule.get("dst_topic", "")))
+        self._combo_msg_type.setCurrentText(str(rule.get("msg_type", "")))
+        self._spin_freq.setValue(float(rule.get("freq_limit") or 0.0))
+
+        transport = rule.get("transport")
+        transport_index = self._combo_transport.findData(
+            "mqtt_json" if transport is None else transport
+        )
+        self._combo_transport.setCurrentIndex(
+            transport_index if transport_index >= 0 else 0
+        )
+        qos_data = rule.get("qos")
+        qos = 1 if qos_data is None else int(qos_data)
+        qos_index = self._combo_qos.findData(qos)
+        default_qos_index = self._combo_qos.findData(1)
+        self._combo_qos.setCurrentIndex(
+            qos_index if qos_index >= 0 else default_qos_index
+        )
+        self._combo_frame_policy.setCurrentText(
+            str(rule.get("frame_policy", "namespace"))
+        )
+        self._form_group.setChecked(True)
 
     def _confirm_rule(self) -> None:
         rule = self._rule_from_form()
