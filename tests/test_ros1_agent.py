@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -300,6 +301,8 @@ def test_apply_fleet_rules_groups_same_source_topic_into_one_subscriber(
     mock_rospy.Subscriber.return_value = MagicMock()
     monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
     agent = object.__new__(ROS1Agent)
+    agent.config = MagicMock()
+    agent.config.robot_id = "r1"
     agent._fleet_subscribers = {}
     agent._get_ros_msg_class = MagicMock(return_value=object)
     rules = [
@@ -359,6 +362,36 @@ def test_group_fleet_routes_deduplicates_identical_routes():
     groups = ROS1Agent._group_fleet_routes([rule, dict(rule)])
 
     assert len(groups[("/odom", "nav_msgs/Odometry")]) == 1
+
+
+def test_group_fleet_routes_rejects_local_robot_target():
+    """拒绝发给本机的 route，避免 MQTT 消息回灌本机 ROS。"""
+    rule = build_fleet_rule(
+        "/odom",
+        "nav_msgs/Odometry",
+        "r1",
+        "/fleet/r1/odom",
+    )
+
+    assert ROS1Agent._group_fleet_routes(
+        [rule],
+        local_robot_id="r1",
+    ) == {}
+
+
+def test_group_fleet_routes_rejects_same_source_and_destination_topic():
+    """拒绝同名源目标 topic，避免机器人间形成同 topic 自激回路。"""
+    rule = build_fleet_rule(
+        "/odom",
+        "nav_msgs/Odometry",
+        "r2",
+        "/odom",
+    )
+
+    assert ROS1Agent._group_fleet_routes(
+        [rule],
+        local_robot_id="r1",
+    ) == {}
 
 
 def test_fleet_callback_serializes_once_and_uses_unique_transfer_per_route():
@@ -430,6 +463,84 @@ def test_fleet_routes_use_independent_frequency_limits(monkeypatch):
     targets = [item.args[0] for item in agent.send_to_robot.call_args_list]
     assert targets.count("r2") == 2
     assert targets.count("r3") == 3
+
+
+def test_fleet_frequency_limit_is_atomic_across_concurrent_callbacks(
+    monkeypatch,
+):
+    """并发 ROS 回调读取同一 route 时，同一周期只能发送一次。"""
+    real_lock_factory = threading.Lock
+
+    class TrackingLock:
+        def __init__(self):
+            self._lock = real_lock_factory()
+            self._local = threading.local()
+
+        def __enter__(self):
+            self._lock.acquire()
+            self._local.held = True
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self._local.held = False
+            self._lock.release()
+
+        def held_by_current_thread(self):
+            return bool(getattr(self._local, "held", False))
+
+    route_lock = TrackingLock()
+    read_barrier = threading.Barrier(2, timeout=2.0)
+
+    class RacingRoute:
+        target_id = "r2"
+        dst_topic = "/fleet/r1/odom"
+        freq_limit = 10.0
+        transport = "mqtt_json"
+        qos = 1
+        frame_policy = "preserve"
+
+        def __init__(self):
+            self._last_sent = 0.0
+
+        @property
+        def last_sent(self):
+            value = self._last_sent
+            if not route_lock.held_by_current_thread():
+                read_barrier.wait()
+            return value
+
+        @last_sent.setter
+        def last_sent(self, value):
+            self._last_sent = value
+
+    monkeypatch.setattr("agent.ros1_agent.threading.Lock", lambda: route_lock)
+    monkeypatch.setattr("agent.ros1_agent.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr(
+        "agent.ros1_agent.ros_msg_to_dict",
+        MagicMock(return_value={"header": {"frame_id": "odom"}}),
+    )
+    agent = object.__new__(ROS1Agent)
+    agent.send_to_robot = MagicMock(return_value=True)
+    callback = ROS1Agent._make_fleet_forward_callback(
+        agent,
+        "/odom",
+        "nav_msgs/Odometry",
+        [RacingRoute()],
+    )
+    # 恢复标准库工厂，避免 Thread 自身初始化受到测试锁替身影响。
+    monkeypatch.setattr("agent.ros1_agent.threading.Lock", real_lock_factory)
+    threads = [
+        threading.Thread(target=callback, args=(object(),))
+        for _index in range(2)
+    ]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2.0)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert agent.send_to_robot.call_count == 1
 
 
 def test_fleet_frequency_limit_does_not_accumulate_callback_phase_drift(

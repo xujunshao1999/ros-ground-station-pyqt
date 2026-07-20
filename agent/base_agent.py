@@ -74,6 +74,8 @@ FLEET_CACHE_TTL_SECONDS = 2.0
 FLEET_CACHE_MAX_ENTRIES = 256
 FLEET_BODY_MAX_BYTES = 8 * 1024 * 1024
 FLEET_BODY_CACHE_MAX_BYTES = 64 * 1024 * 1024
+FLEET_ROBOT_JSON_MAX_BYTES = 8 * 1024 * 1024
+FLEET_ENVELOPE_MAX_BYTES = 16 * 1024
 FLEET_MESSAGE_TTL_SECONDS = 1.0
 FLEET_CLOCK_FUTURE_TOLERANCE_SECONDS = 5.0
 
@@ -203,7 +205,7 @@ class BaseAgent(ABC):
         # Envelope 与 body 可乱序到达，固定 tuple 顺序供后续 ROS hook 使用。
         self._fleet_envelope_cache: Dict[
             Tuple[str, int],
-            Tuple[Message, FleetBinaryEnvelopeData, float],
+            Tuple[float, FleetBinaryEnvelopeData, float],
         ] = {}
         self._fleet_body_cache: Dict[
             Tuple[str, int],
@@ -768,6 +770,14 @@ class BaseAgent(ABC):
                 )
                 return
 
+            # 机器人间 JSON 在解码前限长，避免构造多份超大字符串和对象。
+            if (
+                topic_info
+                and topic_info.get("type") == "to_robot"
+                and len(msg.payload) > FLEET_ROBOT_JSON_MAX_BYTES
+            ):
+                return
+
             payload = msg.payload.decode("utf-8")
             message = Message.from_json(payload)
 
@@ -782,6 +792,8 @@ class BaseAgent(ABC):
                 ):
                     return
                 if message.data.get("binary") is True:
+                    if len(msg.payload) > FLEET_ENVELOPE_MAX_BYTES:
+                        return
                     self._handle_fleet_binary_envelope(src_id, message)
                 else:
                     self._handle_fleet_message(message)
@@ -1038,7 +1050,7 @@ class BaseAgent(ABC):
         src_id: str,
         message: Message,
         envelope: FleetBinaryEnvelopeData,
-    ) -> Optional[Tuple[Message, FleetBinaryEnvelopeData, bytes]]:
+    ) -> Optional[Tuple[str, float, FleetBinaryEnvelopeData, bytes]]:
         """在同一锁内清理、缓存 envelope 并尝试取出完整配对。"""
         if envelope.payload_size > FLEET_BODY_MAX_BYTES:
             return None
@@ -1047,7 +1059,7 @@ class BaseAgent(ABC):
             inserted_at = time.monotonic()
             self._cleanup_fleet_cache_locked(inserted_at)
             self._fleet_envelope_cache[key] = (
-                message,
+                float(message.ts),
                 envelope,
                 inserted_at,
             )
@@ -1064,7 +1076,7 @@ class BaseAgent(ABC):
         src_id: str,
         transfer_id: int,
         body: bytes,
-    ) -> Optional[Tuple[Message, FleetBinaryEnvelopeData, bytes]]:
+    ) -> Optional[Tuple[str, float, FleetBinaryEnvelopeData, bytes]]:
         """在同一锁内缓存 body，并按条数和总字节数驱逐旧项。"""
         if len(body) > FLEET_BODY_MAX_BYTES:
             return None
@@ -1092,17 +1104,17 @@ class BaseAgent(ABC):
     def _take_fleet_pair_locked(
         self,
         key: Tuple[str, int],
-    ) -> Optional[Tuple[Message, FleetBinaryEnvelopeData, bytes]]:
+    ) -> Optional[Tuple[str, float, FleetBinaryEnvelopeData, bytes]]:
         """锁内弹出完整配对，并同步维护 body 字节计数。"""
         if (
             key not in self._fleet_envelope_cache
             or key not in self._fleet_body_cache
         ):
             return None
-        message, envelope, _ = self._fleet_envelope_cache.pop(key)
+        message_ts, envelope, _ = self._fleet_envelope_cache.pop(key)
         body, _ = self._fleet_body_cache.pop(key)
         self._fleet_body_cache_bytes -= len(body)
-        return message, envelope, body
+        return key[0], message_ts, envelope, body
 
     def _cleanup_fleet_cache_locked(self, now_monotonic: float) -> None:
         """锁内移除两侧过期条目，不调用任何业务 hook。"""
@@ -1130,17 +1142,17 @@ class BaseAgent(ABC):
 
     def _dispatch_fleet_binary_pair(
         self,
-        pair: Optional[Tuple[Message, FleetBinaryEnvelopeData, bytes]],
+        pair: Optional[Tuple[str, float, FleetBinaryEnvelopeData, bytes]],
     ) -> None:
         """锁外复检尺寸和 TTL，再调用子类 binary hook。"""
         if pair is None:
             return
-        message, envelope, body = pair
+        src_id, message_ts, envelope, body = pair
         if envelope.payload_size != len(body):
             return
-        if not self._is_fleet_message_fresh(message.ts, envelope.ttl):
+        if not self._is_fleet_message_fresh(message_ts, envelope.ttl):
             return
-        self._on_fleet_binary_message(message.src, envelope, body)
+        self._on_fleet_binary_message(src_id, envelope, body)
 
     # ============================================================
     # 配置同步
@@ -1250,18 +1262,44 @@ class BaseAgent(ABC):
                 continue
             src_topic = rule.get("src_topic", "")
             msg_type = rule.get("msg_type", "")
-            if not src_topic or not msg_type:
+            if (
+                not isinstance(src_topic, str)
+                or not src_topic.startswith("/")
+                or not isinstance(msg_type, str)
+                or not msg_type
+            ):
+                continue
+
+            raw_targets = rule.get("targets", [])
+            if not isinstance(raw_targets, list):
+                continue
+
+            raw_freq_limit = rule.get("freq_limit", 0.0)
+            if isinstance(raw_freq_limit, bool):
+                continue
+            try:
+                freq_limit = float(raw_freq_limit)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(freq_limit):
                 continue
 
             targets = []
             seen_targets = set()
-            for target in rule.get("targets", []):
+            for target in raw_targets:
                 if not isinstance(target, dict):
                     continue
                 robot_id = target.get("robot_id", "")
                 dst_topic = target.get("dst_topic", "")
+                if (
+                    not isinstance(robot_id, str)
+                    or not robot_id
+                    or not isinstance(dst_topic, str)
+                    or not dst_topic.startswith("/")
+                ):
+                    continue
                 target_key = (robot_id, dst_topic)
-                if robot_id and dst_topic and target_key not in seen_targets:
+                if target_key not in seen_targets:
                     seen_targets.add(target_key)
                     targets.append({
                         "robot_id": robot_id,
@@ -1283,7 +1321,7 @@ class BaseAgent(ABC):
                 "src_topic": src_topic,
                 "msg_type": msg_type,
                 "targets": targets,
-                "freq_limit": float(rule.get("freq_limit", 0.0)),
+                "freq_limit": freq_limit,
                 "transport": transport,
                 "qos": qos,
                 "frame_policy": rule.get("frame_policy", "preserve"),

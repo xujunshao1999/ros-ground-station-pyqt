@@ -413,6 +413,63 @@ def test_fleet_binary_rejects_envelope_body_size_over_limit(monkeypatch):
     assert agent._fleet_envelope_cache == {}
 
 
+def test_fleet_binary_envelope_cache_does_not_retain_unknown_fields():
+    """缓存仅保留净化字段，避免额外 JSON 数据在配对窗口内驻留。"""
+    agent, message = build_recording_agent_and_envelope(
+        robot_id="r2",
+        src_id="r1",
+        transfer_id=12,
+        body_size=4,
+    )
+    message.data["padding"] = "x" * 4096
+
+    agent._handle_fleet_binary_envelope("r1", message)
+
+    cached_ts, cached_envelope, _ = agent._fleet_envelope_cache[("r1", 12)]
+    assert cached_ts == message.ts
+    assert isinstance(cached_envelope, FleetBinaryEnvelopeData)
+
+
+def test_fleet_binary_rejects_oversized_envelope_payload(monkeypatch):
+    """超出 envelope 上限的原始 MQTT JSON 不得进入配对缓存。"""
+    agent, message = build_recording_agent_and_envelope(
+        robot_id="r2",
+        src_id="r1",
+        transfer_id=13,
+        body_size=4,
+    )
+    message.data["padding"] = "x" * 256
+    payload = message.to_json().encode("utf-8")
+    monkeypatch.setattr(
+        "agent.base_agent.FLEET_ENVELOPE_MAX_BYTES",
+        len(payload) - 1,
+    )
+
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage("robot/r1/to/r2", payload),
+    )
+
+    assert agent._fleet_envelope_cache == {}
+
+
+def test_fleet_robot_json_rejects_oversized_payload_before_decode(monkeypatch):
+    """机器人间 JSON 超限时必须在 UTF-8 和协议解析前拒绝。"""
+    agent = RecordingAgent(AgentConfig(robot_id="r2"))
+    parse_json = MagicMock(side_effect=AssertionError("不应解析超限 JSON"))
+    monkeypatch.setattr("agent.base_agent.FLEET_ROBOT_JSON_MAX_BYTES", 8)
+    monkeypatch.setattr("agent.base_agent.Message.from_json", parse_json)
+
+    agent._on_message(
+        None,
+        None,
+        FakeMqttMessage("robot/r1/to/r2", b"x" * 9),
+    )
+
+    parse_json.assert_not_called()
+
+
 def test_fleet_binary_evicts_oldest_body_to_keep_budget(monkeypatch):
     """body 总字节数超限时移除最早写入项。"""
     monkeypatch.setattr("agent.base_agent.FLEET_BODY_MAX_BYTES", 8)
@@ -555,6 +612,69 @@ def test_normalize_fleet_rules_falls_back_invalid_qos(qos):
 
     assert rules[0]["transport"] == "mqtt_binary"
     assert rules[0]["qos"] == 1
+
+
+@pytest.mark.parametrize("targets", [None, {}, "invalid", 1])
+def test_normalize_fleet_rules_filters_invalid_targets_container(targets):
+    """非法 targets 容器只丢弃当前规则，不能中断配置恢复。"""
+    rules = MockAgent._normalize_fleet_rules([{
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": targets,
+    }])
+
+    assert rules == []
+
+
+@pytest.mark.parametrize(
+    "src_topic,dst_topic",
+    [
+        ("odom", "/fleet/r1/odom"),
+        ("/odom", "fleet/r1/odom"),
+        (1, "/fleet/r1/odom"),
+        ("/odom", 1),
+    ],
+)
+def test_normalize_fleet_rules_requires_absolute_string_topics(
+    src_topic,
+    dst_topic,
+):
+    """源和目标 topic 必须是绝对 ROS topic 字符串。"""
+    rules = MockAgent._normalize_fleet_rules([{
+        "src_topic": src_topic,
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [{"robot_id": "r2", "dst_topic": dst_topic}],
+    }])
+
+    assert rules == []
+
+
+@pytest.mark.parametrize(
+    "freq_limit",
+    ["invalid", True, float("nan"), float("inf")],
+)
+def test_normalize_fleet_rules_filters_invalid_frequency(freq_limit):
+    """非法限频值不能变成无限速 route，也不能中断配置恢复。"""
+    rules = MockAgent._normalize_fleet_rules([{
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [{"robot_id": "r2", "dst_topic": "/fleet/r1/odom"}],
+        "freq_limit": freq_limit,
+    }])
+
+    assert rules == []
+
+
+def test_normalize_fleet_rules_preserves_negative_unlimited_frequency():
+    """按既有协议保留有限负数，ROS 回调将其视为不限频。"""
+    rules = MockAgent._normalize_fleet_rules([{
+        "src_topic": "/odom",
+        "msg_type": "nav_msgs/Odometry",
+        "targets": [{"robot_id": "r2", "dst_topic": "/fleet/r1/odom"}],
+        "freq_limit": -1.0,
+    }])
+
+    assert rules[0]["freq_limit"] == -1.0
 
 
 def test_fleet_transfer_ids_are_unique_and_roll_session_nonce(monkeypatch):

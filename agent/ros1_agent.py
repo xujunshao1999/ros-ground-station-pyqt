@@ -577,7 +577,10 @@ class ROS1Agent(BaseAgent):
             )
         self._fleet_subscribers.clear()
 
-        for route_key, routes in self._group_fleet_routes(fleet_rules).items():
+        for route_key, routes in self._group_fleet_routes(
+            fleet_rules,
+            local_robot_id=self.config.robot_id,
+        ).items():
             src_topic, msg_type = route_key
             msg_class = self._get_ros_msg_class(msg_type)
             if msg_class is None:
@@ -610,8 +613,9 @@ class ROS1Agent(BaseAgent):
     @staticmethod
     def _group_fleet_routes(
         fleet_rules: List[dict],
+        local_robot_id: str = "",
     ) -> Dict[Tuple[str, str], List[_FleetRoute]]:
-        """展开并分组 route，拒绝同一源 topic 的类型冲突。"""
+        """展开并分组 route，拒绝类型冲突和直接转发回路。"""
         groups: Dict[Tuple[str, str], List[_FleetRoute]] = {}
         topic_types: Dict[str, set] = {}
         seen_routes: Dict[Tuple[str, str], set] = {}
@@ -635,6 +639,20 @@ class ROS1Agent(BaseAgent):
                 target_id = target.get("robot_id", "")
                 dst_topic = target.get("dst_topic", "")
                 if not target_id or not dst_topic:
+                    continue
+                # ROS 消息重新发布后不保留转发来源，必须在订阅前阻断直接回路。
+                if local_robot_id and target_id == local_robot_id:
+                    logger.error(
+                        "[ROS1Agent] Rejecting fleet route to local robot: %s -> %s",
+                        src_topic,
+                        dst_topic,
+                    )
+                    continue
+                if dst_topic == src_topic:
+                    logger.error(
+                        "[ROS1Agent] Rejecting fleet route with identical topics: %s",
+                        src_topic,
+                    )
                     continue
                 route_values = (
                     target_id,
@@ -672,33 +690,36 @@ class ROS1Agent(BaseAgent):
         routes: List[_FleetRoute],
     ):
         last_warnings: Dict[str, float] = {}
+        route_lock = threading.Lock()
 
         def callback(msg):
             now_monotonic = time.monotonic()
             due_routes = []
-            for route in routes:
-                min_interval = (
-                    1.0 / route.freq_limit
-                    if route.freq_limit > 0
-                    else 0.0
-                )
-                if (
-                    route.last_sent > 0
-                    and min_interval > 0
-                    and now_monotonic - route.last_sent + 1e-12 < min_interval
-                ):
-                    continue
-                if route.last_sent > 0 and min_interval > 0:
-                    # 按理论周期推进基准，避免回调抖动将 10 Hz 量化成 8 Hz。
-                    elapsed = now_monotonic - route.last_sent
-                    elapsed_periods = max(
-                        1,
-                        int((elapsed + 1e-12) / min_interval),
+            # rospy 可从不同 publisher 连接并发回调，限频状态必须原子更新。
+            with route_lock:
+                for route in routes:
+                    min_interval = (
+                        1.0 / route.freq_limit
+                        if route.freq_limit > 0
+                        else 0.0
                     )
-                    route.last_sent += elapsed_periods * min_interval
-                else:
-                    route.last_sent = now_monotonic
-                due_routes.append(route)
+                    if (
+                        route.last_sent > 0
+                        and min_interval > 0
+                        and now_monotonic - route.last_sent + 1e-12 < min_interval
+                    ):
+                        continue
+                    if route.last_sent > 0 and min_interval > 0:
+                        # 按理论周期推进基准，避免回调抖动将 10 Hz 量化成 8 Hz。
+                        elapsed = now_monotonic - route.last_sent
+                        elapsed_periods = max(
+                            1,
+                            int((elapsed + 1e-12) / min_interval),
+                        )
+                        route.last_sent += elapsed_periods * min_interval
+                    else:
+                        route.last_sent = now_monotonic
+                    due_routes.append(route)
             if not due_routes:
                 return
 
