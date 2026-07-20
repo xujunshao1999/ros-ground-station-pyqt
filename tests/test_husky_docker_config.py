@@ -31,11 +31,12 @@ def test_husky_agent_config_defaults_to_heavy_snapshot_topics() -> None:
         "msg_type": "sensor_msgs/CompressedImage",
         "freq_limit": 5.0,
         "transport": "mqtt_binary",
-        "qos": 0,
+        "qos": 1,
         "compression": {},
     }
     assert subscriptions["/hdl_graph_slam/map_points"]["transport"] == "http_stream"
-    assert subscriptions["/hdl_graph_slam/odom"]["transport"] == "mqtt_binary"
+    # 已有 `/odom` 可用时不再重复转发 SLAM 派生里程计。
+    assert "/hdl_graph_slam/odom" not in subscriptions
     assert subscriptions["/tf_static"]["qos"] == 1
 
 
