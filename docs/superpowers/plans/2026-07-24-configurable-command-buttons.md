@@ -23,7 +23,7 @@
 - **exec_id**：一次按钮点击生成的 12 位十六进制 ID。同一批发往多台机器人的命令共用该 ID，前端以 `(exec_id, robot_id)` 汇总确认。
 - **cmd_ack**：现有机器人确认消息，包含 `exec_id`、`result` 和 `message`。5 秒没有确认记为超时，不自动重发。
 - **严格转换**：`dict_to_ros_msg(data, msg_type, strict=True)` 遇到未知字段、数组形状错误或基础值无法转换时抛出带字段路径的 `ValueError`。默认 `strict=False`，保持 Bridge 与编队链路现有兼容行为。
-- **资源边界**：schema 最大递归深度 12、最多 512 个字段、JSON 编码后最大 256 KiB；单条按钮 `data` JSON 最大 256 KiB。超限请求必须明确失败。
+- **资源边界**：schema 最大递归深度 12、最多 512 个字段、JSON 编码后最大 256 KiB；单条按钮 `data` JSON 最大 256 KiB。ROS1 Agent 最多缓存 32 个 custom Publisher，前端最多保留最近 20 个已完成命令批次；超限请求必须明确失败，缓存淘汰必须释放对应资源。
 - **正式入口**：`./qt_frontend/scripts/start.sh` 启动 `python3 qt_frontend/main.py`，由 `qt_frontend.main_window.MainWindow` 接线。
 - **备用入口**：`qt_frontend/panels_setup.py` 由 C++ 嵌入路径调用，当前本身没有 MQTT 客户端或命令接线。本计划保持 `CommandPanel()` 无参构造兼容，使备用入口仍可渲染，但不为该备用入口新增话题发现、schema 查询或命令发送；若发布流程改用该入口，需先单独补齐 MQTT 生命周期。
 - **运行态保护**：执行每个任务前检查 `git status --short`，不覆盖用户对 `qt_frontend/config/transmit_config.yaml`、机器人配置或工作日志的既有修改。只暂存当前任务列出的文件，永不暂存 `.agents/`、`.codex/`、`.claude/skills/`。
@@ -58,7 +58,7 @@
 - 修改 `qt_frontend/mqtt_client.py`：发送 schema query、订阅响应并发出 Qt signal。
 - 修改 `qt_frontend/main_window.py`：创建共享目录，连接 schema、批量发送和确认信号。
 - 创建 `qt_frontend/config/command_buttons.yaml`：提供版本 1、4 个 null slot 的默认配置。
-- 修改 `docs/protocol.md`：记录 schema query/response 和 custom 命令真实 ROS 消息语义。
+- 修改 `docs/protocol.md`：在对应协议实现任务中同步记录 schema query/response 和 custom 命令真实 ROS 消息语义，最终任务只复核一致性。
 - 创建 `docs/work-log-2026-07-24.md`：按实际执行结果记录功能、验证和未覆盖风险。
 - 修改或创建对应 `tests/test_*.py`：每个模块使用聚焦测试，Qt 测试统一 offscreen。
 
@@ -70,13 +70,14 @@
 4. 任务 5 和任务 6 分别建立共享话题目录与本地配置，可独立测试。
 5. 任务 7 建立纯 schema 数据逻辑和 Qt 表单，任务 8 才组装设置对话框。
 6. 任务 9 建立批次模型并替换模式区，任务 10 最后接入正式主入口。
-7. 任务 11 更新协议文档、工作日志并执行全量验证。
+7. 任务 1 和任务 3 随协议实现同步更新权威文档；任务 11 复核协议文档、编写工作日志并执行全量验证。
 
 ### 任务 1：定义消息结构查询协议
 
 **文件：**
 - 修改：`protocol/messages.py:23-38, 148-163, 380-445`
 - 修改：`protocol/topics.py:26-66, 107-137, 265-296`
+- 修改：`docs/protocol.md`
 - 测试：`tests/test_protocol_messages.py`
 - 测试：`tests/test_protocol_topics.py`
 
@@ -188,7 +189,11 @@ def station_message_schema_response(robot_id: str) -> str:
 
 解析分支返回 `message_schema_query` 或 `message_schema_response`，任何尾随层级返回 `None`。同时收紧现有 config 分支为精确 4 段，避免本任务引入宽松解析分支。
 
-- [ ] **步骤 5：运行协议测试并提交**
+- [ ] **步骤 5：同步更新 schema 权威协议文档**
+
+在 `docs/protocol.md` 的 topic 表加入 `station/{robot_id}/message_schema/query` 和 `station/{robot_id}/message_schema/response`。增加与本任务数据类完全一致的 query/response JSON 示例和字段表，明确 QoS、定向 robot ID、`request_id` 匹配规则，以及 schema JSON 编码后不得超过 256 KiB；此时只记录查询协议，不提前描述任务 3 的 custom 命令变化。
+
+- [ ] **步骤 6：运行协议测试并提交**
 
 运行：
 
@@ -200,7 +205,8 @@ ruff check protocol/messages.py protocol/topics.py tests/test_protocol_messages.
 预期：全部通过，现有 discover、topic request、config 和 fleet topic 测试不回归。
 
 ```bash
-git add protocol/messages.py protocol/topics.py tests/test_protocol_messages.py tests/test_protocol_topics.py
+git add protocol/messages.py protocol/topics.py docs/protocol.md \
+  tests/test_protocol_messages.py tests/test_protocol_topics.py
 git commit -m "feat: 定义消息结构查询协议"
 ```
 
@@ -366,6 +372,7 @@ git commit -m "feat: 解析ROS消息字段结构"
 - 修改：`agent/dict_to_ros_msg.py`
 - 修改：`agent/ros1_agent.py:71-98, 149-203`
 - 修改：`agent/mock_agent.py:105-147`
+- 修改：`docs/protocol.md`
 - 测试：`tests/test_dict_to_ros_msg.py`
 - 测试：`tests/test_ros1_agent.py`
 - 测试：`tests/test_agent_topic_config.py`
@@ -388,7 +395,7 @@ def test_strict_conversion_rejects_unknown_field_with_path(monkeypatch):
         )
 ```
 
-补充非数组传给数组、固定数组长度错误、嵌套字段类型错误和非法数字值测试；原有 `strict=False` 测试必须继续接受未知字段并告警。
+补充非数组传给数组、固定数组长度错误、嵌套字段类型错误和非法数字值测试；原有 `strict=False` 测试必须继续接受未知字段并告警。在 `tests/test_ros1_agent.py` 另加缓存上限测试：依次发布 33 个不同 topic，断言只保留最近 32 个，第一个 Publisher 调用一次 `unregister()`；再次使用缓存 topic 时移动到 LRU 末尾，同 topic 换类型仍先注销旧 Publisher。
 
 在 `tests/test_ros1_agent.py` 增加：
 
@@ -402,7 +409,7 @@ def test_custom_command_publishes_configured_ros_type(monkeypatch):
     converter = MagicMock(return_value=converted)
     monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", converter)
     agent = object.__new__(ROS1Agent)
-    agent._command_publishers = {}
+    agent._command_publishers = OrderedDict()
 
     ok, message = ROS1Agent._execute_command(agent, CmdData(
         action="custom",
@@ -442,13 +449,14 @@ python3 -m pytest \
 
 - [ ] **步骤 4：实现 custom Publisher 缓存和错误确认**
 
-在 `ROS1Agent.__init__()` 初始化：
+从 `collections` 导入 `OrderedDict`，并在 `ROS1Agent.__init__()` 初始化：
 
 ```python
-self._command_publishers: Dict[str, Tuple[str, object]] = {}
+MAX_COMMAND_PUBLISHERS = 32
+self._command_publishers: "OrderedDict[str, Tuple[str, object]]" = OrderedDict()
 ```
 
-新增 `_publish_custom_command(topic, msg_type, data)`：校验 topic 以 `/` 开头、msg_type 符合 `package/Message`、data 是 dict 且 JSON 大小不超过 256 KiB；调用严格转换。缓存键为 topic，值为 `(msg_type, publisher)`。同 topic 改类型时调用旧 publisher 的 `unregister()`，删除旧缓存，再创建 `rospy.Publisher(topic, type(ros_msg), queue_size=1)`。创建或发布异常必须清理本次无效缓存并返回 `(False, 清晰错误)`，不能退出 Agent。
+新增 `_publish_custom_command(topic, msg_type, data)`：校验 topic 以 `/` 开头、msg_type 符合 `package/Message`、data 是 dict 且 JSON 大小不超过 256 KiB；调用严格转换。缓存使用 `collections.OrderedDict`，键为 topic，值为 `(msg_type, publisher)`。命中相同 topic/type 后调用 `move_to_end()`；同 topic 改类型时先调用旧 publisher 的 `unregister()` 并删除旧项；创建新 Publisher 后若超过 32 项，使用 `popitem(last=False)` 淘汰最久未使用项并调用其 `unregister()`。创建或发布异常必须清理本次无效缓存并返回 `(False, 清晰错误)`，不能退出 Agent；`unregister()` 自身异常只记录限频警告，不得中断当前命令。
 
 `CmdAction.CUSTOM` 只读取 `params.topic`、`params.msg_type`、`params.data`。显式使用 `std_msgs/String` 时参数格式为 `data: {data: "文本"}`，不保留旧的隐式 JSON String 包装。
 
@@ -456,7 +464,11 @@ self._command_publishers: Dict[str, Tuple[str, object]] = {}
 
 Mock custom 必须拒绝空 topic、非法 msg_type、非 dict data 和超过 256 KiB 的 data；合法输入返回包含 topic/type 的成功文本，不尝试导入 ROS。
 
-- [ ] **步骤 6：运行回归并提交**
+- [ ] **步骤 6：同步更新 custom 权威协议文档**
+
+在 `docs/protocol.md` 将 `action: custom` 的 `params` 权威格式改为 `{topic, msg_type, data}`，加入 JSON 示例和字段约束。明确 Agent 使用 `msg_type` 发布真实 ROS 消息、自定义消息包必须安装并 source 在目标 Agent 环境，地面站仅在本地 Bridge 也要重发该自定义传感器类型时才需要同一消息包；删除或改写仍描述隐式 `std_msgs/String` 包装的旧内容。
+
+- [ ] **步骤 7：运行回归并提交**
 
 ```bash
 python3 -m pytest \
@@ -470,7 +482,7 @@ ruff check agent/dict_to_ros_msg.py agent/ros1_agent.py agent/mock_agent.py \
 预期：全部通过；fleet JSON 转换仍使用默认非严格模式。
 
 ```bash
-git add agent/dict_to_ros_msg.py agent/ros1_agent.py agent/mock_agent.py \
+git add agent/dict_to_ros_msg.py agent/ros1_agent.py agent/mock_agent.py docs/protocol.md \
   tests/test_dict_to_ros_msg.py tests/test_ros1_agent.py tests/test_agent_topic_config.py
 git commit -m "feat: 发布真实自定义ROS消息"
 ```
@@ -579,7 +591,7 @@ def test_catalog_normalizes_discovers_and_returns_defensive_copy(qt_app):
     assert catalog.representative_robot(["r2", "r1"]) == "r1"
 ```
 
-覆盖去重、更新发出 `topics_changed(robot_id)`、未知机器人返回空 list、调用方修改返回值不污染缓存。
+覆盖去重、更新发出 `topics_changed(robot_id)`、未知机器人返回空 list、调用方修改返回值不污染缓存；另传入 `topics=None`、非 list、非 dict 条目，以及 topic/type 为 `None` 或数字的条目，断言目录为空且不会生成字符串 `"None"` 或数字话题。
 
 - [ ] **步骤 2：运行测试确认模块缺失**
 
@@ -604,13 +616,18 @@ class RobotTopicCatalog(QObject):
     def update_from_discover(
         self, robot_id: str, data: Dict[str, Any]
     ) -> None:
+        raw_topics = data.get("topics", [])
+        if not isinstance(raw_topics, list):
+            raw_topics = []
         normalized = {
             (
-                str(item.get("topic", "")).strip(),
-                str(item.get("msg_type") or item.get("type", "")).strip(),
+                item["topic"].strip(),
+                (item.get("msg_type") or item.get("type")).strip(),
             )
-            for item in data.get("topics", [])
+            for item in raw_topics
             if isinstance(item, dict)
+            and isinstance(item.get("topic"), str)
+            and isinstance(item.get("msg_type") or item.get("type"), str)
         }
         self._topics[robot_id] = [
             {"topic": topic, "msg_type": msg_type}
@@ -626,7 +643,7 @@ class RobotTopicCatalog(QObject):
         return sorted(set(robot_ids))[0] if robot_ids else ""
 ```
 
-目录按 `(topic, msg_type)` 去重并按 topic/type 排序；只接受非空字符串。
+目录按 `(topic, msg_type)` 去重并按 topic/type 排序；只接受去除首尾空白后仍非空的字符串。`data.topics` 不是 list、条目不是 dict、字段为 `None`/数字/其他非字符串时跳过，不把异常值强制转成文字。
 
 - [ ] **步骤 4：让 TopicConfigPanel 使用可注入共享目录**
 
@@ -668,7 +685,7 @@ git commit -m "refactor: 共享机器人话题目录"
 
 - [ ] **步骤 1：编写缺失、有效、损坏和原子保存测试**
 
-在 `tests/test_command_button_config.py` 覆盖：缺失文件返回 4 个 `None`；有效 YAML 往返；slot 键缺失自动补 `None`；版本不是 1、未知 slot、空 label、非法 topic/type、非 dict data、data 超 256 KiB、schema 非 dict 均抛 `CommandButtonConfigError`；patch `os.replace` 失败时旧文件内容保持不变且临时文件被清理。
+在 `tests/test_command_button_config.py` 覆盖：缺失文件返回 4 个 `None`；有效 YAML 往返；slot 键缺失自动补 `None`；版本不是 1、未知 slot、空 label、非法 topic/type、非 dict data、data 超 256 KiB、schema 非 dict、schema 超 256 KiB、非空 schema 根节点结构错误、schema type 与 msg_type 不同、`verified` 却没有有效 schema 均抛 `CommandButtonConfigError`；`unverified` 允许空 schema 或类型匹配的旧缓存；patch `os.replace` 失败时旧文件内容保持不变且临时文件被清理。
 
 核心往返测试：
 
@@ -708,6 +725,7 @@ python3 -m pytest tests/test_command_button_config.py -q
 CONFIG_VERSION = 1
 SLOT_IDS = ("slot_1", "slot_2", "slot_3", "slot_4")
 MAX_COMMAND_DATA_BYTES = 256 * 1024
+MAX_COMMAND_SCHEMA_BYTES = 256 * 1024
 
 
 class CommandButtonConfigError(ValueError):
@@ -735,7 +753,7 @@ class CommandButtonConfigStore:
 
 `CommandButtonConfigStore.load()` 返回 `Dict[str, Optional[CommandButtonConfig]]`：缺失文件直接返回 `empty_command_slots()`；存在文件必须校验 version、slots、每个非空 slot 并补齐缺失的合法 slot。`save(slots)` 返回 `None`：先校验完整 mapping，再用同目录 `tempfile.NamedTemporaryFile(delete=False)`、`yaml.safe_dump()` 写入，调用同一解析函数回读临时文件，最后 `os.replace(temp_path, self._path)`；`finally` 对仍存在的 temp path 调用 `unlink()`。
 
-label 去除首尾空白后长度为 1 至 64；topic 必须以 `/` 开头且长度不超过 255；msg_type 必须恰好包含一个 `/` 且包名和类型名非空；schema_status 只允许 `verified/unverified`。`CommandButtonConfig.to_dict()` 和 `from_dict()` 是 YAML 与 dataclass 的唯一转换入口，禁止 store 重复字段解析逻辑。
+label 去除首尾空白后长度为 1 至 64；topic 必须以 `/` 开头且长度不超过 255；msg_type 必须恰好包含一个 `/` 且包名和类型名非空；schema_status 只允许 `verified/unverified`。schema 使用与 data 相同的 UTF-8 JSON 编码计数方式限制为 256 KiB；非空 schema 必须具有 `type/kind/fields`，其中 type 等于配置 msg_type、kind 等于 `message`、fields 是 list。`verified` 必须携带非空有效 schema；`unverified` 可以使用空 schema，也可以保留类型匹配的旧 schema 供离线表单使用。`CommandButtonConfig.to_dict()` 和 `from_dict()` 是 YAML 与 dataclass 的唯一转换入口，禁止 store 重复字段解析逻辑。
 
 - [ ] **步骤 4：创建默认配置并运行测试**
 
@@ -888,15 +906,17 @@ git commit -m "feat: 生成递归消息参数表单"
 
 测试构造共享 `RobotTopicCatalog`、临时 `CommandButtonConfigStore` 和在线机器人 `['r2', 'r1']`。覆盖：
 
-1. 左侧恰好 4 个 slot。
+1. 左侧恰好 4 个 slot；在 slot 之间来回切换时分别保留显示文字、topic、msg_type、当前标签页以及尚未通过语法校验的原始 JSON 文本。
 2. 话题下拉来自 `catalog.topics_for('r1')`，选 topic 自动填 msg_type。
 3. 修改 msg_type 发出 `schema_query_requested('r1', request_id, msg_type)`。
-4. 响应 robot ID、request ID 或 msg_type 不匹配时不覆盖当前 schema。
-5. 合法响应设置 `schema_status='verified'` 并生成表单。
+4. 同时为两个 slot 发起请求时，响应只更新请求所属 slot；robot ID、request ID、msg_type 或该 slot 当前类型不匹配时不覆盖任何 schema。
+5. 合法响应设置目标 slot 的 `schema_status='verified'` 并生成表单；打开已有缓存的 slot 时仍向在线代表机器人刷新一次 schema。
 6. form → JSON 与 JSON → form 保持相同 data。
 7. 非 object JSON、字段错误或任一 slot 无效时不调用 store.save。
 8. 无在线机器人时允许手工 JSON 保存为 `unverified`。
 9. 有代表机器人但共享目录为空时发出一次 `discover_requested`，discover 响应更新目录后刷新话题下拉。
+10. schema 请求 5 秒没有响应，或匹配响应返回 `result='error'` 时，清理 pending、标记目标 slot 为 `unverified`、显示具体错误；存在旧 schema 时保留旧表单和缓存，不存在时切到 JSON。超时后到达的响应，以及同一 slot 新请求之前的旧响应，都不得覆盖当前状态。
+11. 点击“清除此位置”只重置当前 draft 为未配置；保存全部设置后该 slot 持久化为 `None`，取消对话框则不修改磁盘配置。
 
 代表测试：
 
@@ -938,6 +958,8 @@ def test_dialog_ignores_stale_schema_response(qt_app, tmp_path):
     assert dialog.current_schema() == {}
 ```
 
+另增加 `test_switching_slots_preserves_independent_raw_drafts`、`test_concurrent_schema_responses_update_their_own_slots`、`test_schema_timeout_keeps_cached_schema_unverified`、`test_late_response_after_timeout_is_ignored`、`test_opening_cached_slot_refreshes_schema_once`、`test_robot_coming_online_refreshes_selected_slot` 和 `test_clear_current_slot_persists_none`。测试使用可调用的 `dialog.expire_schema_request(request_id)` 测试接口触发超时，不等待真实 5 秒。
+
 - [ ] **步骤 2：运行测试确认对话框缺失**
 
 ```bash
@@ -948,19 +970,47 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest tests/test_command_button_dialog.py 
 
 - [ ] **步骤 3：实现对话框固定接口和布局**
 
-公开 `discover_requested = pyqtSignal()` 与 `schema_query_requested = pyqtSignal(str, str, str)`。构造参数固定为 `store: CommandButtonConfigStore`、`topic_catalog: RobotTopicCatalog`、`online_robot_ids: List[str]` 和可选 `parent`。测试接口固定为 `on_schema_response(robot_id, data)` 与 `saved_slots()`；后者返回 4 个 slot 的防御性深拷贝。
+公开 `discover_requested = pyqtSignal()` 与 `schema_query_requested = pyqtSignal(str, str, str)`。构造参数固定为 `store: CommandButtonConfigStore`、`topic_catalog: RobotTopicCatalog`、`online_robot_ids: List[str]` 和可选 `parent`。测试接口固定为 `select_slot(slot_id)`、`set_message_type(msg_type)`、`current_message_type()`、`set_online_robot_ids(robot_ids)`、`on_schema_response(robot_id, data)`、`expire_schema_request(request_id)`、`current_schema()` 与 `saved_slots()`；最后两者返回防御性深拷贝。
 
-左侧用固定宽度 `QListWidget` 显示 4 个位置；右侧包含显示字样、可编辑话题 combo、可编辑 msg_type combo、校验状态、`QTabWidget` 中的 `MessageFormWidget` 与 `QPlainTextEdit`。底部仅有取消和保存全部设置。不要把对话框放进卡片式嵌套容器。
+在模块内定义以下私有状态类型：
+
+```python
+@dataclass
+class _SlotDraft:
+    label: str = ""
+    topic: str = ""
+    msg_type: str = ""
+    json_text: str = "{}"
+    schema: Dict[str, Any] = field(default_factory=dict)
+    schema_status: str = "unverified"
+    schema_error: str = ""
+    active_tab: int = 1
+
+
+@dataclass(frozen=True)
+class _SchemaRequestContext:
+    robot_id: str
+    slot_id: str
+    msg_type: str
+```
+
+对话框启动时将 store 的 4 个值深拷贝成 `Dict[str, Optional[_SlotDraft]]`，再把选中的 slot 加载进编辑器。切换前 `_capture_current_draft()` 必须保存所有文本和当前标签页：表单模式先把 `MessageFormWidget.data()` 序列化到 `json_text`，JSON 模式直接保存原始编辑器文本，即使它当前语法无效也不能丢失。加载目标 draft 时恢复原始文本；只有 JSON 可解析且与 schema 相容时才同步表单。不得用一个全局 `data/schema/json_text` 代表全部 slot。
+
+左侧用固定宽度 `QListWidget` 显示 4 个位置；右侧包含显示字样、可编辑话题 combo、可编辑 msg_type combo、校验状态、`QTabWidget` 中的 `MessageFormWidget` 与 `QPlainTextEdit`。右侧提供“清除此位置”命令按钮，底部保留取消和保存全部设置；清空只重置当前内存 draft 和编辑器，只有“保存全部设置”成功后才写磁盘。不要把对话框放进卡片式嵌套容器。
 
 构造完成后若存在代表机器人但 `topic_catalog.topics_for(robot_id)` 为空，使用 `QTimer.singleShot(0, self.discover_requested.emit)` 请求现有 discover；目录的 `topics_changed` signal 到达后只刷新相同代表机器人的下拉选项，不清除用户已经手工输入的 topic/type。
 
 - [ ] **步骤 4：实现 schema 请求与 JSON 同步**
 
-msg_type 编辑完成后生成 `uuid.uuid4().hex[:12]`，记录 `(robot_id, request_id, msg_type, slot_id)`。有代表机器人时发 query；没有时清空 schema、标记 unverified 并切到 JSON。切换到 JSON 前序列化 form data；切回 form 前解析 JSON、要求 object、调用 `validate_message_data()`，失败则恢复 JSON tab 并在状态 label 展示第一条字段路径错误。
+使用 `_pending_schema_requests: Dict[str, _SchemaRequestContext]` 和 `_latest_schema_request_by_slot: Dict[str, str]` 跟踪请求；`_SchemaRequestContext` 固定保存 `robot_id/slot_id/msg_type`。每次 msg_type 编辑完成后先捕获当前 draft；若原 schema 的 type 与新 msg_type 不同，立即清空 schema、标记 `unverified` 并保留原始 JSON。然后令 `request_id = uuid.uuid4().hex[:12]`，把同一 slot 的旧 request 从 pending 移除，再记录新 request 并发出 query；使用 `QTimer.singleShot(5000, lambda rid=request_id: self.expire_schema_request(rid))` 设置超时。每个非空缓存 slot 在本次对话框第一次被选中时，即使 `schema_status='verified'`，也按同一流程向在线代表机器人刷新一次；使用 `_refreshed_slots: Set[str]` 防止来回切换重复查询。`set_online_robot_ids()` 保存排序去重后的新集合；代表机器人由无变有时，清除当前 slot 的 refreshed 标记并立即触发一次刷新，使对话框打开期间上线的机器人也可提供 schema。
+
+`on_schema_response()` 先以 request ID 查 pending，再同时核对 robot ID、响应 msg_type、上下文 msg_type、目标 draft 当前 msg_type 和 `_latest_schema_request_by_slot`；全部匹配才消费响应。成功响应还要验证 schema 根结构、大小和 type，更新请求所属 draft、清空 `schema_error`；仅当它是当前 slot 时刷新可见表单。匹配的 error 响应与 `expire_schema_request()` 都消费 pending，把该 draft 标为 `unverified` 并把 Agent error 或“消息结构查询超时”写入 `schema_error`：存在类型匹配的旧 schema 时保留它并继续允许结构化表单，不存在时清空 schema 并切到 JSON。加载该 slot 时状态 label 显示保存于 draft 的错误；迟到响应因 pending 已删除而忽略。`schema_error` 仅是本次对话框的瞬时状态，不写入 YAML。
+
+切换到 JSON 前序列化 form data；切回 form 前解析 JSON、要求 object、调用 `validate_message_data()`，失败则恢复 JSON tab 并在状态 label 展示第一条字段路径错误。没有代表机器人时不创建 pending，保留类型匹配的缓存 schema 但标记 unverified；没有缓存才清空 schema 并切到 JSON。
 
 - [ ] **步骤 5：实现整批校验和保存**
 
-4 个 slot 可以为 `None`；有任意输入的 slot 必须形成完整 `CommandButtonConfig`。先构造并验证全部 draft，再调用一次 `store.save(slots)`；失败时定位 slot 并保持对话框打开。保存成功才 `accept()`。
+保存前先捕获当前 draft。明确执行过“清除此位置”或所有字段均为空的 draft 转为 `None`；其他有任意输入的 draft 必须先解析其原始 JSON、要求顶层 object，再形成完整 `CommandButtonConfig`。逐槽位构造并验证全部配置后才调用一次 `store.save(slots)`；失败时自动选中对应 slot、保持原始文本和对话框打开。保存成功才 `accept()`；取消不调用 store。
 
 - [ ] **步骤 6：运行测试并提交**
 
@@ -989,7 +1039,7 @@ git commit -m "feat: 添加命令按钮设置窗口"
 
 - [ ] **步骤 1：编写纯批次状态机失败测试**
 
-在 `tests/test_command_batch.py` 覆盖 start、成功、失败、重复 ack、未知机器人、未知 exec ID、部分完成和超时：
+在 `tests/test_command_batch.py` 覆盖 start、成功、失败、重复 ack、未知机器人、未知 exec ID、部分完成、超时和历史淘汰：完成 21 个批次后只保留最近 20 个结果，仍在等待确认的活动批次不得因上限被淘汰。
 
 ```python
 def test_batch_tracker_summarizes_partial_failure_and_timeout():
@@ -1006,7 +1056,7 @@ def test_batch_tracker_summarizes_partial_failure_and_timeout():
 
 - [ ] **步骤 2：编写 CommandPanel 新模式区失败测试**
 
-在 `tests/test_panels.py::TestCommandPanel` 增加：模式区恰好 4 个配置按钮；默认全为“未配置”且禁用；不再存在面板急停按钮；在线数 label 更新；有效 slot 显示 label 并启用；点击生成 exec ID 并发出 `batch_command_requested(exec_id, params)`，params 精确包含 `topic/msg_type/data`；配置对象点击后深拷贝；速度方向按钮仍只发给选中机器人。
+在 `tests/test_panels.py::TestCommandPanel` 增加：模式区恰好 4 个配置按钮；默认全为“未配置”且禁用；不再存在面板急停按钮；在线数 label 更新；有效 slot 显示 label 并启用；点击生成 exec ID 并发出 `batch_command_requested(exec_id, params)`，params 精确包含 `topic/msg_type/data`；配置对象点击后深拷贝；速度方向按钮仍只发给选中机器人。再连续启动 `exec-old` 与 `exec-new`，让旧批次后完成，断言结果 label 和详情仍展示新批次，两个 tracker 结果各自保持正确；设置窗口存活时调用 `on_robot_list_changed()`，断言新在线列表转发到对话框，关闭后引用清空。
 
 - [ ] **步骤 3：运行测试确认批次模块和新 UI 缺失**
 
@@ -1019,7 +1069,7 @@ QT_QPA_PLATFORM=offscreen python3 -m pytest \
 
 - [ ] **步骤 4：实现 CommandBatchTracker**
 
-使用 dataclass `RobotCommandResult`、`CommandBatchResult`；`CommandBatchTracker` 公开 `start(exec_id: str, robot_ids: List[str], now: float) -> None`、`ack(exec_id: str, robot_id: str, result: str, message: str) -> bool`、`expire(now: float) -> List[str]`、`result(exec_id: str) -> Optional[CommandBatchResult]`。`CommandBatchResult.counts()` 固定返回 `{"success": int, "failed": int, "timeout": int}`。模块不依赖 Qt。重复 ack 只接受第一条终态；`expire()` 仅把尚未完成且已到 deadline 的机器人标为 timeout，并返回刚完成的 exec ID 列表。
+使用 dataclass `RobotCommandResult`、`CommandBatchResult`；`CommandBatchTracker(timeout_seconds: float = 5.0, max_completed: int = 20)` 公开 `start(exec_id: str, robot_ids: List[str], now: float) -> None`、`ack(exec_id: str, robot_id: str, result: str, message: str) -> bool`、`expire(now: float) -> List[str]`、`result(exec_id: str) -> Optional[CommandBatchResult]`。`CommandBatchResult.counts()` 固定返回 `{"success": int, "failed": int, "timeout": int}`。模块不依赖 Qt。重复 ack 只接受第一条终态；`expire()` 仅把尚未完成且已到 deadline 的机器人标为 timeout，并返回刚完成的 exec ID 列表。内部用完成顺序 deque 记录终态批次，每当批次完成时淘汰超过 `max_completed` 的最旧完成批次；活动批次不计入该上限，重复完成通知不重复入队。
 
 - [ ] **步骤 5：重建模式控制组**
 
@@ -1033,9 +1083,9 @@ discover_requested = pyqtSignal()
 schema_query_requested = pyqtSignal(str, str, str)
 ```
 
-实现 `begin_command_batch(exec_id, robot_ids)`、`reject_command_batch(exec_id, message)` 和 `on_schema_response(robot_id, data)`。点击配置按钮生成 exec ID 并对 `topic/msg_type/data` 做 `copy.deepcopy()` 后 emit。`begin_command_batch()` 启动 tracker 并使用 `QTimer.singleShot(5000, lambda batch_id=exec_id: self._expire_batch(batch_id))` 到期；`on_cmd_ack()` 只处理已知批次。结果 label 显示计数并包含 `<a href="details">查看详情</a>`，`linkActivated` 打开 `QMessageBox` 列出每台失败/超时机器人；同一详情文本也设置为 label tooltip。
+实现 `begin_command_batch(exec_id, robot_ids)`、`reject_command_batch(exec_id, message)` 和 `on_schema_response(robot_id, data)`。点击配置按钮生成 exec ID 并对 `topic/msg_type/data` 做 `copy.deepcopy()` 后 emit。`begin_command_batch()` 启动 tracker、把 `_visible_exec_id` 设置为该 exec ID，并使用 `QTimer.singleShot(5000, lambda batch_id=exec_id: self._expire_batch(batch_id))` 到期；`reject_command_batch()` 也只更新它收到的最新点击 ID。`on_cmd_ack()` 与 `_expire_batch()` 始终更新 tracker，但只有目标 ID 等于 `_visible_exec_id` 时才刷新可见结果。结果 label 显示计数并包含 `<a href="details">查看详情</a>`，`linkActivated` 只根据 `_visible_exec_id` 打开 `QMessageBox`，列出该批次每台失败/超时机器人；同一详情文本也设置为 label tooltip。旧批次迟到 ack 只更新旧批次内部结果，不得覆盖新批次 label、tooltip 或详情。
 
-读取配置失败时 4 个按钮回退未配置并显示警告；不能加载半有效 slot。齿轮打开任务 8 的对话框，转发 discover/schema signals；对话框成功后重新加载配置。
+读取配置失败时 4 个按钮回退未配置并显示警告；不能加载半有效 slot。齿轮打开任务 8 的对话框，转发 discover/schema signals，并在对话框存活期间保存 `_settings_dialog` 引用；现有 `on_robot_list_changed(robot_ids)` 除更新目标 combo 和在线数外，还调用 `_settings_dialog.set_online_robot_ids(robot_ids)`。对话框关闭后在 `finally` 清空引用，成功保存后重新加载配置。
 
 - [ ] **步骤 6：运行面板与批次测试并提交**
 
@@ -1169,23 +1219,23 @@ git add qt_frontend/panels/robot_list_panel.py qt_frontend/main_window.py \
 git commit -m "feat: 向全部在线机器人发送命令"
 ```
 
-### 任务 11：更新协议文档、工作日志并完成分层验证
+### 任务 11：复核协议文档、编写工作日志并完成分层验证
 
 **文件：**
-- 修改：`docs/protocol.md`
+- 核对：`docs/protocol.md`
 - 创建：`docs/work-log-2026-07-24.md`
 - 核对：本计划列出的全部 Python、YAML 和测试文件
 
-- [ ] **步骤 1：更新协议权威文档**
+- [ ] **步骤 1：复核协议权威文档**
 
-在 `docs/protocol.md` 的 topic 表加入：
+对照任务 1 和任务 3 的最终代码与测试，确认 `docs/protocol.md` 已包含：
 
 ```text
 station/{robot_id}/message_schema/query
 station/{robot_id}/message_schema/response
 ```
 
-新增 query/response JSON 示例、字段表、256 KiB schema 边界和 request ID 防乱序规则。将 `custom` 参数权威格式改为 `{topic, msg_type, data}`，明确自定义消息包必须安装并 source 在目标 Agent 环境；地面站仅在本地 Bridge 重发该自定义传感器类型时才需要同一消息包。
+逐项核对 query/response JSON 示例、字段表、QoS、256 KiB schema 边界、request ID 防乱序规则，以及 `custom` 的 `{topic, msg_type, data}` 格式和真实 ROS 消息语义。使用 `rg -n "message_schema|action.*custom|msg_type|std_msgs/String" docs/protocol.md` 检查新旧描述；如果实现期间字段名发生变化，必须在提交实现任务时同步修正文档并重跑协议测试，不能把权威文档差异留到工作日志提交。
 
 - [ ] **步骤 2：运行聚焦测试**
 
@@ -1271,7 +1321,7 @@ rostopic echo -n 1 /实际命令话题
 
 - [ ] **步骤 6：进行 Qt 视觉与交互检查**
 
-使用 `./qt_frontend/scripts/start.sh` 启动正式入口，检查 1280×720 和 1600×900：4 个按钮稳定为 2×2、不与在线数或齿轮重叠、长 label 使用省略号并有 tooltip、设置对话框在窄屏可滚动、表单/JSON 切换不丢值、顶部全部急停始终可见。保存一张截图并在工作日志记录路径；若环境无法启动 RViz，使用 `QT_QPA_PLATFORM=offscreen` 截取设置对话框并明确 RViz 未验证。
+使用 `./qt_frontend/scripts/start.sh` 启动正式入口，检查 1280×720 和 1600×900：4 个按钮稳定为 2×2、不与在线数或齿轮重叠、长 label 使用省略号并有 tooltip、设置对话框在窄屏可滚动、4 个 slot 来回切换和表单/JSON 切换都不丢值、“清除此位置”不会误清其他 slot、schema 加载/错误/超时状态可见、顶部全部急停始终可见。保存一张截图并在工作日志记录路径；若环境无法启动 RViz，使用 `QT_QPA_PLATFORM=offscreen` 截取设置对话框并明确 RViz 未验证。
 
 - [ ] **步骤 7：编写当日工作日志**
 
@@ -1280,7 +1330,7 @@ rostopic echo -n 1 /实际命令话题
 - [ ] **步骤 8：提交文档与最终验证记录**
 
 ```bash
-git add docs/protocol.md docs/work-log-2026-07-24.md
+git add docs/work-log-2026-07-24.md
 git commit -m "docs: 记录可配置命令按钮实现"
 ```
 
@@ -1297,17 +1347,17 @@ git log --oneline -12
 
 ### 任务独立性
 
-- 任务 1 只增加零 ROS/Qt 依赖协议，完成后协议测试可独立通过。
+- 任务 1 只增加零 ROS/Qt 依赖协议并同步更新对应权威文档，完成后协议测试可独立通过且文档与代码一致。
 - 任务 2 只依赖任务 1 之外的现有 `dict_to_ros_msg` 类型加载 helper；fake class 测试不要求 ROS。
-- 任务 3 在已有转换器上增加默认关闭参数，先保证所有旧调用行为不变，再切换 custom 命令。
+- 任务 3 在已有转换器上增加默认关闭参数，先保证所有旧调用行为不变，再切换 custom 命令、增加有界 Publisher LRU 并同步更新对应权威文档。
 - 任务 4 依赖任务 1 的协议和任务 2 的 Agent hook；MQTT 两端可用 RecordingAgent 与 fake paho 独立验证。
 - 任务 5 只重构 discover 数据所有权，不依赖 schema 协议，完成后现有话题配置仍可运行。
-- 任务 6 是独立纯 Python/YAML 模块，不依赖 Qt、MQTT 或 ROS。
+- 任务 6 是独立纯 Python/YAML 模块，不依赖 Qt、MQTT 或 ROS，并在任何 Qt 控件读取缓存前验证 data/schema 大小和 schema 根结构。
 - 任务 7 依赖任务 2 定义的 schema 形状，但测试使用固定 dict，不依赖真实 Agent。
-- 任务 8 依赖任务 5、6、7，所有信号目标在前序任务已定义。
-- 任务 9 依赖任务 6、8，新批次状态机不依赖 MQTT；面板 emit 后即使尚未接主窗口也不会破坏构造。
+- 任务 8 依赖任务 5、6、7，所有信号目标在前序任务已定义；每个 slot 的 `_SlotDraft` 与按 request ID 跟踪的 schema 状态都在该任务内部定义，不依赖主窗口时序。
+- 任务 9 依赖任务 6、8，新批次状态机不依赖 MQTT；`_visible_exec_id` 只控制渲染，旧批次仍可独立完成，面板 emit 后即使尚未接主窗口也不会破坏构造。
 - 任务 10 最后接入正式入口，所有 signal、store、catalog 和 tracker 均已存在。
-- 任务 11 只在实现和聚焦测试完成后更新权威文档与事实性工作日志。
+- 任务 11 只在实现和聚焦测试完成后复核任务 1、3 已同步更新的权威文档，并编写事实性工作日志。
 
 ### 预期失败来源
 
@@ -1315,6 +1365,7 @@ git log --oneline -12
 - ROS schema 和发布测试 patch 动态消息类与 `rospy.Publisher`，不会因开发机缺 roscore 提前失败。
 - Qt 测试显式设置 `QT_QPA_PLATFORM=offscreen` 并复用现有 `qt_app` fixture，不依赖桌面会话。
 - 原子保存测试使用 `tmp_path`，不会写入真实 `qt_frontend/config/command_buttons.yaml`。
+- schema 超时测试直接调用 `expire_schema_request()`，不会因真实定时器、事件循环等待或执行顺序而提前失败。
 - 主窗口测试禁用 RViz 延迟初始化和 ROS monitor，目标失败不会被 native 库缺失掩盖。
 
 ### 符号与数据一致性
@@ -1324,7 +1375,9 @@ git log --oneline -12
 - custom 参数全链路统一为 `params.topic`、`params.msg_type`、`params.data`，不再混用旧 `params.msg`。
 - schema field 固定使用 `name/type/base_type/kind/is_array/array_len/fields`，Agent、纯校验、Qt 表单和缓存采用同一结构。
 - slot 固定使用 `slot_1` 至 `slot_4`；未配置值为 YAML `null` 和 Python `None`。
+- 设置窗口草稿固定使用 `_SlotDraft`，schema pending 固定使用 `_SchemaRequestContext`、`_pending_schema_requests` 与 `_latest_schema_request_by_slot`；错误和超时不会复用另一个 slot 的状态。
 - 同批命令全体共享 `exec_id`，前端内部以 robot ID 区分 ack；MqttClient 不重写 ID。
+- CommandPanel 仅渲染 `_visible_exec_id`，Tracker 最多保留最近 20 个已完成批次；ROS1 Agent 的 `_command_publishers` 使用最多 32 项的 LRU。
 
 ### 入口与环境覆盖
 
@@ -1335,13 +1388,13 @@ git log --oneline -12
 
 ## 规格覆盖自检
 
-- 固定 4 个位置、默认未配置、无新增删除排序：任务 6、8、9。
+- 固定 4 个位置、默认未配置、可清空但无新增删除排序：任务 6、8、9。
 - 话题发现复用与类型自动填充：任务 5、8、10。
 - 自定义消息递归 schema：任务 1、2、4。
-- 递归表单与 JSON 高级模式：任务 7、8。
+- 递归表单、JSON 高级模式、分槽位草稿、schema 超时与在线刷新：任务 7、8。
 - 全部在线机器人逐台发送：任务 9、10。
-- 成功、失败、超时与详情：任务 9、10。
+- 成功、失败、超时、批次隔离、有限历史与详情：任务 9、10。
 - 本地原子持久化和损坏回退：任务 6、9。
 - 真实 ROS 自定义类型发布：任务 3。
 - 顶部急停保留、模式区删除重复急停：任务 9、10。
-- 协议文档、工作日志和环境风险：任务 11。
+- 协议文档：任务 1、3，最终一致性复核在任务 11；工作日志和环境风险：任务 11。
