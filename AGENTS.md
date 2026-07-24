@@ -2,39 +2,40 @@
 
 ## 项目结构与模块组织
 
-本仓库实现基于 MQTT 的 ROS 多机器人地面站。共享协议代码位于 `protocol/`，必须保持零 ROS、Qt、MQTT 客户端依赖。机器人端桥接位于 `agent/`，包含 `ros1_agent.py`、`mock_agent.py`、话题处理和限频逻辑。地面站侧 MQTT 到 ROS 的转换位于 `bridge/`。桌面端应用位于 `qt_frontend/`，其中 PyQt5 面板在 `qt_frontend/panels/`，RViz C++ 胶水库在 `qt_frontend/native/`，运行配置在 `qt_frontend/config/`。Broker 与容器资源在 `broker/`、`docker/` 和 `docker-compose.yml`。测试位于 `tests/`，设计文档和工作日志位于 `docs/`。
+本仓库实现基于 MQTT 的 ROS 多机器人地面站。共享协议代码位于 `protocol/`，必须保持零 ROS、Qt、MQTT 客户端依赖。机器人端桥接位于 `agent/`，包含 `ros1_agent.py`、`mock_agent.py`、话题处理和限频逻辑。地面站侧 MQTT 到 ROS 的转换位于 `bridge/`。桌面端应用位于 `qt_frontend/`，其中 PyQt5 面板在 `qt_frontend/panels/`，RViz C++ 胶水库在 `qt_frontend/native/`，运行配置在 `qt_frontend/config/`。Broker 与容器资源在 `broker/`、`docker/` 和 `docker-compose.yml`。测试位于 `tests/`，设计文档和工作日志位于 `docs/`；协议字段和 topic 的权威说明以 `docs/protocol.md` 为准。
 
 ## 构建、测试与开发命令
 
-- `pip install -e ".[qt,dev]"`：安装 Qt 和开发依赖。
+- `pip install -e ".[dev]"`：安装项目和开发依赖；PyQt5 已在项目主依赖中声明。
 - `python3 -m pytest tests/ -v`：运行完整 pytest 测试套件。
-- `ruff check .`：按 Python 3.8 目标执行 lint 检查。
-- `cd qt_frontend/native && mkdir -p build && cd build && cmake .. && make -j$(nproc)`：在 Ubuntu + ROS Noetic 环境构建嵌入式 RViz 所需的 `librviz_widget.so`。
-- `python -m agent.main --agent-type mock`：启动无 ROS 依赖的 Mock Agent。
-- `docker compose up -d robot-turtlebot-001`：启动 Turtlebot3 仿真容器。
+- `ruff check <本次修改的 Python 文件>`：对本次修改的手写源文件执行 lint；`ruff check .` 仅用于查看全仓已知基线，不能单独作为完成判据。
+- `./qt_frontend/scripts/build_rviz_widget.sh`：在 Ubuntu + ROS Noetic 环境构建并验证嵌入式 RViz 的 `librviz_widget.so`；可用 `ROS_SETUP` 和 `JOBS` 覆盖默认值。
+- `python3 -m agent.main --agent-type mock`：启动无 ROS 依赖的 Mock Agent。
+- `docker compose up -d robot-turtlebot-001`：启动单个 Turtlebot3 仿真容器。
+- `docker compose up -d robot-turtlebot-001 robot-turtlebot-002`：启动两台 Turtlebot3，用于编队通信集成验证；不要覆盖用户已有容器或运行态配置。
 - `./qt_frontend/scripts/start.sh`：启动本地地面站链路。
 
 ## 代码风格与命名约定
 
-项目需兼容 ROS Noetic 的 Python 3.8。每个 Python 文件的首个 import 应为 `from __future__ import annotations`。使用 4 空格缩进；函数和变量使用 `snake_case`，类使用 `PascalCase`，常量使用 `UPPER_CASE`。类型标注使用 `Optional[X]`、`List[X]`、`Dict[K, V]`，不要使用 `X | None` 或 `list[X]`。路径处理使用 `pathlib.Path`。新增或修改的代码都要配套中文注释，说明代码意图、边界条件或非显而易见的实现原因。MQTT topic 构造集中在 `protocol/topics.py`，协议消息使用 `MessageFactory` 和 `Message.from_json()`。
+项目需兼容 ROS Noetic 的 Python 3.8。新增或实质修改的手写 Python 模块应在模块 docstring 后使用 `from __future__ import annotations`；不要为生成文件、空 `__init__.py` 或第三方代码做无关清理。使用 4 空格缩进；函数和变量使用 `snake_case`，类使用 `PascalCase`，常量使用 `UPPER_CASE`。类型标注使用 `Optional[X]`、`List[X]`、`Dict[K, V]`，不要使用 `X | None` 或 `list[X]`。路径处理使用 `pathlib.Path`。协议边界、兼容回退、资源限制和其他非显而易见逻辑使用中文注释；直观赋值和标准调用不要求逐行注释。MQTT topic 构造集中在 `protocol/topics.py`。JSON 协议消息使用 `MessageFactory` 和 `Message.from_json()`；ROS1 serialized binary body 必须使用 `protocol/binary_payloads.py` 的 encode/decode helper，且必须在 UTF-8/JSON 解码前按 topic 分流。
 
 ## 测试指南
 
-测试框架为 pytest。测试文件命名为 `test_*.py`，放在 `tests/`。修改 `protocol/`、ROS 消息转换、MQTT 路由、Bridge 行为或 PyQt 面板逻辑时，应补充聚焦的单元测试。除非变更目标就是 ROS 集成，否则优先编写不依赖 roscore 的测试。
+测试框架为 pytest。测试文件命名为 `test_*.py`，放在 `tests/`。修改 `protocol/`、ROS 消息转换、MQTT 路由、Bridge 行为或 PyQt 面板逻辑时，应补充聚焦的单元测试。验证分三层：纯协议/Agent/面板逻辑优先使用无 roscore 的 pytest；Qt 测试使用 `QT_QPA_PLATFORM=offscreen`；涉及 ROS、MQTT、Docker 或编队链路时，再使用真实双机器人容器验证，并在工作日志或回复中说明未覆盖的环境风险。Mock Agent 通过不等同于真实 ROS 编队链路通过。
 
 ## Commit 与 Pull Request 规范
 
-提交信息遵循现有格式：`<type>: <中文简短描述>`，例如 `fix: 修复命令发送`。常用 type 包括 `feat`、`fix`、`refactor`、`docs`、`test`。Pull Request 应说明行为变化、列出已运行的验证命令、关联 issue 或工作日志；涉及 Qt 可视界面变化时，附截图或简短录屏。
+提交信息遵循现有格式：`<type>: <中文简短描述>`，例如 `fix: 修复命令发送`。常用 type 包括 `feat`、`fix`、`refactor`、`docs`、`test`、`perf`、`config` 和 `chore`。Pull Request 应说明行为变化、列出已运行的验证命令、关联 issue 或工作日志；涉及 Qt 可视界面变化时，附截图或简短录屏。
 
 ## 架构注意事项
 
-机器人 ROS 网络与地面站 ROS master 必须保持隔离。跨机器数据统一通过 `docs/protocol.md` 定义的 MQTT JSON topic 传输；RViz 只能看到 `bridge/mqtt_ros_bridge.py` 重新发布到本地 roscore 的 ROS topic。
+机器人 ROS 网络与地面站 ROS master 必须保持隔离。跨网络数据统一经过 `docs/protocol.md` 定义的 MQTT/HTTP 协议层：控制、状态、配置和 JSON envelope 使用 JSON；普通 ROS topic 可使用 MQTT binary；大 payload 使用 HTTP stream + MQTT meta。机器人到地面站的 sensor 数据由 `bridge/mqtt_ros_bridge.py` 重新发布到地面站本地 roscore，供 RViz 使用。机器人 Agent 间编队由 `fleet_rules.transport` 选择 `mqtt_json` 或 `mqtt_binary`（ROS1 serialized），数据不经过地面站 Bridge，目标 Agent 直接发布到目标 ROS topic。
 
 ## 计划文档写作约定
 
-制定或更新实现计划时，应假设后续执行者来自新对话，只能看到计划文件和仓库代码。计划必须独立说明为什么做、要改哪里、怎么改、如何验证，以及执行前需要理解的术语和约束。
+制定或实质更新实现计划时，应假设后续执行者来自新对话，只能看到计划文件和仓库代码。计划必须独立说明为什么做、要改哪里、怎么改、如何验证，以及执行前需要理解的术语和约束。
 
-每份计划都应在文件前部补充 `## 术语与执行约定` 章节，放在目标、架构、技术栈之后，文件职责和任务拆分之前。该章节应解释计划中反复出现的项目术语、缩写、协议名、配置项、运行链路、匹配规则、默认策略和易混淆概念，并用自然语言说明其输入输出、作用或最小例子。例如出现 `wildcard`、`serialized`、`meta`、`payload`、`transport: auto`、HTTP snapshot、Bridge、Agent 等词时，要说明它在本项目里的具体含义，避免执行者凭通用含义误解。
+每份新建或实质更新的计划都应在文件前部补充 `## 术语与执行约定` 章节，放在目标、架构、技术栈之后；如果计划没有这些固定章节，应放在目标说明之后、任务拆分之前。该章节应解释计划中反复出现的项目术语、缩写、协议名、配置项、运行链路、匹配规则、默认策略和易混淆概念，并用自然语言说明其输入输出、作用或最小例子。例如出现 `wildcard`、`serialized`、`meta`、`payload`、`transport: auto`、HTTP snapshot、Bridge、Agent 等词时，要说明它在本项目里的具体含义，避免执行者凭通用含义误解。
 
 计划自检必须覆盖：
 
@@ -53,7 +54,7 @@
 
 ## Agent 协作约定
 
-与用户沟通时默认使用中文。修改代码前先阅读相关模块和文档，优先沿用仓库现有模式；不要回滚用户已有改动。涉及运行环境、ROS、Docker、RViz 或 MQTT 链路的变更，应在回复中明确验证范围和未验证风险。
+与用户沟通时默认使用中文。开始工作前检查当前分支、worktree 和 `git status`；修改代码前先阅读相关模块和文档，优先沿用仓库现有模式；不要回滚用户已有改动。只暂存本次任务文件，不得把 `.agents/`、`.codex/`、`.claude/skills/` 等本地工具目录加入提交。合并、提交或清理 worktree 前重新核对状态。涉及运行环境、ROS、Docker、RViz 或 MQTT 链路的变更，应在回复中明确验证范围和未验证风险。
 
 ## 工作日志写作风格
 
