@@ -7,8 +7,8 @@
 核心原则：
 
 - 机器人本地 ROS 不直接暴露给地面站。
-- 跨机器通信统一走 MQTT + JSON。
-- Station 与机器人侧 ROS 版本解耦，协议层只依赖 MQTT 消息格式。
+- 控制面和 JSON envelope 使用 MQTT + JSON；常规 ROS topic 可使用 MQTT binary，重量数据使用 HTTP stream + MQTT meta。
+- Station 与机器人侧 ROS 版本解耦，协议层只依赖标准库数据结构，不引入 ROS、Qt 或 MQTT client。
 - 需要 RViz 原生显示能力时，在 Station 本机启动 roscore，并由 Bridge 把 MQTT 数据还原为 ROS 话题。
 
 当前主线架构：
@@ -17,6 +17,9 @@
 Robot (ROS) -> Agent -> MQTT Broker -> Bridge -> local roscore -> PyQt5 + RViz
                     \                                /
                      -------- command / ack --------
+
+Agent 间编队数据走独立的 MQTT fleet data path：源 Agent -> MQTT Broker -> 目标 Agent，
+按 `fleet_rules.transport` 选择 JSON 或 ROS1 serialized binary，不经过 Station Bridge。
 ```
 
 更完整的数据流：
@@ -27,7 +30,7 @@ Robot container / physical robot
   ROS topics: /odom /scan /imu /tf /map ...
   agent.ros1_agent
       |
-      | MQTT JSON
+      | MQTT JSON / MQTT binary / HTTP meta
       v
 Station host
   Mosquitto
@@ -51,7 +54,7 @@ Station host
 | 层级 | 当前选型 | 版本/依赖 | 说明 |
 |------|----------|-----------|------|
 | 跨机器通信 | MQTT | Mosquitto 2.x / paho-mqtt 2.x | 机器人、Bridge、Qt 前端之间的统一消息总线 |
-| 消息序列化 | JSON | protocol/messages.py | 开发期可读、可用 mosquitto_sub 直接排查 |
+| 消息序列化 | JSON + ROS1 serialized binary | `protocol/messages.py`、`protocol/binary_payloads.py` | 控制面/envelope 使用 JSON，ROS body 使用原生 serialized bytes |
 | 协议层 | Python dataclass | Python 3.8+ | `protocol/` 零 ROS 依赖，Agent/Station 共用 |
 | 机器人端 Agent | Python + rospy | ROS Noetic / Python 3.8 | ROS topic 与 MQTT 双向桥接 |
 | 地面站 GUI | PyQt5 | Qt5 / PyQt5 | 机器人管理、控制、事件、话题配置等面板 |
@@ -188,21 +191,21 @@ Bridge 的设计要点：
 
 当前 `protocol/topic_registry.py` 已覆盖 41 种常见 ROS 消息类型，并按数据量分为轻量、中等、重量话题。
 
-### 7. JSON 优先，二进制/MessagePack 后置
+### 7. 分层传输策略
 
-当前开发期仍以 JSON 为主：
+控制面和小型自定义数据仍以 JSON 为主：
 
 - 方便直接用 `mosquitto_sub -v` 查看 payload。
 - 方便 pytest 构造测试数据。
 - 方便 Mock Agent 和非 ROS 工具参与调试。
-- 协议字段稳定后再考虑 MessagePack 或二进制通道优化。
+- 高频 ROS topic 已支持 ROS1 serialized binary，按规则显式选择并保留 JSON 回退。
 
 数据量分层策略：
 
 | 分层 | 典型类型 | 当前/目标传输方式 |
 |------|----------|-------------------|
-| LIGHT | Imu、Odometry、NavSatFix、Twist | MQTT + JSON |
-| MEDIUM | LaserScan、CompressedImage、OccupancyGrid 小地图 | MQTT + JSON/二进制，配合限频 |
+| LIGHT | 控制、状态、配置和简单自定义数据 | MQTT + JSON |
+| MEDIUM | Odometry、TF、LaserScan、CompressedImage、OccupancyGrid 小地图 | MQTT + ROS1 serialized binary，必要时 JSON 回退 |
 | HEAVY | 原始 Image、PointCloud2、大地图 | HTTP stream + MQTT meta，后续优化 |
 
 近期日志中记录了 `/map` OccupancyGrid 大消息的 Bridge 发布问题，这是当前需要继续排查的重点之一。
@@ -261,7 +264,7 @@ SQLite、录制和回放在早期设计中出现过，但当前代码主线的�
 | Station 本地 ROS | 需要 | 仅用于 RViz/Bridge，不直接连接机器人 roscore |
 | ROS 数据还原 | Bridge 发布本地 ROS 话题 | 让 RViz 订阅真实 typed ROS messages |
 | Agent 语言 | Python | rospy 集成简单，协议代码可复用 |
-| 消息格式 | JSON | 开发期透明可查，后续可替换序列化层 |
+| 消息格式 | 控制面/envelope 使用 JSON，ROS body 按数据层使用 binary 或 HTTP stream | 兼顾可调试性、吞吐和大 payload 隔离 |
 | 话题命名 | 普通话题 `/{robot_id}/{topic}`，仅 `/tf` 和 `/tf_static` 使用公共话题 | 多机器人隔离，同时兼容 RViz TF 习惯 |
 | 仿真验证 | Docker Turtlebot3 + 宿主机 Station | 模拟真实多机边界，避免单 roscore 假联通 |
 | Python 版本 | 3.8+ | 兼容 ROS Noetic |

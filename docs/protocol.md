@@ -3,18 +3,18 @@
 ## 版本
 
 - 协议版本: 1.0
-- 更新日期: 2026-04-29
+- 更新日期: 2026-07-23
 
 ## 1. 设计原则
 
 - 地面站与机器人通过 MQTT 通信，不依赖 rosmaster
-- 消息格式统一为 JSON，便于调试和跨语言实现
+- 控制面和 MQTT envelope 使用 JSON，便于调试和跨语言实现；ROS1 serialized body 按专用 binary 格式传输
 - 话题传输按数据量分层，带宽可控
 - 所有跨网络消息必须符合本文档定义的格式
 
 ## 2. 消息通用格式
 
-所有消息均为以下 JSON 结构：
+所有控制面消息和 MQTT JSON envelope 均使用以下结构；ROS1 serialized binary body 不经过该 JSON 结构，而是由对应的 envelope 和 `/bin` topic 关联。
 
 ```json
 {
@@ -45,12 +45,14 @@
 | Topic | 方向 | QoS | 用途 |
 |-------|------|-----|------|
 | `robot/{id}/status` | Robot → Station | 1 | 心跳 + 状态上报 |
-| `robot/{id}/sensor/{name}` | Robot → Station | 0 | 传感器数据（轻量/中等） |
+| `robot/{id}/sensor/{name}` | Robot → Station | 0/1 | 传感器 JSON 数据或 binary envelope |
+| `robot/{id}/sensor/{name}/bin` | Robot → Station | 0/1 | ROS1 serialized binary sensor body |
 | `robot/{id}/sensor/{name}/meta` | Robot → Station | 1 | 重量话题元信息 |
 | `robot/{id}/cmd` | Station → Robot | 1 | 控制指令 |
 | `robot/{id}/cmd/ack` | Robot → Station | 1 | 指令确认 |
 | `robot/{id}/event` | Robot → Station | 1 | 告警/异常事件 |
-| `robot/{src}/to/{dst}` | Robot → Robot | 1 | 机器人间数据传递（位置/导航目标/自定义） |
+| `robot/{src}/to/{dst}` | Robot → Robot | 0/1 | 机器人间 JSON 数据或 ROS1 binary envelope |
+| `robot/{src}/to/{dst}/bin` | Robot → Robot | 0/1 | 机器人间 ROS1 serialized binary body |
 | `robot/{src}/to/{dst}/meta` | Robot → Robot | 1 | 机器人间重量话题元信息（点云流地址等） |
 | `station/discover` | Station → Robot | 1 | 发现请求 |
 | `station/topic/request` | Station → Robot | 1 | Topic 订阅/取消请求 |
@@ -63,11 +65,13 @@
 - `robot/+/status` — 所有机器人状态
 - `robot/+/cmd/ack` — 所有指令确认
 - `robot/+/event` — 所有事件
+- `robot/+/sensor/+/bin` — 所有 ROS1 serialized binary sensor body
 - `robot/+/sensor/+/meta` — 所有传感器元信息
 
 机器人间通信使用目标 ID 通配符：
 
 - `robot/+/to/{self_id}` — 所有发往本机的机器人间数据
+- `robot/+/to/{self_id}/bin` — 所有发往本机的 ROS1 serialized binary body
 - `robot/+/to/{self_id}/meta` — 所有发往本机的重量话题元信息
 
 ### 3.3 sensor name 映射
@@ -285,7 +289,7 @@ Agent 对重量话题（点云等）先发送元信息，地面站通过 HTTP �
 
 Robot 向其他 Robot 直接发送数据，不经过地面站中转。
 
-**轻量数据**（position / nav_goal / custom）直接通过 MQTT JSON 传输：
+**轻量自定义数据**（position / nav_goal / custom）直接通过 MQTT JSON 传输：
 
 ```json
 {
@@ -323,6 +327,33 @@ Robot 向其他 Robot 直接发送数据，不经过地面站中转。
 | data_type | string | 数据类型: position/nav_goal/custom/pointcloud |
 | payload | object | 数据内容，随 data_type 变化 |
 | ttl | float | 有效时间（秒），超时可丢弃 |
+
+**ROS topic 编队转发**使用 `data_type: ros_topic`，由 `fleet_rules.transport` 选择 JSON 或 ROS1 serialized binary。JSON 路径在主 topic 发送完整 `FleetData`；binary 路径在主 topic 发送不含 ROS body 的 JSON envelope，并在同一目标的 `/bin` topic 发送带 13 字节关联头的 ROS1 serialized body。关联头依次为 4 字节 magic `FRB1`、1 字节版本号和网络字节序的 8 字节无符号 `transfer_id`。目标 Agent 按 `transfer_id` 配对后校验 `msg_type` 对应 ROS class 的 MD5，再发布到 `dst_topic`。
+
+```json
+{
+  "type": "fleet_data",
+  "src": "robot_001",
+  "dst": "robot_002",
+  "data": {
+    "data_type": "ros_topic",
+    "binary": true,
+    "transport": "mqtt_binary",
+    "encoding": "ros1_serialized_v1",
+    "payload_format": "ros1_serialized",
+    "transfer_id": 4294967297,
+    "payload_size": 718,
+    "md5sum": "cd5e73d190d741a2f92e81eda573aca7",
+    "src_topic": "/odom",
+    "dst_topic": "/fleet/robot_001/odom",
+    "msg_type": "nav_msgs/Odometry",
+    "frame_policy": "namespace",
+    "ttl": 1.0
+  }
+}
+```
+
+binary envelope 和 body 可以乱序到达；接收端使用 `(Message.src, transfer_id)` 配对，不能使用 `Message.seq` 或 ROS `header.seq`。ROS 网络仍保持隔离，编队消息不经过地面站 Bridge。
 
 ### 4.9 机器人间重量话题信令（fleet_data + meta topic）
 
