@@ -14,6 +14,8 @@ from protocol.messages import (
     FleetBinaryEnvelopeData,
     FleetData,
     Message,
+    MessageSchemaQueryData,
+    MessageSchemaResponseData,
     MessageType,
     RobotMode,
     SensorMetaData,
@@ -24,6 +26,43 @@ from protocol.messages import (
 )
 
 # 协议消息层测试 - Message 序列化、反序列化、MessageFactory。
+
+
+def test_message_schema_query_and_response_round_trip(factory):
+    """消息结构查询与响应应保留请求标识和目标机器人。"""
+    query = MessageSchemaQueryData(
+        request_id="req-1",
+        msg_type="geometry_msgs/Twist",
+    )
+    query_message = factory.message_schema_query(query, dst="robot_001")
+    response = MessageSchemaResponseData(
+        request_id="req-1",
+        msg_type="geometry_msgs/Twist",
+        result="ok",
+        schema={"type": "geometry_msgs/Twist", "kind": "message", "fields": []},
+    )
+    response_message = factory.message_schema_response(response)
+
+    parsed_query = Message.from_json(query_message.to_json())
+    parsed_response = Message.from_json(response_message.to_json())
+    assert parsed_query.type == MessageType.MESSAGE_SCHEMA_QUERY
+    assert parsed_query.dst == "robot_001"
+    assert parsed_query.data == {
+        "request_id": "req-1",
+        "msg_type": "geometry_msgs/Twist",
+    }
+    assert parsed_response.type == MessageType.MESSAGE_SCHEMA_RESPONSE
+    assert parsed_response.data == {
+        "request_id": "req-1",
+        "msg_type": "geometry_msgs/Twist",
+        "result": "ok",
+        "schema": {
+            "type": "geometry_msgs/Twist",
+            "kind": "message",
+            "fields": [],
+        },
+        "error": "",
+    }
 
 
 def test_fleet_binary_envelope_round_trip(factory):
