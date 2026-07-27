@@ -13,12 +13,19 @@ _WARNING_COUNTS: Dict[str, int] = {}
 _MAX_WARNINGS = 3
 
 
-def dict_to_ros_msg(data: dict, msg_type: str):
+def dict_to_ros_msg(
+    data: dict,
+    msg_type: str,
+    strict: bool = False,
+    field_path: str = "",
+):
     """将 dict 还原为 ROS 消息对象。
 
     Args:
         data: ros_msg_to_dict 生成的 dict（或从 MQTT 接收的 dict）
         msg_type: ROS 消息类型名，例如 "sensor_msgs/Imu"
+        strict: 是否拒绝无法安全转换的输入
+        field_path: 递归转换时使用的字段路径
 
     Returns:
         填充了 data 中字段的 ROS 消息实例
@@ -26,6 +33,10 @@ def dict_to_ros_msg(data: dict, msg_type: str):
     Raises:
         ValueError: 如果 msg_type 无法通过 genpy.message.get_message_class 解析
     """
+    current_path = field_path or msg_type
+    if strict and not isinstance(data, dict):
+        raise ValueError(f"{current_path}: expected object")
+
     msg_class = _get_message_class(msg_type)
     if msg_class is None:
         raise ValueError(f"Unknown ROS message type: '{msg_type}'")
@@ -35,12 +46,22 @@ def dict_to_ros_msg(data: dict, msg_type: str):
     slot_names = msg.__slots__
     slots_set = frozenset(slot_names)
 
+    if strict:
+        for key in data:
+            if key not in slots_set:
+                raise ValueError(f"{current_path}.{key}: unknown field")
+
     for i, slot in enumerate(slot_names):
         if slot not in data:
             continue
         val = data[slot]
         type_str = slot_types_list[i] if i < len(slot_types_list) else ""
-        converted = _convert_value(val, type_str)
+        converted = _convert_value(
+            val,
+            type_str,
+            strict=strict,
+            field_path=f"{current_path}.{slot}",
+        )
         setattr(msg, slot, converted)
 
     for key in data:
@@ -72,7 +93,12 @@ def _get_message_class(msg_type: str):
     return rospy_get_message_class(msg_type)
 
 
-def _convert_value(val: Any, type_str: str) -> Any:
+def _convert_value(
+    val: Any,
+    type_str: str,
+    strict: bool = False,
+    field_path: str = "",
+) -> Any:
     """根据 ROS 类型字符串将 Python 值转换为对应的 ROS 类型。"""
     import rospy
 
@@ -83,18 +109,64 @@ def _convert_value(val: Any, type_str: str) -> Any:
 
     if is_array:
         if not isinstance(val, (list, tuple)):
+            if strict:
+                raise ValueError(f"{field_path}: expected array for '{type_str}'")
             return val
 
+        if strict and fixed_length is not None and len(val) != fixed_length:
+            raise ValueError(
+                f"{field_path}: expected {fixed_length} items for '{type_str}', "
+                f"got {len(val)}"
+            )
+
         if base_type in ("uint8", "char", "byte") and fixed_length is None:
-            return bytes(b & 0xFF for b in val)
+            if strict:
+                for index, item in enumerate(val):
+                    if isinstance(item, bool):
+                        raise ValueError(
+                            f"{field_path}[{index}]: bool is not valid for "
+                            f"'{base_type}'"
+                        )
+            try:
+                return bytes(b & 0xFF for b in val)
+            except (TypeError, ValueError) as exc:
+                if strict:
+                    raise ValueError(
+                        f"{field_path}: cannot convert value to '{type_str}'"
+                    ) from exc
+                return val
 
         if "/" in base_type:
-            return [dict_to_ros_msg(item, base_type) for item in val]
+            return [
+                dict_to_ros_msg(
+                    item,
+                    base_type,
+                    strict=strict,
+                    field_path=f"{field_path}[{index}]",
+                )
+                for index, item in enumerate(val)
+            ]
 
         if fixed_length is not None:
-            return tuple(_convert_value(v, base_type) for v in val)
+            return tuple(
+                _convert_value(
+                    item,
+                    base_type,
+                    strict=strict,
+                    field_path=f"{field_path}[{index}]",
+                )
+                for index, item in enumerate(val)
+            )
 
-        return [_convert_value(v, base_type) for v in val]
+        return [
+            _convert_value(
+                item,
+                base_type,
+                strict=strict,
+                field_path=f"{field_path}[{index}]",
+            )
+            for index, item in enumerate(val)
+        ]
 
     if type_str == "time":
         if isinstance(val, dict):
@@ -112,7 +184,14 @@ def _convert_value(val: Any, type_str: str) -> Any:
 
     if "/" in type_str:
         if isinstance(val, dict):
-            return dict_to_ros_msg(val, type_str)
+            return dict_to_ros_msg(
+                val,
+                type_str,
+                strict=strict,
+                field_path=field_path,
+            )
+        if strict:
+            raise ValueError(f"{field_path}: expected object for '{type_str}'")
         return val
 
     if type_str == "string":
@@ -126,9 +205,15 @@ def _convert_value(val: Any, type_str: str) -> Any:
         except Exception:
             return val
     if type_str in ("float64", "float32", "float", "double"):
+        if strict and isinstance(val, bool):
+            raise ValueError(f"{field_path}: bool is not valid for '{type_str}'")
         try:
             return float(val)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            if strict:
+                raise ValueError(
+                    f"{field_path}: cannot convert value to '{type_str}'"
+                ) from exc
             _throttled_warn(
                 f"Cannot convert {type(val).__name__} to float for type '{type_str}'"
             )
@@ -145,9 +230,15 @@ def _convert_value(val: Any, type_str: str) -> Any:
         "char",
         "byte",
     ):
+        if strict and isinstance(val, bool):
+            raise ValueError(f"{field_path}: bool is not valid for '{type_str}'")
         try:
             return int(val)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            if strict:
+                raise ValueError(
+                    f"{field_path}: cannot convert value to '{type_str}'"
+                ) from exc
             _throttled_warn(
                 f"Cannot convert {type(val).__name__} to int for type '{type_str}'"
             )

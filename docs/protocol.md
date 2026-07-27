@@ -147,6 +147,48 @@ Station 发送给 Robot 的控制命令。
 | nav_goal | {x, y, theta} | 导航目标点 |
 | custom | {topic, msg_type, data} | 自定义 ROS 消息发布 |
 
+`custom` 的完整示例：
+
+```json
+{
+  "type": "cmd",
+  "src": "station",
+  "dst": "robot_001",
+  "data": {
+    "action": "custom",
+    "params": {
+      "topic": "/exploration/control",
+      "msg_type": "my_exploration_msgs/Control",
+      "data": {
+        "command": "start",
+        "options": {
+          "retry": 2,
+          "use_frontiers": true
+        }
+      }
+    },
+    "exec_id": "a1b2c3d4e5f6"
+  }
+}
+```
+
+`custom.params` 约束如下：
+
+- `topic` 必须是以 `/` 开头的绝对 ROS topic。
+- `msg_type` 必须使用 `package/Message` 格式，例如
+  `my_exploration_msgs/Control`。
+- `data` 必须是 JSON object，UTF-8 JSON 编码后不得超过 256 KiB。
+- Agent 按消息定义递归转换 `data`，未知字段、数组形状或定长数组长度错误、
+  嵌套消息不是 object、基础类型无法转换时，返回失败确认且不发布。
+- Agent 使用 `msg_type` 创建对应类型的 ROS Publisher，不会把 `data` 隐式包装成
+  `std_msgs/String`。需要发布 `std_msgs/String` 时应显式填写
+  `"msg_type": "std_msgs/String"` 和 `"data": {"data": "文本"}`。
+
+自定义消息包必须安装在目标机器人 Agent 的 ROS 环境中，并在启动 Agent 前 source
+对应工作空间，否则 Agent 无法解析 `msg_type`。地面站只负责发送上述 JSON 指令，
+因此仅下发 custom 指令时不需要安装该消息包；只有本地 Bridge 还要把同一种自定义
+传感器消息重新发布到地面站 ROS master 时，地面站环境才需要安装并 source 同一消息包。
+
 ### 4.3 cmd_ack — 指令确认
 
 Robot 收到指令后回复确认。

@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from agent.base_agent import AgentConfig, AgentState, BaseAgent
+from agent.custom_command import validate_custom_command_params
 from protocol.messages import (
     CmdAction,
     CmdData,
@@ -199,8 +200,22 @@ class MockAgent(BaseAgent):
             return True, f"Navigating to {target}"
 
         elif action == CmdAction.CUSTOM:
-            logger.info(f"[MockAgent] Custom command: {params}")
-            return True, "Custom command executed"
+            topic = params.get("topic")
+            msg_type = params.get("msg_type")
+            data = params.get("data")
+            validation_error = validate_custom_command_params(
+                topic,
+                msg_type,
+                data,
+            )
+            if validation_error:
+                return False, validation_error
+            logger.info(
+                "[MockAgent] Custom command: topic=%s msg_type=%s",
+                topic,
+                msg_type,
+            )
+            return True, f"Validated {msg_type} for {topic} (mock only)"
 
         else:
             logger.warning(f"[MockAgent] Unknown command: {action}")

@@ -14,12 +14,74 @@ from agent.mock_agent import MockAgent
 from agent.mock_pointcloud2_data import FakePointCloud2Message, build_pointcloud2_dict
 from protocol.binary_payloads import encode_fleet_binary_payload
 from protocol.messages import (
+    CmdData,
     FleetBinaryEnvelopeData,
     FleetData,
     Message,
     MessageFactory,
     MessageType,
 )
+
+
+@pytest.mark.parametrize(
+    ("params", "error"),
+    [
+        (
+            {"topic": "", "msg_type": "std_msgs/Bool", "data": {"data": True}},
+            "topic",
+        ),
+        (
+            {"topic": "relative", "msg_type": "std_msgs/Bool", "data": {"data": True}},
+            "topic",
+        ),
+        (
+            {"topic": "/control", "msg_type": "invalid", "data": {"data": True}},
+            "msg_type",
+        ),
+        (
+            {"topic": "/control", "msg_type": "std_msgs/Bool", "data": [True]},
+            "data",
+        ),
+        (
+            {
+                "topic": "/control",
+                "msg_type": "std_msgs/String",
+                "data": {"data": "x" * (256 * 1024)},
+            },
+            "256 KiB",
+        ),
+    ],
+)
+def test_mock_custom_command_rejects_invalid_protocol_boundary(params, error):
+    agent = object.__new__(MockAgent)
+
+    ok, message = MockAgent._execute_command(
+        agent,
+        CmdData(action="custom", params=params),
+    )
+
+    assert ok is False
+    assert error in message
+
+
+def test_mock_custom_command_accepts_real_ros_message_shape():
+    agent = object.__new__(MockAgent)
+
+    ok, message = MockAgent._execute_command(
+        agent,
+        CmdData(
+            action="custom",
+            params={
+                "topic": "/exploration/control",
+                "msg_type": "my_pkg/Control",
+                "data": {"command": "start"},
+            },
+        ),
+    )
+
+    assert ok is True
+    assert "/exploration/control" in message
+    assert "my_pkg/Control" in message
 
 
 def test_turtlebot_fleet_examples_use_expected_binary_qos():
