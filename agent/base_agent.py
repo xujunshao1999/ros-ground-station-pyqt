@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import threading
 import time
@@ -34,6 +35,7 @@ from protocol.messages import (
     FleetData,
     Message,
     MessageFactory,
+    MessageSchemaResponseData,
     MessageType,
     SensorMetaData,
     StatusData,
@@ -46,6 +48,7 @@ from protocol.topics import (
     all_robot_to_robot_binary,
     all_robot_to_robot_meta,
     parse_robot_topic,
+    parse_station_topic,
     robot_cmd,
     robot_cmd_ack,
     robot_event,
@@ -60,6 +63,8 @@ from protocol.topics import (
     station_config_response,
     station_config_sync,
     station_discover,
+    station_message_schema_query,
+    station_message_schema_response,
     station_topic_request,
     station_topic_response,
 )
@@ -78,6 +83,10 @@ FLEET_ROBOT_JSON_MAX_BYTES = 8 * 1024 * 1024
 FLEET_ENVELOPE_MAX_BYTES = 16 * 1024
 FLEET_MESSAGE_TTL_SECONDS = 1.0
 FLEET_CLOCK_FUTURE_TOLERANCE_SECONDS = 5.0
+MESSAGE_SCHEMA_MAX_BYTES = 256 * 1024
+_ROS_MESSAGE_TYPE_PATTERN = re.compile(
+    r"^[A-Za-z][A-Za-z0-9_]*/[A-Za-z][A-Za-z0-9_]*$"
+)
 
 
 class AgentState(Enum):
@@ -637,6 +646,10 @@ class BaseAgent(ABC):
         """
         ...
 
+    def _get_message_schema(self, msg_type: str) -> Dict[str, Any]:
+        """返回本机 ROS 消息字段结构，未实现的 Agent 明确报错。"""
+        raise ValueError("message schema is not available")
+
     def _on_topic_subscribed(self, topic: str, msg_type: str, options: dict) -> None:
         """话题被地面站订阅时的回调
 
@@ -725,6 +738,10 @@ class BaseAgent(ABC):
             client.subscribe(station_topic_request(), qos=1)
             client.subscribe(station_config_sync(self.config.robot_id), qos=1)
             client.subscribe(station_config_query(self.config.robot_id), qos=1)
+            client.subscribe(
+                station_message_schema_query(self.config.robot_id),
+                qos=1,
+            )
 
             # 订阅其他机器人发来的 fleet 数据
             client.subscribe(all_robot_to_robot(self.config.robot_id), qos=1)
@@ -780,6 +797,23 @@ class BaseAgent(ABC):
 
             payload = msg.payload.decode("utf-8")
             message = Message.from_json(payload)
+
+            station_info = parse_station_topic(msg.topic)
+            if message.type == MessageType.MESSAGE_SCHEMA_QUERY:
+                if (
+                    not station_info
+                    or station_info.get("type") != "message_schema_query"
+                    or station_info.get("robot_id") != self.config.robot_id
+                    or message.dst != self.config.robot_id
+                ):
+                    return
+                self._handle_message_schema_query(message)
+                return
+            if (
+                station_info
+                and station_info.get("type") == "message_schema_query"
+            ):
+                return
 
             if topic_info and topic_info.get("type") == "to_robot":
                 src_id = topic_info.get("robot_id", "")
@@ -871,6 +905,48 @@ class BaseAgent(ABC):
         ))
         self._mqtt_publish(
             robot_cmd_ack(self.config.robot_id), ack.to_json().encode("utf-8")
+        )
+
+    def _handle_message_schema_query(self, message: Message) -> None:
+        """返回本机消息定义；任何查询错误都封装为 error 响应。"""
+        data = message.data if isinstance(message.data, dict) else {}
+        raw_request_id = data.get("request_id")
+        raw_msg_type = data.get("msg_type")
+        request_id = raw_request_id if isinstance(raw_request_id, str) else ""
+        msg_type = raw_msg_type if isinstance(raw_msg_type, str) else ""
+        schema: Dict[str, Any] = {}
+        error = ""
+
+        try:
+            if not request_id.strip():
+                raise ValueError("request_id must be a non-empty string")
+            if not msg_type.strip():
+                raise ValueError("msg_type must be a non-empty string")
+            if not _ROS_MESSAGE_TYPE_PATTERN.fullmatch(msg_type):
+                raise ValueError("msg_type must use package/Message format")
+            schema = self._get_message_schema(msg_type)
+            if not isinstance(schema, dict):
+                raise ValueError("message schema must be an object")
+            encoded = json.dumps(schema, ensure_ascii=False).encode("utf-8")
+            if len(encoded) > MESSAGE_SCHEMA_MAX_BYTES:
+                raise ValueError("message schema exceeds 256 KiB")
+        except Exception as exc:
+            schema = {}
+            error = str(exc) or "message schema query failed"
+
+        response = self._factory.message_schema_response(
+            MessageSchemaResponseData(
+                request_id=request_id,
+                msg_type=msg_type,
+                result="error" if error else "ok",
+                schema=schema,
+                error=error,
+            )
+        )
+        self._mqtt_publish(
+            station_message_schema_response(self.config.robot_id),
+            response.to_json().encode("utf-8"),
+            qos=1,
         )
 
     def _handle_topic_request(self, message: Message) -> None:

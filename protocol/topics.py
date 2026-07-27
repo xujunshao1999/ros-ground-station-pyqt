@@ -187,6 +187,11 @@ def all_robot_event() -> str:
     return f"{ROBOT_PREFIX}/+/{_EVENT}"
 
 
+def all_message_schema_responses() -> str:
+    """station/+/message_schema/response - 订阅所有消息结构响应"""
+    return f"{STATION_PREFIX}/+/{_MESSAGE_SCHEMA}/response"
+
+
 def all_robot_sensor_meta() -> str:
     """robot/+/sensor/+/meta - 订阅所有机器人的传感器元信息"""
     return f"{ROBOT_PREFIX}/+/{_SENSOR}/+/{_META}"

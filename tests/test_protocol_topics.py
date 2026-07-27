@@ -5,6 +5,7 @@ from __future__ import annotations
 from protocol.topics import (
     TOPIC_QOS,
     QoS,
+    all_message_schema_responses,
     all_robot_cmd_ack,
     all_robot_event,
     all_robot_sensor_meta,
@@ -53,6 +54,7 @@ def test_message_schema_topics_and_parser_are_targeted():
     """消息结构查询必须定向到单台机器人并严格匹配层级。"""
     assert station_message_schema_query("r1") == "station/r1/message_schema/query"
     assert station_message_schema_response("r1") == "station/r1/message_schema/response"
+    assert all_message_schema_responses() == "station/+/message_schema/response"
     assert parse_station_topic("station/r1/message_schema/query") == {
         "type": "message_schema_query",
         "robot_id": "r1",
