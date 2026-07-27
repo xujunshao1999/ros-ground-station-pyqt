@@ -13,7 +13,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import rospy
@@ -25,6 +25,7 @@ except ImportError:
 from agent.base_agent import FLEET_MESSAGE_TTL_SECONDS, AgentConfig, BaseAgent
 from agent.dict_to_ros_msg import dict_to_ros_msg
 from agent.frame_utils import namespace_message_frames, namespace_ros_message_frames
+from agent.message_schema import build_message_schema
 from agent.ros_msg_converter import ros_msg_to_dict
 from protocol.binary_payloads import (
     encode_fleet_binary_payload,
@@ -226,6 +227,10 @@ class ROS1Agent(BaseAgent):
             ]
 
         return topics
+
+    def _get_message_schema(self, msg_type: str) -> Dict[str, Any]:
+        """从当前 ROS 环境加载真实消息类型并返回字段结构。"""
+        return build_message_schema(msg_type)
 
     def _on_topic_subscribed(self, topic: str, msg_type: str, options: dict) -> None:
         """地面站请求订阅某话题 → 创建 ROS 订阅"""
