@@ -21,6 +21,7 @@ from qt_frontend.panels.topic_config_panel import (
     TopicConfigPanel,
 )
 from qt_frontend.panels.traffic_monitor import BandwidthEntry, TrafficMonitor
+from qt_frontend.topic_catalog import RobotTopicCatalog
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -623,37 +624,13 @@ class TestTopicConfigPanel:
             ("/odom", "nav_msgs/Odometry", "available"),
         ]
 
-    def test_available_topics_cache_is_keyed_by_robot(self):
-        cache = {}
-
-        TopicConfigPanel.update_available_topics_cache(
-            cache,
-            "robot_001",
-            {
-                "topics": [
-                    {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
-                    {"topic": "/odom", "type": "nav_msgs/Odometry"},
-                ]
-            },
-        )
-
-        assert cache == {
-            "robot_001": [
-                {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
-                {"topic": "/odom", "msg_type": "nav_msgs/Odometry"},
-            ]
-        }
-
     def test_should_request_discover_when_available_topics_missing(self):
-        assert TopicConfigPanel.should_request_available_topics({}, "robot_001") is True
+        assert TopicConfigPanel.should_request_available_topics([], "robot_001") is True
         assert TopicConfigPanel.should_request_available_topics(
-            {"robot_001": []}, "robot_001"
-        ) is True
-        assert TopicConfigPanel.should_request_available_topics(
-            {"robot_001": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+            [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}],
             "robot_001",
         ) is False
-        assert TopicConfigPanel.should_request_available_topics({}, "") is False
+        assert TopicConfigPanel.should_request_available_topics([], "") is False
 
     def test_robot_list_refresh_only_reloads_when_selected_robot_changes(self):
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_001") is False
@@ -815,6 +792,56 @@ class TestTopicConfigPanel:
 
         assert panel._combo_msg_type.currentText() == "sensor_msgs/PointCloud2"
         assert "http_stream" in panel._transport_preview.text()
+
+    def test_shared_topic_catalog_refreshes_only_matching_robot(self, qt_app):
+        catalog = RobotTopicCatalog()
+        first_panel = TopicConfigPanel(topic_catalog=catalog)
+        second_panel = TopicConfigPanel(topic_catalog=catalog)
+        for panel in (first_panel, second_panel):
+            panel.on_robot_list_changed(["r1", "r2"])
+            panel._robot_combo.setCurrentText("r1")
+
+        first_panel.on_discover_response(
+            "r1",
+            {"topics": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+        )
+
+        assert first_panel._combo_available_topics.count() == 2
+        assert second_panel._combo_available_topics.count() == 2
+        assert catalog.topics_for("r1") == [
+            {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}
+        ]
+
+        first_panel.on_discover_response(
+            "r2",
+            {"topics": [{"topic": "/map", "msg_type": "nav_msgs/OccupancyGrid"}]},
+        )
+
+        assert first_panel._combo_available_topics.count() == 2
+        assert first_panel._combo_available_topics.itemText(1).startswith("/scan")
+        assert second_panel._combo_available_topics.itemText(1).startswith("/scan")
+
+    def test_show_add_form_uses_shared_catalog_before_requesting_discover(self, qt_app):
+        catalog = RobotTopicCatalog()
+        catalog.update_from_discover(
+            "r1",
+            {"topics": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+        )
+        panel = TopicConfigPanel(topic_catalog=catalog)
+        panel.on_robot_list_changed(["r1"])
+        requested = []
+        panel.discover_requested.connect(lambda: requested.append(True))
+
+        panel._btn_add.click()
+
+        assert requested == []
+        assert panel._combo_available_topics.count() == 2
+
+        panel.on_robot_list_changed(["r2"])
+        panel._robot_combo.setCurrentText("r2")
+        panel._btn_add.click()
+
+        assert requested == [True]
 
 
 # ------------------------------------------------------------------
