@@ -14,12 +14,79 @@ from agent.mock_agent import MockAgent
 from agent.mock_pointcloud2_data import FakePointCloud2Message, build_pointcloud2_dict
 from protocol.binary_payloads import encode_fleet_binary_payload
 from protocol.messages import (
+    CmdData,
     FleetBinaryEnvelopeData,
     FleetData,
     Message,
     MessageFactory,
+    MessageSchemaQueryData,
     MessageType,
 )
+from protocol.topics import (
+    station_message_schema_query,
+    station_message_schema_response,
+)
+
+
+@pytest.mark.parametrize(
+    ("params", "error"),
+    [
+        (
+            {"topic": "", "msg_type": "std_msgs/Bool", "data": {"data": True}},
+            "topic",
+        ),
+        (
+            {"topic": "relative", "msg_type": "std_msgs/Bool", "data": {"data": True}},
+            "topic",
+        ),
+        (
+            {"topic": "/control", "msg_type": "invalid", "data": {"data": True}},
+            "msg_type",
+        ),
+        (
+            {"topic": "/control", "msg_type": "std_msgs/Bool", "data": [True]},
+            "data",
+        ),
+        (
+            {
+                "topic": "/control",
+                "msg_type": "std_msgs/String",
+                "data": {"data": "x" * (256 * 1024)},
+            },
+            "256 KiB",
+        ),
+    ],
+)
+def test_mock_custom_command_rejects_invalid_protocol_boundary(params, error):
+    agent = object.__new__(MockAgent)
+
+    ok, message = MockAgent._execute_command(
+        agent,
+        CmdData(action="custom", params=params),
+    )
+
+    assert ok is False
+    assert error in message
+
+
+def test_mock_custom_command_accepts_real_ros_message_shape():
+    agent = object.__new__(MockAgent)
+
+    ok, message = MockAgent._execute_command(
+        agent,
+        CmdData(
+            action="custom",
+            params={
+                "topic": "/exploration/control",
+                "msg_type": "my_pkg/Control",
+                "data": {"command": "start"},
+            },
+        ),
+    )
+
+    assert ok is True
+    assert "/exploration/control" in message
+    assert "my_pkg/Control" in message
 
 
 def test_turtlebot_fleet_examples_use_expected_binary_qos():
@@ -73,6 +140,9 @@ class RecordingAgent(MockAgent):
     def _save_config(self) -> None:
         self.saved_count += 1
 
+    def _get_message_schema(self, msg_type: str):
+        return {"type": msg_type, "kind": "message", "fields": []}
+
     def _mqtt_publish(
         self,
         topic: str,
@@ -102,6 +172,165 @@ class FakeMqttMessage:
     def __init__(self, topic: str, payload: bytes):
         self.topic = topic
         self.payload = payload
+
+
+def _schema_query_message(
+    topic_robot_id="r1",
+    dst="r1",
+    request_id="req-1",
+    msg_type="geometry_msgs/Twist",
+):
+    message = MessageFactory("station").message_schema_query(
+        MessageSchemaQueryData(
+            request_id=request_id,
+            msg_type=msg_type,
+        ),
+        dst=dst,
+    )
+    return FakeMqttMessage(
+        station_message_schema_query(topic_robot_id),
+        message.to_json().encode("utf-8"),
+    )
+
+
+def _last_schema_response(agent):
+    topic, payload, qos, retain = agent.published[-1]
+    return topic, Message.from_dict(payload), qos, retain
+
+
+def test_on_connect_subscribes_targeted_message_schema_query():
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    agent._load_subscriptions_from_config = MagicMock()
+    agent._start_status_loop = MagicMock()
+    client = MagicMock()
+
+    agent._on_connect(client, None, None, 0, None)
+
+    client.subscribe.assert_any_call(
+        station_message_schema_query("r1"),
+        qos=1,
+    )
+
+
+def test_message_schema_query_publishes_matching_schema_response():
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+
+    agent._on_message(None, None, _schema_query_message())
+
+    topic, response, qos, retain = _last_schema_response(agent)
+    assert topic == station_message_schema_response("r1")
+    assert qos == 1
+    assert retain is False
+    assert response.type == MessageType.MESSAGE_SCHEMA_RESPONSE
+    assert response.data == {
+        "request_id": "req-1",
+        "msg_type": "geometry_msgs/Twist",
+        "result": "ok",
+        "schema": {
+            "type": "geometry_msgs/Twist",
+            "kind": "message",
+            "fields": [],
+        },
+        "error": "",
+    }
+
+
+@pytest.mark.parametrize(
+    "mqtt_message",
+    [
+        _schema_query_message(topic_robot_id="r2", dst="r1"),
+        _schema_query_message(topic_robot_id="r1", dst="r2"),
+    ],
+)
+def test_message_schema_query_rejects_mismatched_target(mqtt_message):
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    agent._get_message_schema = MagicMock()
+
+    agent._on_message(None, None, mqtt_message)
+
+    agent._get_message_schema.assert_not_called()
+    assert agent.published == []
+
+
+@pytest.mark.parametrize(
+    ("request_id", "msg_type"),
+    [
+        ("", "geometry_msgs/Twist"),
+        ("req-1", ""),
+    ],
+)
+def test_message_schema_query_rejects_empty_required_fields(
+    request_id,
+    msg_type,
+):
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    agent._get_message_schema = MagicMock()
+
+    agent._on_message(
+        None,
+        None,
+        _schema_query_message(request_id=request_id, msg_type=msg_type),
+    )
+
+    _, response, qos, _ = _last_schema_response(agent)
+    assert response.data["request_id"] == request_id
+    assert response.data["msg_type"] == msg_type
+    assert response.data["result"] == "error"
+    assert response.data["schema"] == {}
+    assert response.data["error"]
+    assert qos == 1
+    agent._get_message_schema.assert_not_called()
+
+
+def test_message_schema_query_rejects_invalid_message_type_format():
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    agent._get_message_schema = MagicMock()
+
+    agent._on_message(
+        None,
+        None,
+        _schema_query_message(msg_type="invalid"),
+    )
+
+    _, response, _, _ = _last_schema_response(agent)
+    assert response.data["msg_type"] == "invalid"
+    assert response.data["result"] == "error"
+    assert "package/Message" in response.data["error"]
+    agent._get_message_schema.assert_not_called()
+
+
+def test_message_schema_query_rejects_oversized_schema():
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    agent._get_message_schema = MagicMock(return_value={
+        "type": "custom_msgs/Huge",
+        "kind": "message",
+        "fields": [{"description": "x" * (256 * 1024)}],
+    })
+
+    agent._on_message(
+        None,
+        None,
+        _schema_query_message(msg_type="custom_msgs/Huge"),
+    )
+
+    _, response, _, _ = _last_schema_response(agent)
+    assert response.data["result"] == "error"
+    assert response.data["schema"] == {}
+    assert "256 KiB" in response.data["error"]
+
+
+def test_message_schema_query_returns_hook_error():
+    agent = RecordingAgent(AgentConfig(robot_id="r1"))
+    agent._get_message_schema = MagicMock(
+        side_effect=ValueError("unknown ROS message type")
+    )
+
+    agent._on_message(None, None, _schema_query_message())
+
+    _, response, _, _ = _last_schema_response(agent)
+    assert response.data["result"] == "error"
+    assert response.data["schema"] == {}
+    assert "unknown ROS message type" in response.data["error"]
 
 
 def build_recording_agent_and_envelope(

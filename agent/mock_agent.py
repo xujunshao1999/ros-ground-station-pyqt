@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Mock Agent — 模拟机器人 Agent
 
@@ -11,38 +9,63 @@ Mock Agent — 模拟机器人 Agent
 - 重量话题 HTTP 流服务端
 """
 
+from __future__ import annotations
+
 import base64
-import io
-import json
 import logging
 import math
 import random
 import threading
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from agent.base_agent import BaseAgent, AgentConfig, AgentState
-from agent.rate_limiter import RateLimiter
+from agent.base_agent import AgentConfig, AgentState, BaseAgent
+from agent.custom_command import validate_custom_command_params
 from protocol.messages import (
-    FleetBinaryEnvelopeData,
-    StatusData,
-    Position,
-    Velocity,
-    CmdData,
     CmdAction,
-    RobotMode,
+    CmdData,
     EventData,
     EventLevel,
+    FleetBinaryEnvelopeData,
     FleetData,
+    Position,
+    RobotMode,
+    StatusData,
+    Velocity,
 )
-from protocol.topic_registry import TopicTier
 
-# 确保 TopicTier 在模块级别可用
 __all__ = ["MockAgent"]
 
 logger = logging.getLogger(__name__)
+
+
+def _mock_primitive_field(name: str, msg_type: str) -> Dict[str, Any]:
+    return {
+        "name": name,
+        "type": msg_type,
+        "base_type": msg_type,
+        "kind": "primitive",
+        "is_array": False,
+        "array_len": None,
+        "fields": [],
+    }
+
+
+def _mock_vector3_field(name: str) -> Dict[str, Any]:
+    fields: List[Dict[str, Any]] = [
+        _mock_primitive_field(axis, "float64") for axis in ("x", "y", "z")
+    ]
+    return {
+        "name": name,
+        "type": "geometry_msgs/Vector3",
+        "base_type": "geometry_msgs/Vector3",
+        "kind": "message",
+        "is_array": False,
+        "array_len": None,
+        "fields": fields,
+    }
 
 
 class MockAgent(BaseAgent):
@@ -73,16 +96,55 @@ class MockAgent(BaseAgent):
         # 模拟事件生成
         self._last_event_time: float = 0.0
         self._event_events: list[dict] = [
-            {"level": EventLevel.INFO, "code": "battery_normal", "message": "Battery level normal", "weight": 3},
-            {"level": EventLevel.WARNING, "code": "battery_low", "message": "Battery level low", "weight": 1},
-            {"level": EventLevel.INFO, "code": "system_ok", "message": "System health check passed", "weight": 4},
-            {"level": EventLevel.WARNING, "code": "network_latency", "message": "Network latency high", "weight": 1},
-            {"level": EventLevel.ERROR, "code": "motor_stall", "message": "Motor stall detected", "weight": 1},
-            {"level": EventLevel.INFO, "code": "mode_change", "message": "Operation mode changed", "weight": 2},
-            {"level": EventLevel.INFO, "code": "sensor_ok", "message": "All sensors calibrated", "weight": 2},
-            {"level": EventLevel.WARNING, "code": "temp_high", "message": "CPU temperature high", "weight": 1},
+            {
+                "level": EventLevel.INFO,
+                "code": "battery_normal",
+                "message": "Battery level normal",
+                "weight": 3,
+            },
+            {
+                "level": EventLevel.WARNING,
+                "code": "battery_low",
+                "message": "Battery level low",
+                "weight": 1,
+            },
+            {
+                "level": EventLevel.INFO,
+                "code": "system_ok",
+                "message": "System health check passed",
+                "weight": 4,
+            },
+            {
+                "level": EventLevel.WARNING,
+                "code": "network_latency",
+                "message": "Network latency high",
+                "weight": 1,
+            },
+            {
+                "level": EventLevel.ERROR,
+                "code": "motor_stall",
+                "message": "Motor stall detected",
+                "weight": 1,
+            },
+            {
+                "level": EventLevel.INFO,
+                "code": "mode_change",
+                "message": "Operation mode changed",
+                "weight": 2,
+            },
+            {
+                "level": EventLevel.INFO,
+                "code": "sensor_ok",
+                "message": "All sensors calibrated",
+                "weight": 2,
+            },
+            {
+                "level": EventLevel.WARNING,
+                "code": "temp_high",
+                "message": "CPU temperature high",
+                "weight": 1,
+            },
         ]
-
 
     # ============================================================
     # BaseAgent 抽象方法实现
@@ -138,8 +200,22 @@ class MockAgent(BaseAgent):
             return True, f"Navigating to {target}"
 
         elif action == CmdAction.CUSTOM:
-            logger.info(f"[MockAgent] Custom command: {params}")
-            return True, f"Custom command executed"
+            topic = params.get("topic")
+            msg_type = params.get("msg_type")
+            data = params.get("data")
+            validation_error = validate_custom_command_params(
+                topic,
+                msg_type,
+                data,
+            )
+            if validation_error:
+                return False, validation_error
+            logger.info(
+                "[MockAgent] Custom command: topic=%s msg_type=%s",
+                topic,
+                msg_type,
+            )
+            return True, f"Validated {msg_type} for {topic} (mock only)"
 
         else:
             logger.warning(f"[MockAgent] Unknown command: {action}")
@@ -152,10 +228,37 @@ class MockAgent(BaseAgent):
             {"topic": "/gps/fix", "msg_type": "sensor_msgs/NavSatFix", "description": "GPS 位置"},
             {"topic": "/odom", "msg_type": "nav_msgs/Odometry", "description": "里程计"},
             {"topic": "/cmd_vel", "msg_type": "geometry_msgs/Twist", "description": "速度指令"},
-            {"topic": "/camera/image_raw/compressed", "msg_type": "sensor_msgs/CompressedImage", "description": "压缩图像"},
+            {
+                "topic": "/camera/image_raw/compressed",
+                "msg_type": "sensor_msgs/CompressedImage",
+                "description": "压缩图像",
+            },
             {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan", "description": "激光雷达"},
-            {"topic": "/lidar/points", "msg_type": "sensor_msgs/PointCloud2", "description": "3D 点云"},
+            {
+                "topic": "/lidar/points",
+                "msg_type": "sensor_msgs/PointCloud2",
+                "description": "3D 点云",
+            },
         ]
+
+    def _get_message_schema(self, msg_type: str) -> Dict[str, Any]:
+        """在无 ROS 环境返回常见类型的稳定示例结构。"""
+        if msg_type == "geometry_msgs/Twist":
+            return {
+                "type": msg_type,
+                "kind": "message",
+                "fields": [
+                    _mock_vector3_field("linear"),
+                    _mock_vector3_field("angular"),
+                ],
+            }
+        if msg_type == "std_msgs/Bool":
+            return {
+                "type": msg_type,
+                "kind": "message",
+                "fields": [_mock_primitive_field("data", "bool")],
+            }
+        return {"type": msg_type, "kind": "message", "fields": []}
 
     def _on_topic_subscribed(self, topic: str, msg_type: str, options: dict) -> None:
         """话题被订阅时，启动数据生成线程"""
@@ -235,8 +338,10 @@ class MockAgent(BaseAgent):
         # 速度渐变（模拟惯性）
         alpha = 0.3  # 平滑系数
         self._velocity = Velocity(
-            linear=self._velocity.linear + alpha * (self._target_velocity.linear - self._velocity.linear),
-            angular=self._velocity.angular + alpha * (self._target_velocity.angular - self._velocity.angular),
+            linear=self._velocity.linear
+            + alpha * (self._target_velocity.linear - self._velocity.linear),
+            angular=self._velocity.angular
+            + alpha * (self._target_velocity.angular - self._velocity.angular),
         )
 
         # 更新位置
@@ -563,8 +668,9 @@ class MockAgent(BaseAgent):
 
     def _on_fleet_message(self, src_id: str, data: FleetData) -> None:
         """处理其他机器人发来的 fleet 数据"""
-        logger.info(f"[MockAgent] Fleet data from {src_id}: "
-                    f"type={data.data_type}, payload={data.payload}")
+        logger.info(
+            f"[MockAgent] Fleet data from {src_id}: type={data.data_type}, payload={data.payload}"
+        )
 
     def _on_fleet_binary_message(
         self,

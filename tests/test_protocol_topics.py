@@ -5,6 +5,7 @@ from __future__ import annotations
 from protocol.topics import (
     TOPIC_QOS,
     QoS,
+    all_message_schema_responses,
     all_robot_cmd_ack,
     all_robot_event,
     all_robot_sensor_meta,
@@ -24,6 +25,8 @@ from protocol.topics import (
     robot_to_robot_binary,
     robot_to_robot_meta,
     station_discover,
+    station_message_schema_query,
+    station_message_schema_response,
     station_topic_request,
     station_topic_response,
 )
@@ -45,6 +48,29 @@ def test_parse_robot_to_robot_binary_requires_exact_segments():
     }
     assert parse_robot_topic("robot/r1/to/r2/bin/extra") is None
     assert parse_robot_topic("robot/r1/to/r2/meta/extra") is None
+
+
+def test_message_schema_topics_and_parser_are_targeted():
+    """消息结构查询必须定向到单台机器人并严格匹配层级。"""
+    assert station_message_schema_query("r1") == "station/r1/message_schema/query"
+    assert station_message_schema_response("r1") == "station/r1/message_schema/response"
+    assert all_message_schema_responses() == "station/+/message_schema/response"
+    assert parse_station_topic("station/r1/message_schema/query") == {
+        "type": "message_schema_query",
+        "robot_id": "r1",
+    }
+    assert parse_station_topic("station/r1/message_schema/response") == {
+        "type": "message_schema_response",
+        "robot_id": "r1",
+    }
+    assert parse_station_topic("station/r1/message_schema/query/extra") is None
+    assert parse_station_topic("station/r1/config/query/extra") is None
+
+
+def test_message_schema_topics_use_qos_one():
+    """查询与响应属于控制面消息，必须使用 QoS 1。"""
+    assert TOPIC_QOS["message_schema_query"] == QoS.AT_LEAST_ONCE
+    assert TOPIC_QOS["message_schema_response"] == QoS.AT_LEAST_ONCE
 
 
 class TestTopicGeneration:
@@ -285,6 +311,7 @@ class TestQoS:
             "cmd_ack", "event", "discover", "topic_request",
             "topic_response", "to_robot", "to_robot_meta",
             "config_sync", "config_query", "config_response",
+            "message_schema_query", "message_schema_response",
         }
         assert set(TOPIC_QOS.keys()) == expected_keys
 

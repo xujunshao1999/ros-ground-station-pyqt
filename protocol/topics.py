@@ -11,6 +11,8 @@ Topic 层级结构:
   station/discover               - 发现请求
   station/topic/request          - 请求订阅/取消 topic
   station/topic/response         - 订阅请求确认
+  station/{id}/message_schema/query    - 查询 ROS 消息结构
+  station/{id}/message_schema/response - 返回 ROS 消息结构
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ _EVENT = "event"
 _DISCOVER = "discover"
 _TOPIC_REQUEST = "topic/request"
 _TOPIC_RESPONSE = "topic/response"
+_MESSAGE_SCHEMA = "message_schema"
 _TO = "to"
 
 
@@ -63,6 +66,8 @@ TOPIC_QOS = {
     "config_sync": QoS.AT_LEAST_ONCE,
     "config_query": QoS.AT_LEAST_ONCE,
     "config_response": QoS.AT_LEAST_ONCE,
+    "message_schema_query": QoS.AT_LEAST_ONCE,
+    "message_schema_response": QoS.AT_LEAST_ONCE,
 }
 
 
@@ -136,6 +141,16 @@ def station_config_response(robot_id: str) -> str:
     return f"{STATION_PREFIX}/{robot_id}/config/response"
 
 
+def station_message_schema_query(robot_id: str) -> str:
+    """station/{robot_id}/message_schema/query"""
+    return f"{STATION_PREFIX}/{robot_id}/{_MESSAGE_SCHEMA}/query"
+
+
+def station_message_schema_response(robot_id: str) -> str:
+    """station/{robot_id}/message_schema/response"""
+    return f"{STATION_PREFIX}/{robot_id}/{_MESSAGE_SCHEMA}/response"
+
+
 # ---------------------------------------------------------------------------
 # 机器人间通信 topic
 # ---------------------------------------------------------------------------
@@ -170,6 +185,11 @@ def all_robot_cmd_ack() -> str:
 def all_robot_event() -> str:
     """robot/+/event - 订阅所有机器人的事件"""
     return f"{ROBOT_PREFIX}/+/{_EVENT}"
+
+
+def all_message_schema_responses() -> str:
+    """station/+/message_schema/response - 订阅所有消息结构响应"""
+    return f"{STATION_PREFIX}/+/{_MESSAGE_SCHEMA}/response"
 
 
 def all_robot_sensor_meta() -> str:
@@ -285,12 +305,17 @@ def parse_station_topic(topic: str) -> Optional[Dict[str, str]]:
             if len(parts) > 3:
                 result["robot_id"] = parts[3]
             return result
-    elif len(parts) >= 4 and parts[2] == "config":
+    elif len(parts) == 4 and parts[2] == "config":
         if parts[3] == "sync":
             return {"type": "config_sync", "robot_id": parts[1]}
         elif parts[3] == "query":
             return {"type": "config_query", "robot_id": parts[1]}
         elif parts[3] == "response":
             return {"type": "config_response", "robot_id": parts[1]}
+    elif len(parts) == 4 and parts[2] == _MESSAGE_SCHEMA:
+        if parts[3] == "query":
+            return {"type": "message_schema_query", "robot_id": parts[1]}
+        elif parts[3] == "response":
+            return {"type": "message_schema_response", "robot_id": parts[1]}
 
     return None

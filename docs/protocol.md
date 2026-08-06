@@ -3,7 +3,7 @@
 ## 版本
 
 - 协议版本: 1.0
-- 更新日期: 2026-07-23
+- 更新日期: 2026-07-24
 
 ## 1. 设计原则
 
@@ -57,6 +57,8 @@
 | `station/discover` | Station → Robot | 1 | 发现请求 |
 | `station/topic/request` | Station → Robot | 1 | Topic 订阅/取消请求 |
 | `station/topic/response` | Robot → Station | 1 | Topic 请求响应 |
+| `station/{robot_id}/message_schema/query` | Station → Robot | 1 | 查询指定 ROS 消息类型的字段结构 |
+| `station/{robot_id}/message_schema/response` | Robot → Station | 1 | 返回 ROS 消息字段结构或查询错误 |
 
 ### 3.2 通配符订阅
 
@@ -144,6 +146,48 @@ Station 发送给 Robot 的控制命令。
 | mode | {mode: "auto"/"manual"/"stop"} | 模式切换 |
 | nav_goal | {x, y, theta} | 导航目标点 |
 | custom | {topic, msg_type, data} | 自定义 ROS 消息发布 |
+
+`custom` 的完整示例：
+
+```json
+{
+  "type": "cmd",
+  "src": "station",
+  "dst": "robot_001",
+  "data": {
+    "action": "custom",
+    "params": {
+      "topic": "/exploration/control",
+      "msg_type": "my_exploration_msgs/Control",
+      "data": {
+        "command": "start",
+        "options": {
+          "retry": 2,
+          "use_frontiers": true
+        }
+      }
+    },
+    "exec_id": "a1b2c3d4e5f6"
+  }
+}
+```
+
+`custom.params` 约束如下：
+
+- `topic` 必须是以 `/` 开头的绝对 ROS topic。
+- `msg_type` 必须使用 `package/Message` 格式，例如
+  `my_exploration_msgs/Control`。
+- `data` 必须是 JSON object，UTF-8 JSON 编码后不得超过 256 KiB。
+- Agent 按消息定义递归转换 `data`，未知字段、数组形状或定长数组长度错误、
+  嵌套消息不是 object、基础类型无法转换时，返回失败确认且不发布。
+- Agent 使用 `msg_type` 创建对应类型的 ROS Publisher，不会把 `data` 隐式包装成
+  `std_msgs/String`。需要发布 `std_msgs/String` 时应显式填写
+  `"msg_type": "std_msgs/String"` 和 `"data": {"data": "文本"}`。
+
+自定义消息包必须安装在目标机器人 Agent 的 ROS 环境中，并在启动 Agent 前 source
+对应工作空间，否则 Agent 无法解析 `msg_type`。地面站只负责发送上述 JSON 指令，
+因此仅下发 custom 指令时不需要安装该消息包；只有本地 Bridge 还要把同一种自定义
+传感器消息重新发布到地面站 ROS master 时，地面站环境才需要安装并 source 同一消息包。
 
 ### 4.3 cmd_ack — 指令确认
 
@@ -380,6 +424,55 @@ MQTT topic: `robot/{src}/to/{dst}/meta`
   }
 }
 ```
+
+### 4.10 message_schema_query / message_schema_response — 消息结构查询
+
+地面站向一台指定机器人查询 ROS 消息类型的字段结构，用于生成参数表单。查询和响应均使用 QoS 1；机器人只解析本地已安装的消息类型，不接收来自地面站的消息定义文件或可执行代码。
+
+查询 topic：`station/{robot_id}/message_schema/query`
+
+```json
+{
+  "type": "message_schema_query",
+  "src": "station",
+  "dst": "turtlebot_001",
+  "data": {
+    "request_id": "8ec1d94a",
+    "msg_type": "my_pkg/ExplorationControl"
+  }
+}
+```
+
+响应 topic：`station/{robot_id}/message_schema/response`
+
+```json
+{
+  "type": "message_schema_response",
+  "src": "turtlebot_001",
+  "dst": "station",
+  "data": {
+    "request_id": "8ec1d94a",
+    "msg_type": "my_pkg/ExplorationControl",
+    "result": "ok",
+    "schema": {
+      "type": "my_pkg/ExplorationControl",
+      "kind": "message",
+      "fields": []
+    },
+    "error": ""
+  }
+}
+```
+
+| data 字段 | 类型 | 必填 | 说明 |
+|-----------|------|------|------|
+| request_id | string | 是 | 单次查询标识；响应必须原样返回 |
+| msg_type | string | 是 | ROS 消息类型，格式为 `package/Message` |
+| result | string | 仅响应 | `ok` 或 `error` |
+| schema | object | 仅响应 | `ok` 时返回递归字段树，`error` 时为空 object |
+| error | string | 仅响应 | `error` 时返回非空错误说明，成功时为空字符串 |
+
+`schema` 按 UTF-8 JSON 编码后最大为 256 KiB，超出限制时 Agent 必须返回 `result: "error"`，不能发送截断结构。地面站只接受 robot ID、`request_id` 和 `msg_type` 都与待处理请求一致的响应；过期或不匹配响应不得覆盖之后选择的消息类型。
 
 ## 5. 话题分层传输策略
 

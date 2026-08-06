@@ -36,6 +36,8 @@ class MessageType(str, Enum):
     CONFIG_SYNC = "config_sync"      # 配置同步
     CONFIG_QUERY = "config_query"    # 配置查询
     CONFIG_RESPONSE = "config_response"  # 配置响应
+    MESSAGE_SCHEMA_QUERY = "message_schema_query"  # ROS 消息结构查询
+    MESSAGE_SCHEMA_RESPONSE = "message_schema_response"  # ROS 消息结构响应
 
 
 class TopicAction(str, Enum):
@@ -193,6 +195,23 @@ class TopicResponseData:
     message: str = ""
     transport: str = TransportType.MQTT_JSON
     stream_url: str = ""             # HTTP 流地址（重量话题）
+
+
+@dataclass
+class MessageSchemaQueryData:
+    """ROS 消息结构查询数据。"""
+    request_id: str = ""
+    msg_type: str = ""
+
+
+@dataclass
+class MessageSchemaResponseData:
+    """ROS 消息结构查询响应数据。"""
+    request_id: str = ""
+    msg_type: str = ""
+    result: str = "error"
+    schema: Dict[str, Any] = field(default_factory=dict)
+    error: str = ""
 
 
 @dataclass
@@ -392,6 +411,7 @@ class MessageFactory:
         if isinstance(data, (StatusData, CmdData, CmdAckData, EventData,
                              DiscoverData, DiscoverResponseData,
                              TopicRequestData, TopicResponseData,
+                             MessageSchemaQueryData, MessageSchemaResponseData,
                              SensorMetaData, FleetData, FleetBinaryEnvelopeData,
                              ConfigSyncData, ConfigResponseData)):
             data = asdict(data)
@@ -435,6 +455,21 @@ class MessageFactory:
     def topic_response(self, resp_data: TopicResponseData) -> Message:
         """创建 Topic 请求响应消息"""
         return self._make(MessageType.TOPIC_RESPONSE, resp_data)
+
+    def message_schema_query(
+        self,
+        query: MessageSchemaQueryData,
+        dst: str,
+    ) -> Message:
+        """创建定向 ROS 消息结构查询。"""
+        return self._make(MessageType.MESSAGE_SCHEMA_QUERY, query, dst=dst)
+
+    def message_schema_response(
+        self,
+        response: MessageSchemaResponseData,
+    ) -> Message:
+        """创建 ROS 消息结构查询响应。"""
+        return self._make(MessageType.MESSAGE_SCHEMA_RESPONSE, response)
 
     def sensor_meta(self, meta_data: SensorMetaData) -> Message:
         """创建重量话题元信息消息"""

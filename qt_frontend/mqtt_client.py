@@ -8,8 +8,14 @@ from typing import Any, Dict, Optional
 import paho.mqtt.client as mqtt
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from protocol.messages import Message, MessageFactory
+from protocol.messages import (
+    Message,
+    MessageFactory,
+    MessageSchemaQueryData,
+    MessageType,
+)
 from protocol.topics import (
+    all_message_schema_responses,
     all_robot_cmd_ack,
     all_robot_event,
     all_robot_status,
@@ -19,6 +25,7 @@ from protocol.topics import (
     station_config_query,
     station_config_sync,
     station_discover,
+    station_message_schema_query,
     station_topic_request,
 )
 
@@ -41,6 +48,7 @@ class MqttSignals(QObject):
     topic_response_received = pyqtSignal(str, dict)  # (robot_id, response_data)
     config_response_received = pyqtSignal(str, dict)  # (robot_id, config_data)
     discover_response_received = pyqtSignal(str, dict)  # (robot_id, response_data)
+    schema_response_received = pyqtSignal(str, dict)  # (robot_id, schema_data)
 
 
 class MqttClient:
@@ -62,7 +70,7 @@ class MqttClient:
         self._broker_port = broker_port
         self._client_id = client_id
         self._client: Optional[mqtt.Client] = None
-        self._factory: Optional[MessageFactory] = None
+        self._factory = MessageFactory(client_id)
         self.signals = MqttSignals()
         self._lock = threading.Lock()
 
@@ -169,6 +177,25 @@ class MqttClient:
             station_config_query(robot_id), msg.to_json().encode("utf-8"), qos=1
         )
 
+    def send_message_schema_query(
+        self,
+        robot_id: str,
+        request_id: str,
+        msg_type: str,
+    ) -> None:
+        msg = self._factory.message_schema_query(
+            MessageSchemaQueryData(
+                request_id=request_id,
+                msg_type=msg_type,
+            ),
+            dst=robot_id,
+        )
+        self.publish(
+            station_message_schema_query(robot_id),
+            msg.to_json().encode("utf-8"),
+            qos=1,
+        )
+
     @property
     def is_connected(self) -> bool:
         return self._client is not None and self._client.is_connected()
@@ -187,6 +214,7 @@ class MqttClient:
             client.subscribe("robot/+/sensor/#", qos=0)
             client.subscribe("station/topic/response/+", qos=1)
             client.subscribe("station/+/config/response", qos=1)
+            client.subscribe(all_message_schema_responses(), qos=1)
             self.signals.connected.emit()
         else:
             logger.error(f"[MqttClient] Connection failed: rc={rc_val}")
@@ -358,6 +386,13 @@ class MqttClient:
             elif stype == "config_response":
                 robot_id = station_info.get("robot_id", "")
                 self.signals.config_response_received.emit(robot_id, message.data)
+            elif (
+                stype == "message_schema_response"
+                and message.type == MessageType.MESSAGE_SCHEMA_RESPONSE
+                and isinstance(message.data, dict)
+            ):
+                robot_id = station_info.get("robot_id", "")
+                self.signals.schema_response_received.emit(robot_id, message.data)
             elif stype == "discover":
                 pass
             return

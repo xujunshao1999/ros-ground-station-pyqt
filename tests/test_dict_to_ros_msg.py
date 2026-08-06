@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """dict_to_ros_msg 测试 - 使用 mock/fake ROS 消息类"""
+
+from __future__ import annotations
 
 import sys
 from unittest.mock import MagicMock, patch
@@ -374,6 +374,97 @@ class TestDictToRosMsg:
         assert result.y == 2.0
         # unknown_field 不存在于 __slots__ 中，应被跳过
         assert not hasattr(result, "unknown_field")
+
+    def test_strict_conversion_rejects_unknown_field_with_path(self, monkeypatch):
+        monkeypatch.setattr(
+            "agent.dict_to_ros_msg._get_message_class",
+            _mock_get_message_class,
+        )
+
+        with pytest.raises(ValueError, match=r"test_msgs/Simple\.unknown"):
+            dict_to_ros_msg(
+                {"unknown": 1},
+                "test_msgs/Simple",
+                strict=True,
+            )
+
+    def test_strict_conversion_rejects_non_array_value(self, monkeypatch):
+        monkeypatch.setattr(
+            "agent.dict_to_ros_msg._get_message_class",
+            _mock_get_message_class,
+        )
+
+        with pytest.raises(ValueError, match=r"test_msgs/Array\.points"):
+            dict_to_ros_msg(
+                {"points": "not-an-array"},
+                "test_msgs/Array",
+                strict=True,
+            )
+
+    def test_strict_conversion_rejects_wrong_fixed_array_length(self, monkeypatch):
+        monkeypatch.setattr(
+            "agent.dict_to_ros_msg._get_message_class",
+            _mock_get_message_class,
+        )
+
+        with pytest.raises(ValueError, match=r"test_msgs/Array\.covariance"):
+            dict_to_ros_msg(
+                {"covariance": [0.0] * 8},
+                "test_msgs/Array",
+                strict=True,
+            )
+
+    def test_strict_conversion_rejects_non_object_nested_message(self, monkeypatch):
+        monkeypatch.setattr(
+            "agent.dict_to_ros_msg._get_message_class",
+            _mock_get_message_class,
+        )
+
+        with pytest.raises(ValueError, match=r"test_msgs/Nested\.header"):
+            dict_to_ros_msg(
+                {"header": "not-an-object"},
+                "test_msgs/Nested",
+                strict=True,
+            )
+
+    def test_strict_conversion_rejects_bool_for_numeric_field(self, monkeypatch):
+        monkeypatch.setattr(
+            "agent.dict_to_ros_msg._get_message_class",
+            _mock_get_message_class,
+        )
+
+        with pytest.raises(ValueError, match=r"test_msgs/Simple\.x"):
+            dict_to_ros_msg(
+                {"x": True},
+                "test_msgs/Simple",
+                strict=True,
+            )
+
+    def test_strict_conversion_rejects_bool_in_uint8_array(self, monkeypatch):
+        monkeypatch.setattr(
+            "agent.dict_to_ros_msg._get_message_class",
+            _mock_get_message_class,
+        )
+
+        with pytest.raises(ValueError, match=r"test_msgs/Array\.byte_data\[0\]"):
+            dict_to_ros_msg(
+                {"byte_data": [True]},
+                "test_msgs/Array",
+                strict=True,
+            )
+
+    def test_strict_conversion_rejects_invalid_primitive_value(self, monkeypatch):
+        monkeypatch.setattr(
+            "agent.dict_to_ros_msg._get_message_class",
+            _mock_get_message_class,
+        )
+
+        with pytest.raises(ValueError, match=r"test_msgs/Simple\.x"):
+            dict_to_ros_msg(
+                {"x": "not-a-number"},
+                "test_msgs/Simple",
+                strict=True,
+            )
 
     def test_unknown_type(self):
         """未知类型字符串处理"""

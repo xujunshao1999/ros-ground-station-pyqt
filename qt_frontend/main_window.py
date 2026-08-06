@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import ctypes
 import logging
 import os
@@ -45,6 +46,7 @@ from qt_frontend.rviz_frame_policy import (
     robot_fixed_frame_for,
 )
 from qt_frontend.theme import DANGER, SUCCESS
+from qt_frontend.topic_catalog import RobotTopicCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,7 @@ class MainWindow(QMainWindow):
         self._ros_check_inflight = False
         self._current_fixed_frame = ""
         self._pending_fixed_frame: Optional[str] = None
+        self._topic_catalog = RobotTopicCatalog(self)
 
         self._init_window()
         self._init_panels()
@@ -95,9 +98,9 @@ class MainWindow(QMainWindow):
 
     def _init_panels(self) -> None:
         self._robot_list = RobotListPanel()
-        self._command = CommandPanel()
+        self._command = CommandPanel(topic_catalog=self._topic_catalog)
         self._event_panel = EventPanel()
-        self._topic_config = TopicConfigPanel()
+        self._topic_config = TopicConfigPanel(topic_catalog=self._topic_catalog)
         self._fleet_comm = FleetCommPanel()
         self._sensor_panel = SensorSummaryPanel()
         self._data_sender = DataSenderPanel()
@@ -105,6 +108,9 @@ class MainWindow(QMainWindow):
 
         self._robot_list.robot_selected.connect(self._command.on_robot_selected)
         self._robot_list.robot_deselected.connect(lambda: self._command.on_robot_selected(""))
+        self._robot_list.online_robots_changed.connect(
+            self._on_online_robots_changed
+        )
         self._robot_list.robot_selected.connect(self._on_robot_selected_for_rviz)
         self._robot_list.global_frame_requested.connect(self._switch_to_global_frame)
         self._robot_list.follow_frame_changed.connect(self._on_follow_frame_changed)
@@ -304,12 +310,12 @@ class MainWindow(QMainWindow):
         sig.status_received.connect(self._on_robot_status)
         sig.event_received.connect(self._event_panel.on_event_received)
         sig.cmd_ack_received.connect(self._command.on_cmd_ack)
+        sig.schema_response_received.connect(self._command.on_schema_response)
         sig.sensor_data_received.connect(self._on_sensor_data)
         sig.sensor_meta_received.connect(self._on_sensor_meta)
         sig.discover_response_received.connect(self._on_discover)
         sig.topic_response_received.connect(self._topic_config.on_topic_response)
         sig.config_response_received.connect(self._on_config_response)
-        sig.discover_response_received.connect(self._topic_config.on_discover_response)
         sig.discover_response_received.connect(self._fleet_comm.on_discover_response)
 
         self._act_connect.triggered.connect(self._mqtt_client.connect)
@@ -319,6 +325,11 @@ class MainWindow(QMainWindow):
         self._topic_config.discover_requested.connect(self._mqtt_client.send_discover)
         self._fleet_comm.discover_requested.connect(self._mqtt_client.send_discover)
         self._command.command_sent.connect(self._on_command)
+        self._command.discover_requested.connect(self._mqtt_client.send_discover)
+        self._command.schema_query_requested.connect(
+            self._mqtt_client.send_message_schema_query
+        )
+        self._command.batch_command_requested.connect(self._on_batch_command)
         self._data_sender.send_json.connect(self._on_data_send)
         self._topic_config.topic_request_requested.connect(
             self._mqtt_client.send_topic_request
@@ -597,25 +608,20 @@ class MainWindow(QMainWindow):
 
     def _on_robot_status(self, robot_id: str, data: dict) -> None:
         self._robot_list.on_status_received(robot_id, data)
-        robots = self._robot_list.get_online_robots()
-        self._command.on_robot_list_changed(robots)
-        self._topic_config.on_robot_list_changed(robots)
-        self._fleet_comm.on_robot_list_changed(robots)
-        self._data_sender.on_robot_list_changed(robots)
-        self._sensor_panel.retain_robots(robots)
         self._sync_sensor_panel_subscriptions([robot_id])
-        self._lb_online.setText(f"在线: {len(robots)}")
 
     def _on_discover(self, robot_id: str, data: dict) -> None:
+        self._topic_catalog.update_from_discover(robot_id, data)
         self._robot_list.on_discover_response(robot_id, data)
-        robots = self._robot_list.get_online_robots()
-        self._command.on_robot_list_changed(robots)
-        self._topic_config.on_robot_list_changed(robots)
-        self._fleet_comm.on_robot_list_changed(robots)
-        self._data_sender.on_robot_list_changed(robots)
-        self._sensor_panel.retain_robots(robots)
         self._sync_sensor_panel_subscriptions([robot_id])
-        self._lb_online.setText(f"在线: {len(robots)}")
+
+    def _on_online_robots_changed(self, robot_ids: List[str]) -> None:
+        self._command.on_robot_list_changed(robot_ids)
+        self._topic_config.on_robot_list_changed(robot_ids)
+        self._fleet_comm.on_robot_list_changed(robot_ids)
+        self._data_sender.on_robot_list_changed(robot_ids)
+        self._sensor_panel.retain_robots(robot_ids)
+        self._lb_online.setText(f"在线: {len(robot_ids)}")
 
     def _on_config_response(self, robot_id: str, data: dict) -> None:
         self._topic_config.on_config_response(robot_id, data)
@@ -721,6 +727,27 @@ class MainWindow(QMainWindow):
     def _on_command(self, robot_id: str, action: str, params: dict) -> None:
         if self._mqtt_client:
             self._mqtt_client.send_cmd(robot_id, {"action": action, "params": params})
+
+    def _on_batch_command(self, exec_id: str, params: dict) -> None:
+        if self._mqtt_client is None or not self._mqtt_client.is_connected:
+            self._command.reject_command_batch(exec_id, "MQTT 尚未连接")
+            return
+
+        robot_ids = sorted(self._robot_list.get_online_robots())
+        if not robot_ids:
+            self._command.reject_command_batch(exec_id, "当前没有在线机器人")
+            return
+
+        self._command.begin_command_batch(exec_id, robot_ids)
+        for robot_id in robot_ids:
+            self._mqtt_client.send_cmd(
+                robot_id,
+                {
+                    "action": "custom",
+                    "params": copy.deepcopy(params),
+                    "exec_id": exec_id,
+                },
+            )
 
     def _on_data_send(self, robot_id: str, topic: str, json_str: str) -> None:
         if self._mqtt_client:

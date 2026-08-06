@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import threading
+from collections import OrderedDict
 from unittest.mock import MagicMock
 
 import pytest
 
 from agent.ros1_agent import ROS1Agent, _FleetRoute
-from protocol.messages import FleetBinaryEnvelopeData, FleetData
+from protocol.messages import CmdData, FleetBinaryEnvelopeData, FleetData
 
 
 class _SerializableRosMsg:
@@ -225,6 +226,212 @@ def test_ros1_agent_uses_agent_local_dict_to_ros_msg():
     import agent.ros1_agent as ros1_agent
 
     assert ros1_agent.dict_to_ros_msg.__module__ == "agent.dict_to_ros_msg"
+
+
+def _custom_command(topic="/exploration/control", msg_type="my_pkg/Control"):
+    return CmdData(
+        action="custom",
+        params={
+            "topic": topic,
+            "msg_type": msg_type,
+            "data": {"command": "start"},
+        },
+    )
+
+
+def _custom_agent():
+    agent = object.__new__(ROS1Agent)
+    agent._command_publishers = OrderedDict()
+    return agent
+
+
+def test_custom_command_publishes_configured_ros_type(monkeypatch):
+    mock_rospy = MagicMock()
+    publisher = MagicMock()
+    mock_rospy.Publisher.return_value = publisher
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    converted = object()
+    converter = MagicMock(return_value=converted)
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", converter)
+    agent = _custom_agent()
+
+    ok, message = ROS1Agent._execute_command(agent, _custom_command())
+
+    assert ok is True
+    converter.assert_called_once_with(
+        {"command": "start"}, "my_pkg/Control", strict=True
+    )
+    mock_rospy.Publisher.assert_called_once_with(
+        "/exploration/control", object, queue_size=1
+    )
+    publisher.publish.assert_called_once_with(converted)
+    assert "my_pkg/Control" in message
+
+
+def test_custom_command_reuses_publisher_for_same_topic_and_type(monkeypatch):
+    mock_rospy = MagicMock()
+    publisher = MagicMock()
+    mock_rospy.Publisher.return_value = publisher
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.dict_to_ros_msg", MagicMock(side_effect=[object(), object()])
+    )
+    agent = _custom_agent()
+
+    ROS1Agent._execute_command(agent, _custom_command())
+    ROS1Agent._execute_command(agent, _custom_command())
+
+    mock_rospy.Publisher.assert_called_once()
+    assert publisher.publish.call_count == 2
+    assert list(agent._command_publishers) == ["/exploration/control"]
+
+
+def test_custom_command_replaces_publisher_when_topic_type_changes(monkeypatch):
+    mock_rospy = MagicMock()
+    old_publisher = MagicMock()
+    new_publisher = MagicMock()
+    mock_rospy.Publisher.side_effect = [old_publisher, new_publisher]
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", MagicMock(return_value=object()))
+    agent = _custom_agent()
+
+    ROS1Agent._execute_command(agent, _custom_command(msg_type="my_pkg/Old"))
+    ok, _ = ROS1Agent._execute_command(
+        agent, _custom_command(msg_type="my_pkg/New")
+    )
+
+    assert ok is True
+    old_publisher.unregister.assert_called_once_with()
+    assert agent._command_publishers["/exploration/control"][0] == "my_pkg/New"
+    new_publisher.publish.assert_called_once()
+
+
+def test_custom_command_cache_evicts_least_recently_used_publisher(monkeypatch):
+    mock_rospy = MagicMock()
+    publishers = [MagicMock() for _ in range(33)]
+    mock_rospy.Publisher.side_effect = publishers
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", MagicMock(return_value=object()))
+    agent = _custom_agent()
+
+    for index in range(33):
+        ok, _ = ROS1Agent._execute_command(
+            agent, _custom_command(topic=f"/custom/{index}")
+        )
+        assert ok is True
+
+    assert len(agent._command_publishers) == 32
+    assert "/custom/0" not in agent._command_publishers
+    publishers[0].unregister.assert_called_once_with()
+
+
+def test_custom_command_cache_hit_refreshes_lru_order(monkeypatch):
+    mock_rospy = MagicMock()
+    publishers = [MagicMock() for _ in range(33)]
+    mock_rospy.Publisher.side_effect = publishers
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", MagicMock(return_value=object()))
+    agent = _custom_agent()
+
+    for index in range(32):
+        ROS1Agent._execute_command(agent, _custom_command(topic=f"/custom/{index}"))
+    ROS1Agent._execute_command(agent, _custom_command(topic="/custom/0"))
+    ROS1Agent._execute_command(agent, _custom_command(topic="/custom/32"))
+
+    assert "/custom/0" in agent._command_publishers
+    assert "/custom/1" not in agent._command_publishers
+    publishers[1].unregister.assert_called_once_with()
+
+
+def test_custom_command_conversion_error_does_not_create_publisher(monkeypatch):
+    mock_rospy = MagicMock()
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr(
+        "agent.ros1_agent.dict_to_ros_msg",
+        MagicMock(side_effect=ValueError("bad field")),
+    )
+    agent = _custom_agent()
+
+    ok, message = ROS1Agent._execute_command(agent, _custom_command())
+
+    assert ok is False
+    assert "bad field" in message
+    mock_rospy.Publisher.assert_not_called()
+    assert agent._command_publishers == OrderedDict()
+
+
+def test_custom_command_publisher_creation_error_leaves_cache_clean(monkeypatch):
+    mock_rospy = MagicMock()
+    mock_rospy.Publisher.side_effect = RuntimeError("publisher unavailable")
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", MagicMock(return_value=object()))
+    agent = _custom_agent()
+
+    ok, message = ROS1Agent._execute_command(agent, _custom_command())
+
+    assert ok is False
+    assert "publisher unavailable" in message
+    assert agent._command_publishers == OrderedDict()
+
+
+def test_custom_command_publish_error_unregisters_and_removes_publisher(monkeypatch):
+    mock_rospy = MagicMock()
+    publisher = MagicMock()
+    publisher.publish.side_effect = RuntimeError("publish failed")
+    mock_rospy.Publisher.return_value = publisher
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", MagicMock(return_value=object()))
+    agent = _custom_agent()
+
+    ok, message = ROS1Agent._execute_command(agent, _custom_command())
+
+    assert ok is False
+    assert "publish failed" in message
+    publisher.unregister.assert_called_once_with()
+    assert agent._command_publishers == OrderedDict()
+
+
+def test_custom_command_ignores_unregister_error_when_replacing_type(monkeypatch):
+    mock_rospy = MagicMock()
+    old_publisher = MagicMock()
+    old_publisher.unregister.side_effect = RuntimeError("already closed")
+    new_publisher = MagicMock()
+    mock_rospy.Publisher.side_effect = [old_publisher, new_publisher]
+    monkeypatch.setattr("agent.ros1_agent.rospy", mock_rospy)
+    monkeypatch.setattr("agent.ros1_agent.dict_to_ros_msg", MagicMock(return_value=object()))
+    agent = _custom_agent()
+
+    ROS1Agent._execute_command(agent, _custom_command(msg_type="my_pkg/Old"))
+    ok, _ = ROS1Agent._execute_command(
+        agent, _custom_command(msg_type="my_pkg/New")
+    )
+
+    assert ok is True
+    old_publisher.unregister.assert_called_once_with()
+    new_publisher.publish.assert_called_once()
+    assert agent._command_publishers["/exploration/control"][0] == "my_pkg/New"
+
+
+def test_stop_unregisters_and_clears_custom_command_publishers(monkeypatch):
+    first_publisher = MagicMock()
+    second_publisher = MagicMock()
+    agent = _custom_agent()
+    agent._command_publishers.update({
+        "/custom/first": ("my_pkg/First", first_publisher),
+        "/custom/second": ("my_pkg/Second", second_publisher),
+    })
+    agent._ros_subscribers = {}
+    agent._fleet_subscribers = {}
+    agent._fleet_publishers = {}
+    agent._fleet_incoming_pub = None
+    agent._stop_stream_server = MagicMock()
+    monkeypatch.setattr("agent.ros1_agent.BaseAgent.stop", MagicMock())
+
+    ROS1Agent.stop(agent)
+
+    first_publisher.unregister.assert_called_once_with()
+    second_publisher.unregister.assert_called_once_with()
+    assert agent._command_publishers == OrderedDict()
 
 
 def test_get_available_topics_uses_rospy_published_topics(monkeypatch):

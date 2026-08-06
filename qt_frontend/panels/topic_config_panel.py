@@ -22,6 +22,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from qt_frontend.topic_catalog import RobotTopicCatalog
+
 
 @dataclass
 class SubscriptionEntry:
@@ -73,10 +75,19 @@ class TopicConfigPanel(QWidget):
     config_query_requested = pyqtSignal(str)  # robot_id
     discover_requested = pyqtSignal()
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        topic_catalog: Optional[RobotTopicCatalog] = None,
+    ) -> None:
         super().__init__(parent)
         self._entries: List[SubscriptionEntry] = []
-        self._available_topics_by_robot: Dict[str, List[Dict[str, Any]]] = {}
+        self._topic_catalog = (
+            topic_catalog
+            if topic_catalog is not None
+            else RobotTopicCatalog(self)
+        )
+        self._topic_catalog.topics_changed.connect(self._on_topics_changed)
         self._pending_config_operation = ""
         self._pending_topic_operations: Dict[str, str] = {}
         self._editing_topic = ""
@@ -351,6 +362,7 @@ class TopicConfigPanel(QWidget):
         robot_id: str,
         data: Dict[str, Any],
     ) -> None:
+        """兼容尚未迁移到共享目录的编队通信面板。"""
         topics = [
             {
                 "topic": item.get("topic", ""),
@@ -481,9 +493,9 @@ class TopicConfigPanel(QWidget):
 
     @staticmethod
     def should_request_available_topics(
-        cache: Dict[str, List[Dict[str, Any]]], robot_id: str
+        topics: List[Dict[str, str]], robot_id: str
     ) -> bool:
-        return bool(robot_id) and not cache.get(robot_id)
+        return bool(robot_id) and not topics
 
     @staticmethod
     def should_load_selected_entry(row: int, count: int) -> bool:
@@ -608,9 +620,9 @@ class TopicConfigPanel(QWidget):
         self._pending_config_operation = ""
 
     def on_discover_response(self, robot_id: str, data: dict) -> None:
-        self.update_available_topics_cache(
-            self._available_topics_by_robot, robot_id, data
-        )
+        self._topic_catalog.update_from_discover(robot_id, data)
+
+    def _on_topics_changed(self, robot_id: str) -> None:
         if robot_id == self._selected_robot_id():
             self._refresh_available_topics()
 
@@ -683,7 +695,7 @@ class TopicConfigPanel(QWidget):
 
     def _refresh_available_topics(self) -> None:
         robot_id = self._selected_robot_id()
-        topics = self._available_topics_by_robot.get(robot_id, [])
+        topics = self._topic_catalog.topics_for(robot_id)
         if not topics:
             topics = [
                 {"topic": entry.topic, "msg_type": entry.msg_type}
@@ -710,7 +722,7 @@ class TopicConfigPanel(QWidget):
         self._refresh_available_topics()
         robot_id = self._selected_robot_id()
         if self.should_request_available_topics(
-            self._available_topics_by_robot, robot_id
+            self._topic_catalog.topics_for(robot_id), robot_id
         ):
             self.discover_requested.emit()
             self._set_operation_result(

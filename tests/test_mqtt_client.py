@@ -87,6 +87,19 @@ class TestMqttConnect:
         client._on_connect(mock_paho, None, None, 0, None)
         assert mock_paho.subscribe.call_count >= 5
 
+    def test_connect_success_subscribes_message_schema_responses(
+        self,
+        client,
+        mock_paho,
+    ):
+        client.connect()
+        client._on_connect(mock_paho, None, None, 0, None)
+
+        mock_paho.subscribe.assert_any_call(
+            "station/+/message_schema/response",
+            qos=1,
+        )
+
     def test_disconnect_stops_loop(self, client, mock_paho):
         client.connect()
         client.disconnect()
@@ -509,6 +522,57 @@ class TestOnMessageStatus:
 
         cfg_signal.assert_called_once()
 
+    def test_message_schema_response_received(self, client, mock_paho):
+        schema_signal = MagicMock()
+        client.signals.schema_response_received.connect(schema_signal)
+        data = {
+            "request_id": "req-1",
+            "msg_type": "geometry_msgs/Twist",
+            "result": "ok",
+            "schema": {
+                "type": "geometry_msgs/Twist",
+                "kind": "message",
+                "fields": [],
+            },
+            "error": "",
+        }
+        msg = Message(
+            src="robot_001",
+            type="message_schema_response",
+            data=data,
+        )
+        mqtt_msg = _make_mqtt_msg(
+            "station/robot_001/message_schema/response",
+            msg.to_json(),
+        )
+
+        client.connect()
+        client._on_message(mock_paho, None, mqtt_msg)
+
+        schema_signal.assert_called_once_with("robot_001", data)
+
+    def test_message_schema_response_topic_rejects_wrong_message_type(
+        self,
+        client,
+        mock_paho,
+    ):
+        schema_signal = MagicMock()
+        client.signals.schema_response_received.connect(schema_signal)
+        msg = Message(
+            src="robot_001",
+            type="config_response",
+            data={"request_id": "req-1"},
+        )
+        mqtt_msg = _make_mqtt_msg(
+            "station/robot_001/message_schema/response",
+            msg.to_json(),
+        )
+
+        client.connect()
+        client._on_message(mock_paho, None, mqtt_msg)
+
+        schema_signal.assert_not_called()
+
 
 # ------------------------------------------------------------------
 # Test send methods
@@ -520,6 +584,22 @@ class TestSendMethods:
         mock_paho.publish.assert_called_once()
         args = mock_paho.publish.call_args[0]
         assert "robot/robot_001/cmd" in str(args[0])
+
+    def test_send_cmd_preserves_caller_exec_id(self, client, mock_paho):
+        client.connect()
+
+        client.send_cmd(
+            "robot_001",
+            {
+                "action": "custom",
+                "params": {"topic": "/control", "data": {"enabled": True}},
+                "exec_id": "exec-1",
+            },
+        )
+
+        payload = mock_paho.publish.call_args.args[1]
+        message = Message.from_json(payload.decode("utf-8"))
+        assert message.data["exec_id"] == "exec-1"
 
     def test_send_emergency_stop(self, client, mock_paho):
         client.connect()
@@ -543,6 +623,25 @@ class TestSendMethods:
         client.send_config_query("robot_001")
         mock_paho.publish.assert_called_once()
         assert "config/query" in str(mock_paho.publish.call_args[0][0])
+
+    def test_send_message_schema_query_uses_target_topic(self, client, mock_paho):
+        client.connect()
+
+        client.send_message_schema_query(
+            "r1",
+            "req-1",
+            "geometry_msgs/Twist",
+        )
+
+        topic, payload = mock_paho.publish.call_args.args[:2]
+        message = Message.from_json(payload.decode("utf-8"))
+        assert topic == "station/r1/message_schema/query"
+        assert message.type == "message_schema_query"
+        assert message.dst == "r1"
+        assert message.data == {
+            "request_id": "req-1",
+            "msg_type": "geometry_msgs/Twist",
+        }
 
 
 # ------------------------------------------------------------------

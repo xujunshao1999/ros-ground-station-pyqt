@@ -5,12 +5,20 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QCheckBox, QHeaderView, QLabel
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtWidgets import QApplication, QCheckBox, QDialog, QHeaderView, QLabel
 
+import qt_frontend.panels.command_panel as command_panel_module
+from qt_frontend.command_button_config import (
+    CommandButtonConfig,
+    CommandButtonConfigError,
+    CommandButtonConfigStore,
+    empty_command_slots,
+)
 from qt_frontend.panels.command_panel import CommandPanel
 from qt_frontend.panels.event_panel import EventPanel
 from qt_frontend.panels.fleet_comm_panel import FleetCommPanel
@@ -21,6 +29,7 @@ from qt_frontend.panels.topic_config_panel import (
     TopicConfigPanel,
 )
 from qt_frontend.panels.traffic_monitor import BandwidthEntry, TrafficMonitor
+from qt_frontend.topic_catalog import RobotTopicCatalog
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -75,6 +84,24 @@ class TestRobotListHeartbeat:
         now = time.monotonic()
         info = RobotInfo(robot_id="r1", online=True, last_seen=now - 10.0)
         assert (now - info.last_seen) <= RobotListPanel._HEARTBEAT_TIMEOUT
+
+    def test_online_robot_changes_emit_once_and_emit_empty_after_timeout(
+        self,
+        qt_app,
+        monkeypatch,
+    ):
+        panel = RobotListPanel()
+        emitted = []
+        panel.online_robots_changed.connect(lambda robot_ids: emitted.append(robot_ids))
+
+        monotonic = iter([100.0, 101.0, 132.0])
+        monkeypatch.setattr(time, "monotonic", lambda: next(monotonic))
+
+        panel.on_status_received("r1", {"battery": 90.0})
+        panel.on_status_received("r1", {"battery": 80.0})
+        panel._check_heartbeats()
+
+        assert emitted == [["r1"], []]
 
 
 class TestRobotListSubscriptions:
@@ -218,6 +245,20 @@ class TestRobotListFrameControls:
 # CommandPanel slider value mapping
 # ------------------------------------------------------------------
 class TestCommandPanel:
+    @staticmethod
+    def _store(tmp_path, configured=False):
+        store = CommandButtonConfigStore(tmp_path / "command_buttons.yaml")
+        if configured:
+            slots = empty_command_slots()
+            slots["slot_1"] = CommandButtonConfig(
+                label="开始探索",
+                topic="/exploration/control",
+                msg_type="my_pkg/Control",
+                data={"nested": {"enabled": True}},
+            )
+            store.save(slots)
+        return store
+
     def test_velocity_step_defaults_to_medium(self):
         assert CommandPanel.velocity_step("medium") == (0.30, 0.75)
 
@@ -275,6 +316,228 @@ class TestCommandPanel:
                 {"linear": 0.0, "angular": 0.0},
             )
         ]
+
+    def test_mode_area_has_four_disabled_unconfigured_buttons(
+        self, qt_app, tmp_path
+    ):
+        panel = CommandPanel(config_store=self._store(tmp_path))
+
+        assert list(panel._mode_buttons) == [
+            "slot_1",
+            "slot_2",
+            "slot_3",
+            "slot_4",
+        ]
+        assert [button.text() for button in panel._mode_buttons.values()] == [
+            "未配置",
+            "未配置",
+            "未配置",
+            "未配置",
+        ]
+        assert all(not button.isEnabled() for button in panel._mode_buttons.values())
+        assert not hasattr(panel, "_btn_emergency")
+
+    def test_configured_mode_button_emits_deep_copied_batch_command(
+        self, qt_app, tmp_path
+    ):
+        panel = CommandPanel(config_store=self._store(tmp_path, configured=True))
+        emitted = []
+        panel.batch_command_requested.connect(
+            lambda exec_id, params: emitted.append((exec_id, params))
+        )
+
+        panel._mode_buttons["slot_1"].click()
+        first_exec_id, first_params = emitted[-1]
+        first_params["data"]["nested"]["enabled"] = False
+        panel._mode_buttons["slot_1"].click()
+        second_exec_id, second_params = emitted[-1]
+
+        assert panel._mode_buttons["slot_1"].text() == "开始探索"
+        assert panel._mode_buttons["slot_1"].isEnabled()
+        assert first_exec_id
+        assert second_exec_id != first_exec_id
+        assert second_params == {
+            "topic": "/exploration/control",
+            "msg_type": "my_pkg/Control",
+            "data": {"nested": {"enabled": True}},
+        }
+
+    def test_long_mode_label_is_elided_and_preserved_in_tooltip(
+        self, qt_app, tmp_path
+    ):
+        label = "执行一项名称非常长的机器人探索与返航组合任务"
+        slots = empty_command_slots()
+        slots["slot_1"] = CommandButtonConfig(
+            label=label,
+            topic="/cmd",
+            msg_type="my_pkg/Control",
+            data={},
+        )
+        store = self._store(tmp_path)
+        store.save(slots)
+
+        panel = CommandPanel(config_store=store)
+        button = panel._mode_buttons["slot_1"]
+
+        assert button.text() != label
+        assert button.text().endswith("…")
+        assert label in button.toolTip()
+
+    def test_robot_list_updates_online_count_and_settings_dialog(
+        self, qt_app, tmp_path
+    ):
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        dialog = MagicMock()
+        panel._settings_dialog = dialog
+
+        panel.on_robot_list_changed(["r2", "r1"])
+
+        assert "当前 2 台" in panel._online_count_label.text()
+        dialog.set_online_robot_ids.assert_called_once_with(["r2", "r1"])
+
+    def test_old_batch_completion_does_not_replace_visible_result(
+        self, qt_app, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        panel.begin_command_batch("exec-old", ["r1"])
+        panel.begin_command_batch("exec-new", ["r2"])
+
+        panel.on_cmd_ack(
+            "r2",
+            {"exec_id": "exec-new", "result": "error", "message": "类型缺失"},
+        )
+        visible_text = panel._result_label.text()
+        visible_tooltip = panel._result_label.toolTip()
+        panel.on_cmd_ack(
+            "r1",
+            {"exec_id": "exec-old", "result": "ok", "message": "done"},
+        )
+
+        assert panel._result_label.text() == visible_text
+        assert panel._result_label.toolTip() == visible_tooltip
+        assert "失败 1" in visible_text
+        assert "查看详情" in visible_text
+        assert "r2: 类型缺失" in visible_tooltip
+        assert panel._batch_tracker.result("exec-old").counts()["success"] == 1
+        assert panel._batch_tracker.result("exec-new").counts()["failed"] == 1
+
+    def test_early_batch_timer_reschedules_until_deadline(
+        self, qt_app, tmp_path, monkeypatch
+    ):
+        clock = {"now": 10.0}
+        callbacks = []
+        monkeypatch.setattr(
+            command_panel_module.time,
+            "monotonic",
+            lambda: clock["now"],
+        )
+        monkeypatch.setattr(
+            QTimer,
+            "singleShot",
+            lambda delay, callback: callbacks.append((delay, callback)),
+        )
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        panel.begin_command_batch("exec-1", ["r1"])
+
+        _, first_callback = callbacks.pop(0)
+        clock["now"] = 14.9
+        first_callback()
+
+        assert panel._batch_tracker.result("exec-1").counts()["timeout"] == 0
+        assert len(callbacks) == 1
+
+        _, retry_callback = callbacks.pop(0)
+        clock["now"] = 15.1
+        retry_callback()
+
+        assert panel._batch_tracker.result("exec-1").counts()["timeout"] == 1
+        assert "超时 1" in panel._result_label.text()
+
+    def test_reject_only_updates_latest_clicked_command(
+        self, qt_app, tmp_path
+    ):
+        panel = CommandPanel(config_store=self._store(tmp_path, configured=True))
+        emitted = []
+        panel.batch_command_requested.connect(
+            lambda exec_id, params: emitted.append(exec_id)
+        )
+        panel._mode_buttons["slot_1"].click()
+        panel._mode_buttons["slot_1"].click()
+
+        panel.reject_command_batch(emitted[0], "旧请求失败")
+        assert "旧请求失败" not in panel._result_label.text()
+        panel.reject_command_batch(emitted[1], "MQTT 未连接")
+        assert "MQTT 未连接" in panel._result_label.text()
+
+    def test_settings_dialog_lifecycle_forwards_signals_and_reloads(
+        self, qt_app, tmp_path, monkeypatch
+    ):
+        store = self._store(tmp_path)
+        forwarded_online = []
+        schema_responses = []
+
+        class FakeDialog(QDialog):
+            discover_requested = pyqtSignal()
+            schema_query_requested = pyqtSignal(str, str, str)
+
+            def __init__(self, *, store, topic_catalog, online_robot_ids, parent=None):
+                super().__init__(parent)
+                self._store = store
+                self.initial_online = list(online_robot_ids)
+
+            def set_online_robot_ids(self, robot_ids):
+                forwarded_online.append(list(robot_ids))
+
+            def on_schema_response(self, robot_id, data):
+                schema_responses.append((robot_id, data))
+
+            def exec_(self):
+                assert self.parent()._settings_dialog is self
+                self.parent().on_robot_list_changed(["r2"])
+                self.parent().on_schema_response("r2", {"request_id": "query"})
+                self.discover_requested.emit()
+                self.schema_query_requested.emit("r2", "query", "my_pkg/Control")
+                slots = empty_command_slots()
+                slots["slot_1"] = CommandButtonConfig(
+                    label="刷新后命令",
+                    topic="/cmd",
+                    msg_type="my_pkg/Control",
+                    data={},
+                )
+                self._store.save(slots)
+                return QDialog.Accepted
+
+        monkeypatch.setattr(
+            command_panel_module,
+            "CommandButtonSettingsDialog",
+            FakeDialog,
+        )
+        panel = CommandPanel(config_store=store)
+        discovers = []
+        schema_queries = []
+        panel.discover_requested.connect(lambda: discovers.append(True))
+        panel.schema_query_requested.connect(
+            lambda *args: schema_queries.append(args)
+        )
+
+        panel._open_settings_dialog()
+
+        assert forwarded_online == [["r2"]]
+        assert schema_responses == [("r2", {"request_id": "query"})]
+        assert discovers == [True]
+        assert schema_queries == [("r2", "query", "my_pkg/Control")]
+        assert panel._settings_dialog is None
+        assert panel._mode_buttons["slot_1"].text() == "刷新后命令"
+
+    def test_invalid_config_disables_all_mode_buttons(self, qt_app):
+        store = MagicMock()
+        store.load.side_effect = CommandButtonConfigError("配置损坏")
+
+        panel = CommandPanel(config_store=store)
+
+        assert all(not button.isEnabled() for button in panel._mode_buttons.values())
+        assert "配置损坏" in panel._result_label.text()
 
 
 # ------------------------------------------------------------------
@@ -623,37 +886,13 @@ class TestTopicConfigPanel:
             ("/odom", "nav_msgs/Odometry", "available"),
         ]
 
-    def test_available_topics_cache_is_keyed_by_robot(self):
-        cache = {}
-
-        TopicConfigPanel.update_available_topics_cache(
-            cache,
-            "robot_001",
-            {
-                "topics": [
-                    {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
-                    {"topic": "/odom", "type": "nav_msgs/Odometry"},
-                ]
-            },
-        )
-
-        assert cache == {
-            "robot_001": [
-                {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
-                {"topic": "/odom", "msg_type": "nav_msgs/Odometry"},
-            ]
-        }
-
     def test_should_request_discover_when_available_topics_missing(self):
-        assert TopicConfigPanel.should_request_available_topics({}, "robot_001") is True
+        assert TopicConfigPanel.should_request_available_topics([], "robot_001") is True
         assert TopicConfigPanel.should_request_available_topics(
-            {"robot_001": []}, "robot_001"
-        ) is True
-        assert TopicConfigPanel.should_request_available_topics(
-            {"robot_001": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+            [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}],
             "robot_001",
         ) is False
-        assert TopicConfigPanel.should_request_available_topics({}, "") is False
+        assert TopicConfigPanel.should_request_available_topics([], "") is False
 
     def test_robot_list_refresh_only_reloads_when_selected_robot_changes(self):
         assert TopicConfigPanel.should_reload_saved_config("robot_001", "robot_001") is False
@@ -815,6 +1054,56 @@ class TestTopicConfigPanel:
 
         assert panel._combo_msg_type.currentText() == "sensor_msgs/PointCloud2"
         assert "http_stream" in panel._transport_preview.text()
+
+    def test_shared_topic_catalog_refreshes_only_matching_robot(self, qt_app):
+        catalog = RobotTopicCatalog()
+        first_panel = TopicConfigPanel(topic_catalog=catalog)
+        second_panel = TopicConfigPanel(topic_catalog=catalog)
+        for panel in (first_panel, second_panel):
+            panel.on_robot_list_changed(["r1", "r2"])
+            panel._robot_combo.setCurrentText("r1")
+
+        first_panel.on_discover_response(
+            "r1",
+            {"topics": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+        )
+
+        assert first_panel._combo_available_topics.count() == 2
+        assert second_panel._combo_available_topics.count() == 2
+        assert catalog.topics_for("r1") == [
+            {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}
+        ]
+
+        first_panel.on_discover_response(
+            "r2",
+            {"topics": [{"topic": "/map", "msg_type": "nav_msgs/OccupancyGrid"}]},
+        )
+
+        assert first_panel._combo_available_topics.count() == 2
+        assert first_panel._combo_available_topics.itemText(1).startswith("/scan")
+        assert second_panel._combo_available_topics.itemText(1).startswith("/scan")
+
+    def test_show_add_form_uses_shared_catalog_before_requesting_discover(self, qt_app):
+        catalog = RobotTopicCatalog()
+        catalog.update_from_discover(
+            "r1",
+            {"topics": [{"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"}]},
+        )
+        panel = TopicConfigPanel(topic_catalog=catalog)
+        panel.on_robot_list_changed(["r1"])
+        requested = []
+        panel.discover_requested.connect(lambda: requested.append(True))
+
+        panel._btn_add.click()
+
+        assert requested == []
+        assert panel._combo_available_topics.count() == 2
+
+        panel.on_robot_list_changed(["r2"])
+        panel._robot_combo.setCurrentText("r2")
+        panel._btn_add.click()
+
+        assert requested == [True]
 
 
 # ------------------------------------------------------------------

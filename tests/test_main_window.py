@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from PyQt5.QtCore import Qt, QTimer
@@ -24,6 +26,151 @@ def qt_app():
     if app is None:
         app = QApplication([])
     return app
+
+
+@pytest.fixture
+def command_window(qt_app, monkeypatch):
+    monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(MainWindow, "_check_ros", lambda self: None)
+    return MainWindow({})
+
+
+class TestMainWindowCommandIntegration:
+    def test_command_and_topic_config_share_discover_catalog(self, command_window):
+        window = command_window
+
+        assert window._command._topic_catalog is window._topic_catalog
+        assert window._topic_config._topic_catalog is window._topic_catalog
+
+        topics = {
+            "topics": [
+                {"topic": "/scan", "msg_type": "sensor_msgs/LaserScan"},
+            ]
+        }
+        window._on_discover("r1", topics)
+
+        assert window._command._topic_catalog.topics_for("r1") == topics["topics"]
+        assert window._topic_config._topic_catalog.topics_for("r1") == topics["topics"]
+
+    def test_online_robot_changes_are_distributed_to_all_consumers(
+        self,
+        command_window,
+    ):
+        window = command_window
+        window._command.on_robot_list_changed = MagicMock()
+        window._topic_config.on_robot_list_changed = MagicMock()
+        window._fleet_comm.on_robot_list_changed = MagicMock()
+        window._data_sender.on_robot_list_changed = MagicMock()
+        window._sensor_panel.retain_robots = MagicMock()
+
+        window._robot_list.on_status_received("r2", {"battery": 90.0})
+
+        for panel_method in (
+            window._command.on_robot_list_changed,
+            window._topic_config.on_robot_list_changed,
+            window._fleet_comm.on_robot_list_changed,
+            window._data_sender.on_robot_list_changed,
+            window._sensor_panel.retain_robots,
+        ):
+            panel_method.assert_called_once_with(["r2"])
+        assert window._lb_online.text() == "在线: 1"
+
+    def test_custom_batch_begins_before_sending_to_sorted_online_robots(
+        self,
+        command_window,
+    ):
+        window = command_window
+        window._robot_list.on_status_received("r2", {"battery": 90.0})
+        window._robot_list.on_status_received("r1", {"battery": 80.0})
+        events = []
+        sent = []
+
+        def send_cmd(robot_id, data):
+            events.append(("send", robot_id))
+            sent.append((robot_id, data))
+            data["params"]["data"]["enabled"] = False
+
+        window._mqtt_client = SimpleNamespace(
+            is_connected=True,
+            send_cmd=send_cmd,
+        )
+        window._command.begin_command_batch = (
+            lambda exec_id, robot_ids: events.append(
+                ("begin", exec_id, list(robot_ids))
+            )
+        )
+        params = {
+            "topic": "/exploration/control",
+            "msg_type": "my_pkg/Control",
+            "data": {"enabled": True},
+        }
+
+        window._on_batch_command("exec-1", params)
+
+        assert events == [
+            ("begin", "exec-1", ["r1", "r2"]),
+            ("send", "r1"),
+            ("send", "r2"),
+        ]
+        assert [robot_id for robot_id, _ in sent] == ["r1", "r2"]
+        assert {item["exec_id"] for _, item in sent} == {"exec-1"}
+        assert all(item["action"] == "custom" for _, item in sent)
+        assert sent[0][1]["params"] is not sent[1][1]["params"]
+        assert params["data"]["enabled"] is True
+
+    @pytest.mark.parametrize(
+        ("is_connected", "online_robot"),
+        [(False, "r1"), (True, "")],
+    )
+    def test_custom_batch_rejects_without_connection_or_online_robot(
+        self,
+        command_window,
+        is_connected,
+        online_robot,
+    ):
+        window = command_window
+        if online_robot:
+            window._robot_list.on_status_received(online_robot, {"battery": 90.0})
+        send_cmd = MagicMock()
+        window._mqtt_client = SimpleNamespace(
+            is_connected=is_connected,
+            send_cmd=send_cmd,
+        )
+        window._command.reject_command_batch = MagicMock()
+        window._command.begin_command_batch = MagicMock()
+
+        window._on_batch_command("exec-rejected", {"topic": "/control"})
+
+        window._command.reject_command_batch.assert_called_once()
+        assert window._command.reject_command_batch.call_args.args[0] == "exec-rejected"
+        window._command.begin_command_batch.assert_not_called()
+        send_cmd.assert_not_called()
+
+    def test_command_schema_and_discover_signals_are_wired_to_mqtt(
+        self,
+        command_window,
+    ):
+        window = command_window
+        published = []
+        window._mqtt_client.publish = lambda *args, **kwargs: published.append(
+            (args, kwargs)
+        )
+
+        window._command.discover_requested.emit()
+        window._command.schema_query_requested.emit(
+            "r1",
+            "req-1",
+            "geometry_msgs/Twist",
+        )
+
+        assert published[0][0][0] == "station/discover"
+        assert published[1][0][0] == "station/r1/message_schema/query"
+
+        dialog = SimpleNamespace(on_schema_response=MagicMock())
+        window._command._settings_dialog = dialog
+        data = {"request_id": "req-1", "result": "ok"}
+        window._mqtt_client.signals.schema_response_received.emit("r1", data)
+        dialog.on_schema_response.assert_called_once_with("r1", data)
 
 
 class TestMainWindowSubscriptions:

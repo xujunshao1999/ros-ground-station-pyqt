@@ -12,8 +12,9 @@ import logging
 import math
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import rospy
@@ -23,8 +24,10 @@ except ImportError:
     rospy = None  # 延迟到运行时报错
 
 from agent.base_agent import FLEET_MESSAGE_TTL_SECONDS, AgentConfig, BaseAgent
+from agent.custom_command import validate_custom_command_params
 from agent.dict_to_ros_msg import dict_to_ros_msg
 from agent.frame_utils import namespace_message_frames, namespace_ros_message_frames
+from agent.message_schema import build_message_schema
 from agent.ros_msg_converter import ros_msg_to_dict
 from protocol.binary_payloads import (
     encode_fleet_binary_payload,
@@ -44,6 +47,8 @@ from protocol.messages import (
 logger = logging.getLogger(__name__)
 
 __all__ = ["ROS1Agent"]
+
+MAX_COMMAND_PUBLISHERS = 32
 
 
 @dataclass
@@ -86,6 +91,10 @@ class ROS1Agent(BaseAgent):
         self._fleet_publishers: Dict[tuple, object] = {}
         self._fleet_incoming_pub = None
         self._fleet_receive_warning_times: Dict[str, float] = {}
+        self._command_publishers: "OrderedDict[str, Tuple[str, object]]" = (
+            OrderedDict()
+        )
+        self._command_publisher_warning_times: Dict[str, float] = {}
 
         # 状态数据
         self._position = Position(x=0.0, y=0.0, theta=0.0)
@@ -188,19 +197,91 @@ class ROS1Agent(BaseAgent):
             return True, f"Navigating to {target} (pending move_base integration)"
 
         elif action == CmdAction.CUSTOM:
-            topic = params.get("topic", "")
-            msg_data = params.get("msg", {})
-            if topic:
-                # 发布自定义 ROS 消息（String 类型）
-                pub = rospy.Publisher(topic, String, queue_size=1)
-                pub.publish(json.dumps(msg_data))
-                logger.info(f"[ROS1Agent] Custom publish to {topic}")
-                return True, f"Published to {topic}"
-            return False, "Missing 'topic' in custom command params"
+            return self._publish_custom_command(
+                params.get("topic"),
+                params.get("msg_type"),
+                params.get("data"),
+            )
 
         else:
             logger.warning(f"[ROS1Agent] Unknown command: {action}")
             return False, f"Unknown command: {action}"
+
+    def _publish_custom_command(
+        self,
+        topic: Any,
+        msg_type: Any,
+        data: Any,
+    ) -> Tuple[bool, str]:
+        """严格转换并发布配置指定的 ROS 消息。"""
+        validation_error = validate_custom_command_params(topic, msg_type, data)
+        if validation_error:
+            return False, validation_error
+
+        try:
+            converted = dict_to_ros_msg(data, msg_type, strict=True)
+        except Exception as exc:
+            return False, f"Invalid custom ROS message data: {exc}"
+
+        cached = self._command_publishers.get(topic)
+        if cached is not None and cached[0] == msg_type:
+            publisher = cached[1]
+            self._command_publishers.move_to_end(topic)
+        else:
+            if cached is not None:
+                self._unregister_command_publisher(topic, cached[1])
+                del self._command_publishers[topic]
+            try:
+                publisher = rospy.Publisher(
+                    topic,
+                    type(converted),
+                    queue_size=1,
+                )
+            except Exception as exc:
+                return False, f"Failed to create custom ROS publisher: {exc}"
+            self._command_publishers[topic] = (msg_type, publisher)
+
+        try:
+            publisher.publish(converted)
+        except Exception as exc:
+            cached = self._command_publishers.pop(topic, None)
+            if cached is not None:
+                self._unregister_command_publisher(topic, cached[1])
+            return False, f"Failed to publish custom ROS message: {exc}"
+
+        while len(self._command_publishers) > MAX_COMMAND_PUBLISHERS:
+            stale_topic, (_, stale_publisher) = self._command_publishers.popitem(
+                last=False
+            )
+            self._unregister_command_publisher(stale_topic, stale_publisher)
+
+        logger.info(
+            "[ROS1Agent] Custom publish to %s (%s)",
+            topic,
+            msg_type,
+        )
+        return True, f"Published {msg_type} to {topic}"
+
+    def _unregister_command_publisher(self, topic: str, publisher: object) -> None:
+        try:
+            publisher.unregister()
+        except Exception as exc:
+            warning_times = getattr(
+                self,
+                "_command_publisher_warning_times",
+                None,
+            )
+            if warning_times is None:
+                warning_times = {}
+                self._command_publisher_warning_times = warning_times
+            now = time.monotonic()
+            if now - warning_times.get(topic, 0.0) >= 10.0:
+                warning_times[topic] = now
+                logger.warning(
+                    "[ROS1Agent] Failed to unregister custom publisher %s: %s",
+                    topic,
+                    exc,
+                )
 
     def _get_available_topics(self) -> List[dict]:
         """获取 ROS 中活跃的话题列表"""
@@ -226,6 +307,10 @@ class ROS1Agent(BaseAgent):
             ]
 
         return topics
+
+    def _get_message_schema(self, msg_type: str) -> Dict[str, Any]:
+        """从当前 ROS 环境加载真实消息类型并返回字段结构。"""
+        return build_message_schema(msg_type)
 
     def _on_topic_subscribed(self, topic: str, msg_type: str, options: dict) -> None:
         """地面站请求订阅某话题 → 创建 ROS 订阅"""
@@ -880,6 +965,10 @@ class ROS1Agent(BaseAgent):
         self._fleet_subscribers.clear()
         self._fleet_publishers.clear()
         self._fleet_incoming_pub = None
+
+        for topic, (_, publisher) in list(self._command_publishers.items()):
+            self._unregister_command_publisher(topic, publisher)
+        self._command_publishers.clear()
 
         # 停止 HTTP 流服务端
         self._stop_stream_server()
