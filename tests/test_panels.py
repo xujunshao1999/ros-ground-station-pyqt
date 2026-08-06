@@ -5,12 +5,20 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QCheckBox, QHeaderView, QLabel
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtWidgets import QApplication, QCheckBox, QDialog, QHeaderView, QLabel
 
+import qt_frontend.panels.command_panel as command_panel_module
+from qt_frontend.command_button_config import (
+    CommandButtonConfig,
+    CommandButtonConfigError,
+    CommandButtonConfigStore,
+    empty_command_slots,
+)
 from qt_frontend.panels.command_panel import CommandPanel
 from qt_frontend.panels.event_panel import EventPanel
 from qt_frontend.panels.fleet_comm_panel import FleetCommPanel
@@ -219,6 +227,20 @@ class TestRobotListFrameControls:
 # CommandPanel slider value mapping
 # ------------------------------------------------------------------
 class TestCommandPanel:
+    @staticmethod
+    def _store(tmp_path, configured=False):
+        store = CommandButtonConfigStore(tmp_path / "command_buttons.yaml")
+        if configured:
+            slots = empty_command_slots()
+            slots["slot_1"] = CommandButtonConfig(
+                label="开始探索",
+                topic="/exploration/control",
+                msg_type="my_pkg/Control",
+                data={"nested": {"enabled": True}},
+            )
+            store.save(slots)
+        return store
+
     def test_velocity_step_defaults_to_medium(self):
         assert CommandPanel.velocity_step("medium") == (0.30, 0.75)
 
@@ -276,6 +298,228 @@ class TestCommandPanel:
                 {"linear": 0.0, "angular": 0.0},
             )
         ]
+
+    def test_mode_area_has_four_disabled_unconfigured_buttons(
+        self, qt_app, tmp_path
+    ):
+        panel = CommandPanel(config_store=self._store(tmp_path))
+
+        assert list(panel._mode_buttons) == [
+            "slot_1",
+            "slot_2",
+            "slot_3",
+            "slot_4",
+        ]
+        assert [button.text() for button in panel._mode_buttons.values()] == [
+            "未配置",
+            "未配置",
+            "未配置",
+            "未配置",
+        ]
+        assert all(not button.isEnabled() for button in panel._mode_buttons.values())
+        assert not hasattr(panel, "_btn_emergency")
+
+    def test_configured_mode_button_emits_deep_copied_batch_command(
+        self, qt_app, tmp_path
+    ):
+        panel = CommandPanel(config_store=self._store(tmp_path, configured=True))
+        emitted = []
+        panel.batch_command_requested.connect(
+            lambda exec_id, params: emitted.append((exec_id, params))
+        )
+
+        panel._mode_buttons["slot_1"].click()
+        first_exec_id, first_params = emitted[-1]
+        first_params["data"]["nested"]["enabled"] = False
+        panel._mode_buttons["slot_1"].click()
+        second_exec_id, second_params = emitted[-1]
+
+        assert panel._mode_buttons["slot_1"].text() == "开始探索"
+        assert panel._mode_buttons["slot_1"].isEnabled()
+        assert first_exec_id
+        assert second_exec_id != first_exec_id
+        assert second_params == {
+            "topic": "/exploration/control",
+            "msg_type": "my_pkg/Control",
+            "data": {"nested": {"enabled": True}},
+        }
+
+    def test_long_mode_label_is_elided_and_preserved_in_tooltip(
+        self, qt_app, tmp_path
+    ):
+        label = "执行一项名称非常长的机器人探索与返航组合任务"
+        slots = empty_command_slots()
+        slots["slot_1"] = CommandButtonConfig(
+            label=label,
+            topic="/cmd",
+            msg_type="my_pkg/Control",
+            data={},
+        )
+        store = self._store(tmp_path)
+        store.save(slots)
+
+        panel = CommandPanel(config_store=store)
+        button = panel._mode_buttons["slot_1"]
+
+        assert button.text() != label
+        assert button.text().endswith("…")
+        assert label in button.toolTip()
+
+    def test_robot_list_updates_online_count_and_settings_dialog(
+        self, qt_app, tmp_path
+    ):
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        dialog = MagicMock()
+        panel._settings_dialog = dialog
+
+        panel.on_robot_list_changed(["r2", "r1"])
+
+        assert "当前 2 台" in panel._online_count_label.text()
+        dialog.set_online_robot_ids.assert_called_once_with(["r2", "r1"])
+
+    def test_old_batch_completion_does_not_replace_visible_result(
+        self, qt_app, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        panel.begin_command_batch("exec-old", ["r1"])
+        panel.begin_command_batch("exec-new", ["r2"])
+
+        panel.on_cmd_ack(
+            "r2",
+            {"exec_id": "exec-new", "result": "error", "message": "类型缺失"},
+        )
+        visible_text = panel._result_label.text()
+        visible_tooltip = panel._result_label.toolTip()
+        panel.on_cmd_ack(
+            "r1",
+            {"exec_id": "exec-old", "result": "ok", "message": "done"},
+        )
+
+        assert panel._result_label.text() == visible_text
+        assert panel._result_label.toolTip() == visible_tooltip
+        assert "失败 1" in visible_text
+        assert "查看详情" in visible_text
+        assert "r2: 类型缺失" in visible_tooltip
+        assert panel._batch_tracker.result("exec-old").counts()["success"] == 1
+        assert panel._batch_tracker.result("exec-new").counts()["failed"] == 1
+
+    def test_early_batch_timer_reschedules_until_deadline(
+        self, qt_app, tmp_path, monkeypatch
+    ):
+        clock = {"now": 10.0}
+        callbacks = []
+        monkeypatch.setattr(
+            command_panel_module.time,
+            "monotonic",
+            lambda: clock["now"],
+        )
+        monkeypatch.setattr(
+            QTimer,
+            "singleShot",
+            lambda delay, callback: callbacks.append((delay, callback)),
+        )
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        panel.begin_command_batch("exec-1", ["r1"])
+
+        _, first_callback = callbacks.pop(0)
+        clock["now"] = 14.9
+        first_callback()
+
+        assert panel._batch_tracker.result("exec-1").counts()["timeout"] == 0
+        assert len(callbacks) == 1
+
+        _, retry_callback = callbacks.pop(0)
+        clock["now"] = 15.1
+        retry_callback()
+
+        assert panel._batch_tracker.result("exec-1").counts()["timeout"] == 1
+        assert "超时 1" in panel._result_label.text()
+
+    def test_reject_only_updates_latest_clicked_command(
+        self, qt_app, tmp_path
+    ):
+        panel = CommandPanel(config_store=self._store(tmp_path, configured=True))
+        emitted = []
+        panel.batch_command_requested.connect(
+            lambda exec_id, params: emitted.append(exec_id)
+        )
+        panel._mode_buttons["slot_1"].click()
+        panel._mode_buttons["slot_1"].click()
+
+        panel.reject_command_batch(emitted[0], "旧请求失败")
+        assert "旧请求失败" not in panel._result_label.text()
+        panel.reject_command_batch(emitted[1], "MQTT 未连接")
+        assert "MQTT 未连接" in panel._result_label.text()
+
+    def test_settings_dialog_lifecycle_forwards_signals_and_reloads(
+        self, qt_app, tmp_path, monkeypatch
+    ):
+        store = self._store(tmp_path)
+        forwarded_online = []
+        schema_responses = []
+
+        class FakeDialog(QDialog):
+            discover_requested = pyqtSignal()
+            schema_query_requested = pyqtSignal(str, str, str)
+
+            def __init__(self, *, store, topic_catalog, online_robot_ids, parent=None):
+                super().__init__(parent)
+                self._store = store
+                self.initial_online = list(online_robot_ids)
+
+            def set_online_robot_ids(self, robot_ids):
+                forwarded_online.append(list(robot_ids))
+
+            def on_schema_response(self, robot_id, data):
+                schema_responses.append((robot_id, data))
+
+            def exec_(self):
+                assert self.parent()._settings_dialog is self
+                self.parent().on_robot_list_changed(["r2"])
+                self.parent().on_schema_response("r2", {"request_id": "query"})
+                self.discover_requested.emit()
+                self.schema_query_requested.emit("r2", "query", "my_pkg/Control")
+                slots = empty_command_slots()
+                slots["slot_1"] = CommandButtonConfig(
+                    label="刷新后命令",
+                    topic="/cmd",
+                    msg_type="my_pkg/Control",
+                    data={},
+                )
+                self._store.save(slots)
+                return QDialog.Accepted
+
+        monkeypatch.setattr(
+            command_panel_module,
+            "CommandButtonSettingsDialog",
+            FakeDialog,
+        )
+        panel = CommandPanel(config_store=store)
+        discovers = []
+        schema_queries = []
+        panel.discover_requested.connect(lambda: discovers.append(True))
+        panel.schema_query_requested.connect(
+            lambda *args: schema_queries.append(args)
+        )
+
+        panel._open_settings_dialog()
+
+        assert forwarded_online == [["r2"]]
+        assert schema_responses == [("r2", {"request_id": "query"})]
+        assert discovers == [True]
+        assert schema_queries == [("r2", "query", "my_pkg/Control")]
+        assert panel._settings_dialog is None
+        assert panel._mode_buttons["slot_1"].text() == "刷新后命令"
+
+    def test_invalid_config_disables_all_mode_buttons(self, qt_app):
+        store = MagicMock()
+        store.load.side_effect = CommandButtonConfigError("配置损坏")
+
+        panel = CommandPanel(config_store=store)
+
+        assert all(not button.isEnabled() for button in panel._mode_buttons.values())
+        assert "配置损坏" in panel._result_label.text()
 
 
 # ------------------------------------------------------------------
