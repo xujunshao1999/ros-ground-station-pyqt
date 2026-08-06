@@ -454,6 +454,8 @@ class CommandButtonSettingsDialog(QDialog):
         draft.topic = self._topic_combo.currentText()
         draft.msg_type = self.current_message_type()
         if draft.schema.get("type") != draft.msg_type:
+            # 消息类型切换后，旧类型字段无法安全映射到新 schema。
+            draft.json_text = "{}"
             draft.schema = {}
             draft.schema_status = "unverified"
             draft.active_tab = 1

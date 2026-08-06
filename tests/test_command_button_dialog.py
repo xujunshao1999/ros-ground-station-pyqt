@@ -260,6 +260,57 @@ def test_form_and_json_tabs_synchronize_valid_data(qt_app, tmp_path):
     assert dialog._form.data() == {"enabled": True}
 
 
+def test_switching_topic_resets_incompatible_json_before_new_schema(
+    qt_app, tmp_path
+):
+    old_schema = _bool_schema("sensor_msgs/Imu")
+    slots = empty_command_slots()
+    slots["slot_1"] = _config(
+        topic="/imu",
+        msg_type="sensor_msgs/Imu",
+        data={"enabled": True},
+        schema=old_schema,
+    )
+    dialog, _, catalog, requests, _ = _build_dialog(
+        qt_app,
+        tmp_path,
+        ["r1"],
+        initial_slots=slots,
+    )
+    catalog.update_from_discover(
+        "r1",
+        {
+            "topics": [
+                {"topic": "/imu", "msg_type": "sensor_msgs/Imu"},
+                {"topic": "/cmd_vel", "msg_type": "geometry_msgs/Twist"},
+            ]
+        },
+    )
+    dialog._tabs.setCurrentIndex(0)
+    dialog._tabs.setCurrentIndex(1)
+    cmd_index = dialog._topic_combo.findText("/cmd_vel")
+    dialog._topic_combo.setCurrentIndex(cmd_index)
+    request_id = requests[-1][1]
+
+    dialog.on_schema_response(
+        "r1",
+        {
+            "request_id": request_id,
+            "msg_type": "geometry_msgs/Twist",
+            "result": "ok",
+            "schema": {
+                "type": "geometry_msgs/Twist",
+                "kind": "message",
+                "fields": [],
+            },
+        },
+    )
+
+    assert dialog._status_label.text() == "已在线校验"
+    dialog._tabs.setCurrentIndex(0)
+    assert dialog._tabs.currentIndex() == 0
+
+
 def test_offline_cached_schema_is_immediately_unverified(qt_app, tmp_path):
     slots = empty_command_slots()
     slots["slot_1"] = _config()
