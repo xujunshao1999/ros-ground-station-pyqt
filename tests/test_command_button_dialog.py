@@ -153,6 +153,45 @@ def test_selecting_message_type_option_requests_schema(qt_app, tmp_path):
 
     assert requests[-1][0] == "r1"
     assert requests[-1][2] == "my_pkg/First"
+    assert dialog._status_label.text() == "正在查询消息结构…"
+    assert dialog._status_label.property("state") == "pending"
+
+
+def test_synchronous_schema_response_is_not_overwritten_by_pending(
+    qt_app, tmp_path
+):
+    dialog, _, _, _, _ = _build_dialog(qt_app, tmp_path, ["r1"])
+    dialog.schema_query_requested.connect(
+        lambda robot_id, request_id, msg_type: dialog.on_schema_response(
+            robot_id,
+            {
+                "request_id": request_id,
+                "msg_type": msg_type,
+                "result": "ok",
+                "schema": _bool_schema(msg_type),
+            },
+        )
+    )
+
+    dialog.set_message_type("my_pkg/Synchronous")
+
+    assert dialog.current_schema()["type"] == "my_pkg/Synchronous"
+    assert dialog._status_label.text() == "已在线校验"
+    assert dialog._status_label.property("state") == "verified"
+
+
+def test_pending_schema_state_survives_slot_switch(qt_app, tmp_path):
+    dialog, _, _, requests, _ = _build_dialog(qt_app, tmp_path, ["r1"])
+    dialog.set_message_type("my_pkg/Pending")
+    dialog._refreshed_slots.add("slot_1")
+    request_count = len(requests)
+
+    dialog.select_slot("slot_2")
+    dialog.select_slot("slot_1")
+
+    assert len(requests) == request_count
+    assert dialog._status_label.text() == "正在查询消息结构…"
+    assert dialog._status_label.property("state") == "pending"
 
 
 def test_dialog_ignores_stale_and_mismatched_schema_responses(qt_app, tmp_path):
@@ -311,6 +350,29 @@ def test_switching_topic_resets_incompatible_json_before_new_schema(
     assert dialog._tabs.currentIndex() == 0
 
 
+def test_slot_list_shows_config_summary_and_refreshes_draft_changes(
+    qt_app, tmp_path
+):
+    slots = empty_command_slots()
+    slots["slot_1"] = _config(label="巡航", topic="/cmd_vel")
+    dialog, _, _, _, _ = _build_dialog(
+        qt_app,
+        tmp_path,
+        [],
+        initial_slots=slots,
+    )
+
+    assert dialog._slot_list.item(0).text() == "位置 1\n巡航 · /cmd_vel"
+    assert dialog._slot_list.item(1).text() == "位置 2\n未配置"
+    assert dialog._status_label.property("state") == "cached"
+
+    dialog._label_edit.setText("左转")
+    dialog._topic_combo.setEditText("/turn")
+    dialog.select_slot("slot_2")
+
+    assert dialog._slot_list.item(0).text() == "位置 1\n左转 · /turn"
+
+
 def test_offline_cached_schema_is_immediately_unverified(qt_app, tmp_path):
     slots = empty_command_slots()
     slots["slot_1"] = _config()
@@ -363,6 +425,7 @@ def test_invalid_json_or_schema_data_does_not_save(qt_app, tmp_path):
     dialog._save_all()
     assert store.save.call_count == 0
     assert "enabled" in dialog._status_label.text()
+    assert dialog._status_label.property("state") == "error"
 
 
 def test_offline_manual_json_saves_as_unverified(qt_app, tmp_path):
