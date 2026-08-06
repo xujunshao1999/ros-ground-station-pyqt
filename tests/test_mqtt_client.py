@@ -585,6 +585,22 @@ class TestSendMethods:
         args = mock_paho.publish.call_args[0]
         assert "robot/robot_001/cmd" in str(args[0])
 
+    def test_send_cmd_preserves_caller_exec_id(self, client, mock_paho):
+        client.connect()
+
+        client.send_cmd(
+            "robot_001",
+            {
+                "action": "custom",
+                "params": {"topic": "/control", "data": {"enabled": True}},
+                "exec_id": "exec-1",
+            },
+        )
+
+        payload = mock_paho.publish.call_args.args[1]
+        message = Message.from_json(payload.decode("utf-8"))
+        assert message.data["exec_id"] == "exec-1"
+
     def test_send_emergency_stop(self, client, mock_paho):
         client.connect()
         client.send_emergency_stop(["robot_001", "robot_002"])

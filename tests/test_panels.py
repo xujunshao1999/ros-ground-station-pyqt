@@ -85,6 +85,24 @@ class TestRobotListHeartbeat:
         info = RobotInfo(robot_id="r1", online=True, last_seen=now - 10.0)
         assert (now - info.last_seen) <= RobotListPanel._HEARTBEAT_TIMEOUT
 
+    def test_online_robot_changes_emit_once_and_emit_empty_after_timeout(
+        self,
+        qt_app,
+        monkeypatch,
+    ):
+        panel = RobotListPanel()
+        emitted = []
+        panel.online_robots_changed.connect(lambda robot_ids: emitted.append(robot_ids))
+
+        monotonic = iter([100.0, 101.0, 132.0])
+        monkeypatch.setattr(time, "monotonic", lambda: next(monotonic))
+
+        panel.on_status_received("r1", {"battery": 90.0})
+        panel.on_status_received("r1", {"battery": 80.0})
+        panel._check_heartbeats()
+
+        assert emitted == [["r1"], []]
+
 
 class TestRobotListSubscriptions:
     def test_discover_response_does_not_change_subscription_count(self):

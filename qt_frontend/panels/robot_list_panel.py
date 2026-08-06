@@ -33,6 +33,7 @@ class RobotInfo:
 class RobotListPanel(QWidget):
     robot_selected = pyqtSignal(str)
     robot_deselected = pyqtSignal()
+    online_robots_changed = pyqtSignal(list)
     discover_requested = pyqtSignal()
     global_frame_requested = pyqtSignal()
     follow_frame_changed = pyqtSignal(bool)
@@ -43,6 +44,7 @@ class RobotListPanel(QWidget):
         super().__init__(parent)
         self._robots: dict[str, RobotInfo] = {}
         self._subscription_counts: Dict[str, int] = {}
+        self._last_online_robot_ids: List[str] = []
 
         layout = QVBoxLayout(self)
 
@@ -158,6 +160,7 @@ class RobotListPanel(QWidget):
         info.velocity = (vel.get("linear", 0.0), vel.get("angular", 0.0))
 
         self._update_tree_item(robot_id, info)
+        self._emit_online_robots_changed_if_needed()
 
     def on_discover_response(self, robot_id: str, data: dict) -> None:
         import time
@@ -174,6 +177,7 @@ class RobotListPanel(QWidget):
         )
         self._robots[robot_id] = info
         self._update_tree_item(robot_id, info)
+        self._emit_online_robots_changed_if_needed()
 
     def update_subscription_counts(self, counts: Dict[str, int]) -> None:
         self._subscription_counts = dict(counts)
@@ -290,3 +294,11 @@ class RobotListPanel(QWidget):
             if info.online and (now - info.last_seen) > self._HEARTBEAT_TIMEOUT:
                 info.online = False
                 self._update_tree_item(info.robot_id, info)
+        self._emit_online_robots_changed_if_needed()
+
+    def _emit_online_robots_changed_if_needed(self) -> None:
+        robot_ids = sorted(self.get_online_robots())
+        if robot_ids == self._last_online_robot_ids:
+            return
+        self._last_online_robot_ids = robot_ids
+        self.online_robots_changed.emit(list(robot_ids))
