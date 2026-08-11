@@ -36,6 +36,46 @@ def command_window(qt_app, monkeypatch):
 
 
 class TestMainWindowCommandIntegration:
+    def test_mqtt_connect_is_scheduled_after_window_initialization(
+        self,
+        qt_app,
+        monkeypatch,
+    ):
+        scheduled = []
+        monkeypatch.setattr(
+            QTimer,
+            "singleShot",
+            lambda delay, callback: scheduled.append((delay, callback)),
+        )
+        monkeypatch.setattr(MainWindow, "_check_ros", lambda self: None)
+
+        window = MainWindow({})
+
+        assert any(
+            delay == 0 and callback == window._connect_mqtt
+            for delay, callback in scheduled
+        )
+
+    def test_connecting_and_connection_error_update_broker_status(
+        self,
+        command_window,
+    ):
+        window = command_window
+        window._mqtt_client.connect = MagicMock()
+
+        window._connect_mqtt()
+
+        assert window._lb_conn.text() == "● 连接中"
+        assert not window._act_connect.isEnabled()
+        window._mqtt_client.connect.assert_called_once_with()
+
+        window._mqtt_client.signals.connection_error.emit("Connection refused")
+
+        assert window._lb_conn.text() == "● 连接失败"
+        assert window._act_connect.isEnabled()
+        assert not window._act_disconnect.isEnabled()
+        assert "Connection refused" in window.statusBar().currentMessage()
+
     def test_command_and_topic_config_share_discover_catalog(self, command_window):
         window = command_window
 

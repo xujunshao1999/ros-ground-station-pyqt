@@ -45,7 +45,7 @@ from qt_frontend.rviz_frame_policy import (
     normalize_frame_id,
     robot_fixed_frame_for,
 )
-from qt_frontend.theme import DANGER, SUCCESS
+from qt_frontend.theme import DANGER, SUCCESS, WARNING
 from qt_frontend.topic_catalog import RobotTopicCatalog
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
         self._init_mqtt()
         self._init_ros_monitor()
 
+        QTimer.singleShot(0, self._connect_mqtt)
         QTimer.singleShot(200, self._init_rviz)
         QTimer.singleShot(350, self._apply_splitter_layout)
 
@@ -307,6 +308,7 @@ class MainWindow(QMainWindow):
         sig = self._mqtt_client.signals
         sig.connected.connect(self._on_mqtt_connected)
         sig.disconnected.connect(self._on_mqtt_disconnected)
+        sig.connection_error.connect(self._on_mqtt_connection_error)
         sig.status_received.connect(self._on_robot_status)
         sig.event_received.connect(self._event_panel.on_event_received)
         sig.cmd_ack_received.connect(self._command.on_cmd_ack)
@@ -318,7 +320,7 @@ class MainWindow(QMainWindow):
         sig.config_response_received.connect(self._on_config_response)
         sig.discover_response_received.connect(self._fleet_comm.on_discover_response)
 
-        self._act_connect.triggered.connect(self._mqtt_client.connect)
+        self._act_connect.triggered.connect(self._connect_mqtt)
         self._act_disconnect.triggered.connect(self._mqtt_client.disconnect)
         self._act_discover.triggered.connect(self._mqtt_client.send_discover)
         self._robot_list.discover_requested.connect(self._mqtt_client.send_discover)
@@ -677,6 +679,20 @@ class MainWindow(QMainWindow):
         self._lb_conn.setStyleSheet(f"color: {SUCCESS}; font-weight: bold;")
         self._act_connect.setEnabled(False)
         self._act_disconnect.setEnabled(True)
+
+    def _connect_mqtt(self) -> None:
+        self._lb_conn.setText("● 连接中")
+        self._lb_conn.setStyleSheet(f"color: {WARNING}; font-weight: bold;")
+        self._act_connect.setEnabled(False)
+        self._act_disconnect.setEnabled(False)
+        self._mqtt_client.connect()
+
+    def _on_mqtt_connection_error(self, message: str) -> None:
+        self._lb_conn.setText("● 连接失败")
+        self._lb_conn.setStyleSheet(f"color: {DANGER}; font-weight: bold;")
+        self._act_connect.setEnabled(True)
+        self._act_disconnect.setEnabled(False)
+        self.statusBar().showMessage("Broker 连接失败：{}".format(message), 5000)
 
     def _on_mqtt_disconnected(self) -> None:
         self._lb_conn.setText("● 已断开")
