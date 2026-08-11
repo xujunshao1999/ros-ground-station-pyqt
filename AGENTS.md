@@ -31,6 +31,11 @@
 
 机器人 ROS 网络与地面站 ROS master 必须保持隔离。跨网络数据统一经过 `docs/protocol.md` 定义的 MQTT/HTTP 协议层：控制、状态、配置和 JSON envelope 使用 JSON；普通 ROS topic 可使用 MQTT binary；大 payload 使用 HTTP stream + MQTT meta。机器人到地面站的 sensor 数据由 `bridge/mqtt_ros_bridge.py` 重新发布到地面站本地 roscore，供 RViz 使用。机器人 Agent 间编队由 `fleet_rules.transport` 选择 `mqtt_json` 或 `mqtt_binary`（ROS1 serialized），数据不经过地面站 Bridge，目标 Agent 直接发布到目标 ROS topic。
 
+## 任务规模与沟通约定
+
+- 对于单文件、小范围的小功能或小 Bug 修复，采用轻量流程：先检查相关代码和现有改动，直接实施最小修改，补充必要的聚焦测试并完成验证即可。除非任务确实需要，不强制编写单独的设计文档、实现计划或复杂的多阶段审查；仍需说明根因、验证命令和未覆盖风险。
+- 对于面向用户的每次回复，正文最前面必须加上两个字母 `JS`。该约定适用于进度更新、澄清问题、测试结果和最终回复。
+
 ## 计划文档写作约定
 
 制定或实质更新实现计划时，应假设后续执行者来自新对话，只能看到计划文件和仓库代码。计划必须独立说明为什么做、要改哪里、怎么改、如何验证，以及执行前需要理解的术语和约束。

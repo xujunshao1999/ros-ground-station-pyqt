@@ -280,6 +280,7 @@ class TestCommandPanel:
 
     def test_direction_button_emits_velocity(self, qt_app):
         panel = CommandPanel()
+        panel.on_robot_list_changed(["turtlebot_001"])
         panel.on_robot_selected("turtlebot_001")
 
         sent = []
@@ -300,8 +301,45 @@ class TestCommandPanel:
 
         assert all(not btn.isEnabled() for btn in panel._direction_buttons)
 
+    def test_robot_list_selection_updates_target_combo(self, qt_app, tmp_path):
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+        panel._robot_combo.setCurrentIndex(
+            panel._robot_combo.findData("turtlebot_001")
+        )
+        assert panel._selected_robot == "turtlebot_001"
+
+        panel.on_robot_selected("turtlebot_002")
+
+        assert panel._robot_combo.currentData() == "turtlebot_002"
+        assert panel._robot_combo.currentText() == "turtlebot_002"
+        assert panel._selected_robot == "turtlebot_002"
+
+    def test_unavailable_robot_selection_clears_target(self, qt_app, tmp_path):
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        panel.on_robot_list_changed(["turtlebot_001"])
+        panel._robot_combo.setCurrentText("turtlebot_001")
+
+        panel.on_robot_selected("offline_robot")
+
+        assert panel._robot_combo.currentData() == ""
+        assert panel._selected_robot == ""
+        assert all(not button.isEnabled() for button in panel._direction_buttons)
+
+    def test_online_list_removal_clears_target(self, qt_app, tmp_path):
+        panel = CommandPanel(config_store=self._store(tmp_path))
+        panel.on_robot_list_changed(["turtlebot_001", "turtlebot_002"])
+        panel._robot_combo.setCurrentText("turtlebot_001")
+
+        panel.on_robot_list_changed(["turtlebot_002"])
+
+        assert panel._robot_combo.currentData() == ""
+        assert panel._selected_robot == ""
+        assert all(not button.isEnabled() for button in panel._direction_buttons)
+
     def test_release_direction_button_emits_stop(self, qt_app):
         panel = CommandPanel()
+        panel.on_robot_list_changed(["turtlebot_001"])
         panel.on_robot_selected("turtlebot_001")
 
         sent = []

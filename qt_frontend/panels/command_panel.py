@@ -122,6 +122,14 @@ class CommandPanel(QWidget):
         )
 
     def on_robot_selected(self, robot_id: str) -> None:
+        combo_index = self._robot_combo.findData(robot_id)
+        if robot_id and combo_index < 0:
+            robot_id = ""
+            combo_index = self._robot_combo.findData("")
+        if combo_index >= 0 and combo_index != self._robot_combo.currentIndex():
+            signals_were_blocked = self._robot_combo.blockSignals(True)
+            self._robot_combo.setCurrentIndex(combo_index)
+            self._robot_combo.blockSignals(signals_were_blocked)
         self._selected_robot = robot_id
         has_target = bool(robot_id)
         for button in self._direction_buttons:
