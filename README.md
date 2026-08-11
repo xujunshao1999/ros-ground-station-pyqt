@@ -63,6 +63,53 @@ docker compose stop robot-turtlebot-001 robot-turtlebot-002
 
 实际机器人部署时，每台机器人使用自己的 `agent/configs/<robot_id>.yaml`，或在单机器人机器上直接维护 `agent/configs/default.yaml`；地面站维护跨机器人视角的 `transmit_config.yaml`，并通过 MQTT `config_sync` / `config_query` 与机器人端同步。
 
+### 可配置命令按钮
+
+地面站的命令按钮配置文件为 `qt_frontend/config/command_buttons.yaml`，由“命令按钮设置”窗口自动生成和原子保存。文件头部会自动写入“请勿手工编辑”的提示；手工修改可能在下一次保存时被覆盖，建议始终通过 Qt 设置窗口修改。
+
+配置根节点包含两个字段：
+
+- `version`：配置格式版本，目前为 `1`。
+- `slots`：四个固定按钮位置，键名为 `slot_1` 至 `slot_4`；未配置的位置使用 `null`。
+
+每个非空 slot 包含以下字段：
+
+| 字段 | 含义 |
+|------|------|
+| `label` | 按钮在命令区显示的文字，长度为 1 至 64 个字符 |
+| `topic` | 机器人端发布 ROS 消息的 topic，必须以 `/` 开头 |
+| `msg_type` | ROS 消息类型，使用 `package/Message` 格式，例如 `geometry_msgs/Twist` |
+| `data` | 发送给 ROS 消息字段的 JSON object；字段结构应与 `msg_type` 匹配 |
+| `schema` | Agent 根据本地 ROS 消息定义返回的字段结构缓存，供离线时生成结构化表单 |
+| `schema_status` | `verified` 表示已在线校验，`unverified` 表示仅使用手工配置或缓存 |
+
+最小示例（未在线取得 schema 时也可以保存）：
+
+```yaml
+version: 1
+slots:
+  slot_1:
+    label: 前进
+    topic: /cmd_vel
+    msg_type: geometry_msgs/Twist
+    data:
+      linear:
+        x: 0.3
+        y: 0.0
+        z: 0.0
+      angular:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+    schema: {}
+    schema_status: unverified
+  slot_2: null
+  slot_3: null
+  slot_4: null
+```
+
+在线 Agent 返回 schema 后，设置窗口会把完整字段树缓存到 `schema`，并将 `schema_status` 更新为 `verified`。schema 只是前端编辑缓存，命令真正发送时仍由目标机器人按自己的 ROS 环境解析和发布；自定义消息类型必须在目标机器人上已安装并完成 ROS 环境初始化。
+
 ## 编队通信规则
 
 编队通信面板用于描述“源机器人某个 ROS topic 转发给目标机器人某个 ROS topic”。地面站保存规则时会保留 `src_robot`，便于按源机器人分组下发：

@@ -76,6 +76,18 @@ def test_store_round_trip_preserves_four_slots(tmp_path):
     assert list(slots) == ["slot_1", "slot_2", "slot_3", "slot_4"]
 
 
+def test_save_writes_generated_file_header_comment(tmp_path):
+    path = tmp_path / "command_buttons.yaml"
+    slots = empty_command_slots()
+    slots["slot_1"] = _config()
+
+    CommandButtonConfigStore(path).save(slots)
+
+    content = path.read_text(encoding="utf-8")
+    assert content.startswith("# 此文件由 ROS 地面站自动生成，请勿手工编辑。\n")
+    assert "README.md" in content.split("version:", 1)[0]
+
+
 def test_load_fills_missing_known_slots(tmp_path):
     path = tmp_path / "command_buttons.yaml"
     _write_config(path, {"slot_2": _config().to_dict()})

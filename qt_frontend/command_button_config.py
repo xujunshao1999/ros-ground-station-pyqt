@@ -16,6 +16,12 @@ SLOT_IDS = ("slot_1", "slot_2", "slot_3", "slot_4")
 MAX_COMMAND_DATA_BYTES = 256 * 1024
 MAX_COMMAND_SCHEMA_BYTES = 256 * 1024
 SCHEMA_STATUSES = ("verified", "unverified")
+COMMAND_BUTTONS_FILE_HEADER = (
+    "# 此文件由 ROS 地面站自动生成，请勿手工编辑。\n"
+    "# 字段说明和 YAML 示例见 README.md 的“可配置命令按钮”章节。\n"
+    "# 请通过地面站的命令按钮设置窗口修改配置。\n"
+    "\n"
+)
 
 
 class CommandButtonConfigError(ValueError):
@@ -179,6 +185,7 @@ class CommandButtonConfigStore:
                 delete=False,
             ) as handle:
                 temp_path = Path(handle.name)
+                handle.write(COMMAND_BUTTONS_FILE_HEADER)
                 yaml.safe_dump(
                     document,
                     handle,
