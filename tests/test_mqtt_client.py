@@ -115,6 +115,27 @@ class TestMqttPublish:
         client.publish("test/topic", b"hello", qos=1)
         mock_paho.publish.assert_called_with("test/topic", b"hello", qos=1)
 
+    def test_traffic_totals_count_received_and_sent_payload_bytes(
+        self,
+        client,
+        mock_paho,
+    ):
+        client.connect()
+        client.publish("test/topic", b"hello", qos=1)
+        message = Message(
+            src="robot_001",
+            type="status",
+            data={"battery": 85.0},
+        )
+        mqtt_msg = _make_mqtt_msg(
+            "robot/robot_001/status",
+            message.to_json(),
+        )
+
+        client._on_message(mock_paho, None, mqtt_msg)
+
+        assert client.traffic_totals() == (len(mqtt_msg.payload), 5)
+
     def test_subscribe(self, client, mock_paho):
         client.connect()
         client.subscribe("robot/+/status", qos=1)

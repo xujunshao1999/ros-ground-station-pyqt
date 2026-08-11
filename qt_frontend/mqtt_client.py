@@ -73,6 +73,8 @@ class MqttClient:
         self._factory = MessageFactory(client_id)
         self.signals = MqttSignals()
         self._lock = threading.Lock()
+        self._bytes_received = 0
+        self._bytes_sent = 0
 
     # ------------------------------------------------------------------
     # 公共接口
@@ -111,6 +113,12 @@ class MqttClient:
     def publish(self, topic: str, payload: bytes, qos: int = 1) -> None:
         if self._client:
             self._client.publish(topic, payload, qos=qos)
+            with self._lock:
+                self._bytes_sent += self._payload_size(payload)
+
+    def traffic_totals(self) -> tuple:
+        with self._lock:
+            return self._bytes_received, self._bytes_sent
 
     def send_discover(self) -> None:
         msg = Message(
@@ -227,6 +235,8 @@ class MqttClient:
         self.signals.disconnected.emit()
 
     def _on_message(self, client, userdata, msg) -> None:
+        with self._lock:
+            self._bytes_received += self._payload_size(msg.payload)
         try:
             robot_info = parse_robot_topic(msg.topic)
             if robot_info and robot_info.get("type", "").startswith("sensor"):
@@ -307,6 +317,15 @@ class MqttClient:
             self._dispatch(msg.topic, message)
         except Exception as e:
             logger.error(f"[MqttClient] Failed to handle message on {msg.topic}: {e}")
+
+    @staticmethod
+    def _payload_size(payload: object) -> int:
+        if isinstance(payload, str):
+            return len(payload.encode("utf-8"))
+        try:
+            return len(payload)  # type: ignore[arg-type]
+        except TypeError:
+            return 0
 
     def _should_ignore_sensor_payload(self, sensor_name: str) -> bool:
         normalized = sensor_name.strip().lstrip("/")

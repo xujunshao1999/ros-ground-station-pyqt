@@ -337,6 +337,20 @@ class TestMainWindowSensorBatching:
 
 
 class TestMainWindowRosMonitor:
+    def test_status_bar_uses_live_diagnostics(self, command_window):
+        window = command_window
+        window._mqtt_client.traffic_totals = MagicMock(
+            return_value=(1536, 512)
+        )
+
+        window._refresh_mqtt_traffic()
+
+        labels = [label.text() for label in window.statusBar().findChildren(QLabel)]
+        assert "话题: --" not in labels
+        assert window._lb_traffic.text() == "MQTT: Rx 1.5 KiB / Tx 512 B"
+        assert window._lb_rec_status.text() == "录制: 未启用"
+        assert window._lb_rviz.text() == "RViz: 初始化中"
+
     def test_ros_check_runs_in_background(self, qt_app, monkeypatch):
         original_check_ros = MainWindow._check_ros
         monkeypatch.setattr(QTimer, "singleShot", lambda *args, **kwargs: None)

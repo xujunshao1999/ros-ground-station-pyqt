@@ -285,13 +285,44 @@ class MainWindow(QMainWindow):
 
     def _init_status_bar(self) -> None:
         sb = QStatusBar()
-        self._lb_topics = QLabel("话题: --")
-        self._lb_traffic = QLabel("MQTT: 0 B / 0 B")
-        self._lb_rec_status = QLabel("录制: ○")
+        self._lb_traffic = QLabel("MQTT: Rx 0 B / Tx 0 B")
+        self._lb_rec_status = QLabel("录制: 未启用")
         self._lb_ros = QLabel("ROS Master: 检测中...")
-        for w in [self._lb_topics, self._lb_traffic, self._lb_rec_status, self._lb_ros]:
+        self._lb_rviz = QLabel("RViz: 初始化中")
+        self._lb_rviz.setStyleSheet(
+            f"color: {WARNING}; font-weight: bold;"
+        )
+        for w in [
+            self._lb_traffic,
+            self._lb_rec_status,
+            self._lb_ros,
+            self._lb_rviz,
+        ]:
             sb.addWidget(w)
         self.setStatusBar(sb)
+
+        self._mqtt_traffic_timer = QTimer(self)
+        self._mqtt_traffic_timer.timeout.connect(self._refresh_mqtt_traffic)
+        self._mqtt_traffic_timer.start(1000)
+
+    @staticmethod
+    def _format_bytes(byte_count: int) -> str:
+        if byte_count < 1024:
+            return "{} B".format(byte_count)
+        if byte_count < 1024 * 1024:
+            return "{:.1f} KiB".format(byte_count / 1024.0)
+        return "{:.1f} MiB".format(byte_count / (1024.0 * 1024.0))
+
+    def _refresh_mqtt_traffic(self) -> None:
+        if self._mqtt_client is None:
+            return
+        received, sent = self._mqtt_client.traffic_totals()
+        self._lb_traffic.setText(
+            "MQTT: Rx {} / Tx {}".format(
+                self._format_bytes(received),
+                self._format_bytes(sent),
+            )
+        )
 
     def _init_sensor_batch_timer(self) -> None:
         self._sensor_batch_timer = QTimer(self)
@@ -484,10 +515,18 @@ class MainWindow(QMainWindow):
             self._rviz_lib = lib
         except OSError as e:
             logger.error(f"Failed to load librviz_widget.so: {e}")
+            self._lb_rviz.setText("RViz: 加载失败")
+            self._lb_rviz.setStyleSheet(
+                f"color: {DANGER}; font-weight: bold;"
+            )
             return
 
         rviz_ptr = lib.create_rviz_widget(None)
         if not rviz_ptr:
+            self._lb_rviz.setText("RViz: 创建失败")
+            self._lb_rviz.setStyleSheet(
+                f"color: {DANGER}; font-weight: bold;"
+            )
             return
         self._rviz_ptr = rviz_ptr
 
@@ -532,6 +571,10 @@ class MainWindow(QMainWindow):
             self._pending_fixed_frame or global_fixed_frame_for(self._config)
         )
         self._set_rviz_fixed_frame(requested_frame, "初始视角")
+        self._lb_rviz.setText("RViz: 就绪")
+        self._lb_rviz.setStyleSheet(
+            f"color: {SUCCESS}; font-weight: bold;"
+        )
 
     def _default_rviz_config_path(self) -> Path:
         return Path(__file__).resolve().parent / "config" / "default.rviz"
