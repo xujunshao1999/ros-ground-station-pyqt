@@ -129,8 +129,8 @@ rosbag record -O /absolute/path/warehouse_patrol_01 --lz4 --buffsize=256 --split
 - `starting`：配置已通过校验，正在等待 rosbag 进程确认启动。
 - `recording`：进程存活并已开始写入文件。
 - `stopping`：已发送 `SIGINT`，正在等待索引写入和进程退出。
-- `completed`：最近一次录制正常结束，随后回到 `idle`，界面保留结果摘要。
-- `failed`：启动失败或运行中异常退出，界面展示错误，用户确认后回到 `idle`。
+- `completed`：最近一次录制正常结束，界面保留结果摘要；用户点击“新建录制”后显式回到 `idle`。
+- `failed`：启动失败或运行中异常退出，界面展示错误；用户点击“返回配置”后显式回到 `idle`。
 
 服务通过 Qt 信号发布状态，不允许后台工作直接修改控件。同一时间只允许一个 `QProcess`；`starting`、`recording`、`stopping` 状态下重复开始必须被拒绝。
 
